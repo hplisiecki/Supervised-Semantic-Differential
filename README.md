@@ -1,5 +1,8 @@
 # Supervised Semantic Differential (SSD)
 
+[![PyPI version](https://img.shields.io/pypi/v/ssdiff.svg)](https://pypi.org/project/ssdiff/)
+
+
 **SSD**  lets you recover **interpretable semantic directions** related to specific concpets directly from open-ended text and relate them to **numeric outcomes** 
 (e.g., psychometric scales, judgments). It builds per-essay concept vectors from **local contexts around seed words**, 
 learns a **semantic gradient** that best predicts the outcome, and then provides multiple interpretability layers:
