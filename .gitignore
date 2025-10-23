@@ -1,0 +1,27 @@
+# Python builds
+dist/
+build/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+.idea/
+# Virtual envs
+.venv/
+venv/
+ENV/
+
+# Caches
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.ipynb_checkpoints/
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# OS junk
+.DS_Store
+Thumbs.db
+

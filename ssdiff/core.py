@@ -1,4 +1,4 @@
-# words_apart_orig/core.py
+# ssdiff/core.py
 from __future__ import annotations
 import numpy as np
 from typing import Any, List, Union
@@ -50,8 +50,8 @@ class SSD:
         l2_normalize_docs: bool = True,
         use_unit_beta: bool = True,
         N_PCA = 20,
-        window: int = WINDOW,
-        SIF_a: float = SIF_A,
+        window: int = 3,
+        SIF_a: float = 1e-3,
     ) -> None:
         self.kv = kv if isinstance(kv, KeyedVectors) else load_embeddings(kv)
         self.docs = docs
@@ -69,12 +69,14 @@ class SSD:
         # Per-essay matrix (drops essays w/o seed contexts)
         X_raw, keep = build_doc_vectors(
             self.docs, self.kv, self.lexicon,
-            global_wc=wc, total_tokens=tot, window=self.window, sif_a=self.SIF_A,
+            global_wc=wc, total_tokens=tot, window=self.window, sif_a=self.SIF_a,
         )
         if not np.any(keep):
             raise ValueError("No essays contain the lexicon for this concept; nothing to fit.")
         self.keep_mask = keep
-        self.n_raw = len(self.docs); self.n_kept = int(keep.sum()); self.n_dropped = self.n_raw - self.n_kept
+        self.n_raw = len(self.docs)
+        self.n_kept = int(keep.sum())
+        self.n_dropped = self.n_raw - self.n_kept
         self.docs_kept = [d for d, k in zip(self.docs, keep) if k]
         self.y_kept = self.y[keep]
         X = X_raw
@@ -87,8 +89,10 @@ class SSD:
         self.x = X
 
         # Standardize & PCA
-        self.scaler_X = StandardScaler(); self.Xs = self.scaler_X.fit_transform(self.x)
-        self.scaler_y = StandardScaler(); self.ys = self.scaler_y.fit_transform(self.y_kept.reshape(-1, 1)).ravel()
+        self.scaler_X = StandardScaler()
+        self.Xs = self.scaler_X.fit_transform(self.x)
+        self.scaler_y = StandardScaler()
+        self.ys = self.scaler_y.fit_transform(self.y_kept.reshape(-1, 1)).ravel()
         self.pca = PCA(n_components=N_PCA, svd_solver="full")
         self.z = self.pca.fit_transform(self.Xs)
 
@@ -138,8 +142,7 @@ class SSD:
         - shift_signed: dot(word, +β̂_unit) → positive for 'pos' words, negative for 'neg' words
         """
         b = self.beta_unit if getattr(self, "use_unit_beta", True) else self.beta
-        b_unit = self.beta_unit  # always unit for signed readout
-
+        
         rows = []
         for side, vec in (("pos", b), ("neg", -b)):
             pairs = filtered_neighbors(self.kv, vec, topn=n)
@@ -173,7 +176,8 @@ class SSD:
         w_reg = np.linalg.solve(self.z.T @ self.z, self.z.T @ ys)
         y_pred = self.z @ w_reg
         resid = ys - y_pred
-        n = len(ys); p = len(w_reg)
+        n = len(ys)
+        p = len(w_reg)
         ss_res = float(np.sum(resid**2))
         ss_tot = float(np.sum((ys - np.mean(ys)) ** 2))
         self.r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0.0

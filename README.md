@@ -33,16 +33,11 @@ how people use language depending on their attitudes, traits, or other numeric v
 ## Installation
 
 ```bash
-pip install ssd-semdiff
+pip install ssdiff
 ```
 
 Dependencies (installed automatically): `numpy`, `pandas`, `scikit-learn`, `gensim`, `spacy`.
 
-To use the Polish pipeline:
-```bash
-pip install ssd-semdiff
-```
-(For other languages, swap the model accordingly.)
 
 ---
 
@@ -52,7 +47,7 @@ Below is an end-to-end minimal example using the Polish model and an example dat
 Adjust paths and column names to your data.
 
 ```python
-from ssd import (
+from ssdiff import (
     SSD, load_embeddings, normalize_kv,
     load_spacy, load_stopwords, preprocess_texts, build_docs_from_preprocessed,
     suggest_lexicon, token_presence_stats, coverage_by_lexicon,
@@ -156,7 +151,7 @@ In order to capture only the semantic information, without frequency-based artif
 and All-But-The-Top (ABTT) transformation to the embeddings before fitting SSD.
 
 ```python
-from ssd import load_embeddings, normalize_kv
+from ssdiff import load_embeddings, normalize_kv
 
 MODEL_PATH = r"NLPResources\word2vec_model.kv"
 
@@ -177,7 +172,7 @@ For polish, the nkjp+wiki-lemmas-all-300-cbow-hs.txt.gz (no. 25) from the [Polis
 SSD uses spaCy to keep original sentences and lemmas aligned for later snippet extraction.
 
 ```python
-from ssd import load_spacy, load_stopwords, preprocess_texts, build_docs_from_preprocessed
+from ssdiff import load_spacy, load_stopwords, preprocess_texts, build_docs_from_preprocessed
 
 nlp = load_spacy("pl_core_news_lg")   # or another language model
 stopwords = load_stopwords("pl")      # same stopword source across app & package
@@ -218,7 +213,7 @@ Rank tokens by balanced coverage with a mild penalty for strong correlation with
 Accepts a DataFrame (`text_col`, `score_col`) or a `(texts, y)` tuple where texts can be raw strings or token lists.
 
 ```python
-from ssd import suggest_lexicon
+from ssdiff import suggest_lexicon
 
 # Using a DataFrame
 cands_df = suggest_lexicon(df, text_col="lemmatized", score_col="questionnaire_result", top_k=150)
@@ -231,7 +226,7 @@ cands_df2 = suggest_lexicon((docs, y), top_k=150)
 
 Per-token coverage & correlation diagnostics:
 ```python
-from ssd import token_presence_stats
+from ssdiff import token_presence_stats
 stats = token_presence_stats((texts, y), token="concept_keyword_1", n_bins=4, verbose=True)
 print(stats)  # dict: token, docs, cov_all, cov_bal, corr, rank
 ```
@@ -244,7 +239,7 @@ Summary for your chosen lexicon:
 - `per_token_df`: stats for each token
 
 ```python
-from ssd import coverage_by_lexicon
+from ssdiff import coverage_by_lexicon
 
 summary, per_tok = coverage_by_lexicon(
     (texts, y),
@@ -258,7 +253,7 @@ summary, per_tok = coverage_by_lexicon(
 
 Instantiate `SSD` with your normalized embeddings, tokenized documents, numeric outcome, and lexicon:
 ```python
-from ssd import SSD, load_embeddings, normalize_kv
+from ssdiff import SSD, load_embeddings, normalize_kv
 
 kv = normalize_kv(load_embeddings(MODEL_PATH), l2=True, abtt_m=1)
 
@@ -413,7 +408,7 @@ Returned columns:
 The `ssd` top-level package re-exports the main objects so you can write:
 
 ```python
-from ssd import (
+from ssdiff import (
   SSD,                       # the analysis class (fit, neighbors, clustering, snippets, scores)
   load_embeddings, normalize_kv,
   load_spacy, load_stopwords, preprocess_texts, build_docs_from_preprocessed,

@@ -1,4 +1,4 @@
-# ===== words_apart_orig/snippets.py (replace cluster_snippets_by_centroids) =====
+# ===== ssdiff/snippets.py (replace cluster_snippets_by_centroids) =====
 from __future__ import annotations
 from typing import List, Iterable
 import numpy as np

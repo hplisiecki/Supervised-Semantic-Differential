@@ -1,8 +1,10 @@
-import copy
+# ssdiff/utils.py
 import numpy as np
 from gensim.models import KeyedVectors
-from typing import List, Tuple, Dict, Set, Union
+from typing import List, Tuple, Dict, Union
 import re
+import os
+import gzip
 
 _bad_token = re.compile(r".*\d|^[A-ZĄĆĘŁŃÓŚŹŻ]")
 
@@ -111,10 +113,6 @@ def filtered_neighbors(
                 break
     return out
 
-# utils/embeddings.py
-import os
-import gzip
-from gensim.models import KeyedVectors
 
 def _first_line_tokens(path: str) -> list[str]:
     opener = gzip.open if path.lower().endswith(".gz") else open

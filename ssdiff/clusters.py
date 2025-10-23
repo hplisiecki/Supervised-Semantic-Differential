@@ -1,7 +1,7 @@
-# words_apart_old/clusters.py
+# ssdiff/clusters.py
 from __future__ import annotations
 import numpy as np
-from typing import List, TYPE_CHECKING
+from typing import TYPE_CHECKING
 from .utils import filtered_neighbors
 
 if TYPE_CHECKING:
@@ -24,7 +24,7 @@ def _require_sklearn():
         raise ImportError("scikit-learn is required for clustering. Install: pip install scikit-learn")
 
 def cluster_top_neighbors(
-    wa: SSD,
+    ssd: SSD,
     *,
     topn: int = 100,
     k: int | None = None,
@@ -39,15 +39,15 @@ def cluster_top_neighbors(
     from sklearn.cluster import KMeans
     from sklearn.metrics import silhouette_score
 
-    b = wa.beta_unit if wa.use_unit_beta else wa.beta
+    b = ssd.beta_unit if ssd.use_unit_beta else ssd.beta
     vec = b if side == "pos" else -b
 
-    pairs = filtered_neighbors(wa.kv, vec, topn=topn, restrict=restrict_vocab)
+    pairs = filtered_neighbors(ssd.kv, vec, topn=topn, restrict=restrict_vocab)
     words = [w for (w, _s) in pairs]
     if len(words) < max(2, k_min):
         raise ValueError("Not enough neighbors to cluster.")
 
-    W = np.vstack([wa.kv.get_vector(w, norm=True).astype(np.float64) for w in words])  # unit rows
+    W = np.vstack([ssd.kv.get_vector(w, norm=True).astype(np.float64) for w in words])  # unit rows
 
     def choose_k_auto(W, kmin, kmax):
         best_k, best_s = None, -1.0
@@ -73,7 +73,8 @@ def cluster_top_neighbors(
         if len(idx) < min_cluster_size:
             continue
         Wc = W[idx]
-        centroid = Wc.mean(axis=0); centroid /= max(float(np.linalg.norm(centroid)), 1e-12)
+        centroid = Wc.mean(axis=0)
+        centroid /= max(float(np.linalg.norm(centroid)), 1e-12)
         cos_beta = float(centroid @ bu)
         cos_to_centroid = (Wc @ centroid).astype(float)
         coherence = float(np.mean(cos_to_centroid))

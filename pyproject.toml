@@ -3,32 +3,29 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ssd"
+name = "ssdiff"
 version = "0.1.0"
 description = "Supervised Semantic Differential (SSD): interpretable, embedding-based analysis of concept meaning in text."
 readme = "README.md"
 requires-python = ">=3.9"
-license = { file = "LICENSE" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
-  { name = "Hubert Plisiecki", email = "hplisiecki@gmail.com" }
+  {name = "Hubert Plisiecki", email = "hplisiecki@gmail.com" },
+  {name = "Paweł Lenartowicz", email = "pawellenartowicz@europe.com" }
 ]
-
 keywords = ["NLP", "semantics", "word embeddings", "psychometrics", "semantic differential", "computational social science"]
 
 classifiers = [
-  "Development Status :: 3 - Alpha",
-  "Intended Audience :: Science/Research",
-  "License :: OSI Approved :: MIT License",
-  "Programming Language :: Python",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
-  "Topic :: Scientific/Engineering",
+  "Operating System :: OS Independent",
+  "Intended Audience :: Science/Research",
   "Topic :: Scientific/Engineering :: Information Analysis",
-  "Topic :: Text Processing :: Linguistic",
 ]
 
 # Runtime dependencies (non-optional)
@@ -38,6 +35,7 @@ dependencies = [
   "scikit-learn>=1.3.2",
   "gensim>=4.3.2",
   "spacy>=3.7.2",
+  "requests>=2.32.5"
 ]
 
 [project.urls]
@@ -47,7 +45,7 @@ Issues = "https://github.com/hplisiecki/Supervised-Semantic-Differential/issues"
 Changelog = "https://github.com/hplisiecki/Supervised-Semantic-Differential/releases"
 
 [project.optional-dependencies]
-# Optional feature sets. Install via: pip install "ssd-semdiff[dev,gui]"
+# Install with: pip install "ssdiff[dev,gui]"
 dev = [
   "pytest>=7.0",
   "pytest-cov>=4.0",
@@ -61,12 +59,14 @@ gui = [
 ]
 
 [tool.setuptools]
+# Your package lives at the repo root under ssdiff/
 package-dir = {"" = "."}
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["ssd*"]
-exclude = ["tests*","examples*","docs*"]
+include = ["ssdiff*"]
+exclude = ["tests*", "examples*", "docs*"]
 
 [tool.setuptools.package-data]
-"ssd" = ["py.typed", "py.typed", "resources/*"]
+# Ensure these files exist inside the ssdiff/ directory
+ssdiff = ["py.typed", "resources/*"]
