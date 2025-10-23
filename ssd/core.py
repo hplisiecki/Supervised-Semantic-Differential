@@ -23,8 +23,6 @@ from .utils import (
 
 
 
-WINDOW = 3
-SIF_A = 1e-3
 
 class SSD:
     """
@@ -51,7 +49,9 @@ class SSD:
         *,
         l2_normalize_docs: bool = True,
         use_unit_beta: bool = True,
-        N_PCA = 20
+        N_PCA = 20,
+        window: int = WINDOW,
+        SIF_a: float = SIF_A,
     ) -> None:
         self.kv = kv if isinstance(kv, KeyedVectors) else load_embeddings(kv)
         self.docs = docs
@@ -61,12 +61,15 @@ class SSD:
         self.pos_clusters_raw = None   # type: list[dict] | None
         self.neg_clusters_raw = None   # type: list[dict] | None
 
+        self.window = window
+        self.SIF_a = SIF_a
+
         wc, tot = compute_global_sif(self.docs)
 
         # Per-essay matrix (drops essays w/o seed contexts)
         X_raw, keep = build_doc_vectors(
             self.docs, self.kv, self.lexicon,
-            global_wc=wc, total_tokens=tot, window=WINDOW, sif_a=SIF_A,
+            global_wc=wc, total_tokens=tot, window=self.window, sif_a=self.SIF_A,
         )
         if not np.any(keep):
             raise ValueError("No essays contain the lexicon for this concept; nothing to fit.")
@@ -397,7 +400,6 @@ class SSD:
             side: str = "both",  # "pos", "neg", or "both"
             window_sentences: int = 1,  # [sent-1, sent, sent+1]
             seeds=None,  # defaults to self.lexicon
-            sif_a: float = 1e-3,
             top_per_cluster: int = 100,
     ) -> dict:
         """
@@ -438,7 +440,7 @@ class SSD:
             neg_clusters=neg_clusters,
             window_sentences=window_sentences,
             seeds=seeds,
-            sif_a=sif_a,
+            sif_a=self.SIF_a,
             top_per_cluster=top_per_cluster,
         )
 
@@ -448,7 +450,6 @@ class SSD:
             pre_docs,
             window_sentences: int = 1,
             seeds=None,
-            sif_a: float = 1e-3,
             top_per_side: int = 200,
             min_cosine: float | None = None,
     ) -> dict:
@@ -466,7 +467,7 @@ class SSD:
             ssd=self,
             window_sentences=window_sentences,
             seeds=seeds,
-            sif_a=sif_a,
+            sif_a=self.SIF_a,
             top_per_side=top_per_side,
             min_cosine=min_cosine,
         )

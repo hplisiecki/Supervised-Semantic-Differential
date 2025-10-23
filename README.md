@@ -1,13 +1,16 @@
 # Supervised Semantic Differential (SSD)
 
-**SSD** is a small, researcher-friendly Python package that lets you recover **interpretable semantic directions** (à la Osgood’s Semantic Differential) directly from open-ended text and relate them to **numeric outcomes** (e.g., scales, judgments). It builds per-essay concept vectors from **local contexts around seed words**, learns a **semantic gradient** that best predicts the outcome, and then provides multiple interpretability layers:
+**SSD**  lets you recover **interpretable semantic directions** related to specific concpets directly from open-ended text and relate them to **numeric outcomes** 
+(e.g., psychometric scales, judgments). It builds per-essay concept vectors from **local contexts around seed words**, 
+learns a **semantic gradient** that best predicts the outcome, and then provides multiple interpretability layers:
 
 - **Nearest neighbors** of each pole (+β̂ / −β̂)
 - **Clustering** of neighbors into themes
-- **Text snippets**: top sentences whose local context aligns with each cluster centroid or the β̂ axis
-- **Per-essay scores** (cosine alignments) to analyze or merge back into your data frame
+- **Text snippets**: top sentences whose local contexts align with each cluster centroid or the β̂ axis
+- **Per-essay scores** (cosine alignments) for further analysis
 
-The package focuses on **clarity, reproducibility, and explainability**, not production serving.
+The goal of the package is to allow psycholinguistic researchers to draw data-driven insights about 
+how people use language depending on their attitudes, traits, or other numeric variables of interest.
 
 ---
 
@@ -33,7 +36,7 @@ The package focuses on **clarity, reproducibility, and explainability**, not pro
 pip install ssd-semdiff
 ```
 
-Dependencies (installed automatically): `numpy`, `pandas`, `scikit-learn`, `gensim`, `spacy`, `tqdm`.
+Dependencies (installed automatically): `numpy`, `pandas`, `scikit-learn`, `gensim`, `spacy`.
 
 To use the Polish pipeline:
 ```bash
@@ -45,7 +48,7 @@ pip install ssd-semdiff
 
 ## Quickstart
 
-Below is an end-to-end minimal example using the Polish model and a “climate” dataset. 
+Below is an end-to-end minimal example using the Polish model and an example dataset. 
 Adjust paths and column names to your data.
 
 ```python
@@ -57,20 +60,20 @@ from ssd import (
 
 import pandas as pd
 
-MODEL_PATH = r"D:\resources\NLP\PL\nkjp+wiki-lemmas-all-300-cbow-hs.txt\nkjp+wiki-lemmas-all-300-cbow-hs.kv"
-DATA_PATH  = r"D:\Github\BetweenWords\data\kalibra_klimat.csv"
+MODEL_PATH = r"NLPResources\word2vec_model.kv"
+DATA_PATH  = r"data\example_dataset.csv"
 
 # 1) Load and normalize embeddings (L2 + ABTT on word space)
 kv = normalize_kv(load_embeddings(MODEL_PATH), l2=True, abtt_m=1)
 
 # 2) Load your data
 df = pd.read_csv(DATA_PATH)
-text_raw_col = "klimat_open"
-y_col        = "klimat_closed"
+text_raw_col = "text_raw" # column with raw text
+y_col        = "questionnaire_result" # numeric outcome column
 
 # 3) Preprocess (spaCy) — keep original sentences and lemmas linked
-nlp = load_spacy("pl_core_news_lg")
-stopwords = load_stopwords("pl")
+nlp = load_spacy("pl_core_news_lg") # polish spacy model
+stopwords = load_stopwords("pl") # polish stopwords
 texts_raw = df[text_raw_col].fillna("").astype(str).tolist()
 pre_docs = preprocess_texts(texts_raw, nlp, stopwords)
 
@@ -82,8 +85,8 @@ docs = [docs[i] for i in range(len(docs)) if mask.iat[i]]
 pre_docs = [pre_docs[i] for i in range(len(pre_docs)) if mask.iat[i]]
 y = y[mask].to_numpy()
 
-# 5) Define a lexicon (tokens must match your preprocessing)
-lexicon = {"zmiana", "klimatyczny", "klimat"}
+# 5) Define a lexicon (tokens must match your preprocessing) Check lexicon utilities section for data-driven selection.
+lexicon = {"concept_keyword_1", "concept_keyword_2", "concept_keyword_3", "concept_keyword_4"} # keywords that define your concept
 
 # 6) Choose PCA dimensionality based on sample size
 n_kept = len(docs)
@@ -95,44 +98,46 @@ ssd = SSD(
     docs=docs,
     y=y,
     lexicon=lexicon,
-    l2_normalize_docs=True,
-    abtt_m_docs=0,
+    l2_normalize_docs=True, # normalize per-essay vectors
     N_PCA=PCA_K,
-    use_unit_beta=True,
+    use_unit_beta=True, # unit β̂ for neighbors/interpretation
+    windpow = 3, # context window ±3 tokens
+    SIF_a = 1e-3, # SIF weighting parameter
 )
 
 # 8) Inspect regression readout
 print({
     "R2": ssd.r2,
+    "adj_R2": float(getattr(wa, "r2_adj", float("nan"))),
     "F": ssd.f_stat,
     "p": ssd.f_pvalue,
     "beta_norm": ssd.beta_norm_stdCN,        # ||β|| in SD(y) per +1.0 cosine
     "delta_per_0.10_raw": ssd.delta_per_0p10_raw,
     "IQR_effect_raw": ssd.iqr_effect_raw,
     "corr_y_pred": ssd.y_corr_pred,
-    "n_kept": ssd.n_kept,
+    "n_raw": int(getattr(wa, "n_raw", len(docs))),
+    "n_kept": int(getattr(wa, "n_kept", len(docs))),
+    "n_dropped": int(getattr(wa, "n_dropped", 0)),    
 })
 
 # 9) Neighbors
-pos_words = [w for (w, _sim) in ssd.nbrs(sign=+1, n=20)]
-neg_words = [w for (w, _sim) in ssd.nbrs(sign=-1, n=20)]
-print("Neighbors +β̂:", pos_words[:10])
-print("Neighbors −β̂:", neg_words[:10])
+ssd.top_words(n = 20, verbose = True)
 
-# 10) Cluster themes (e.g., 4 clusters per pole)
-df_pos_clusters, df_pos_members = ssd.cluster_neighbors_sign(side="pos", topn=100, k=4, verbose=True)
-df_neg_clusters, df_neg_members = ssd.cluster_neighbors_sign(side="neg", topn=100, k=4, verbose=True)
+# 10) Cluster themes (e.g., Clustering by silhouette)
+df_clusters, df_members = ssd.cluster_neighbors(topn = 100, k=None, k_min = 2, k_max = 10, verbose = True, top_words = 5)
 
 # 11) Snippets for interpretation
-snips = ssd.snippets_from_clusters(
-    pre_docs=pre_docs, window_sentences=1, top_per_cluster=100, sif_a=1e-3
-)
+snips = ssd.cluster_snippets(pre_docs=pre_docs, side="both", window_sentences=1, top_per_cluster=100)
 df_pos_snip = snips["pos"]
 df_neg_snip = snips["neg"]
 
-# 12) Optional: per-essay SSD scores (cosine of each essay’s context vector to β̂)
-scores = ssd.ssd_scores(docs)
-df.loc[mask, "ssd_cosine"] = scores
+beta_snips = wa.beta_snippets(pre_docs=pre_docs, window_sentences=1, top_per_side=200)
+df_beta_pos = beta_snips["beta_pos"]
+df_beta_neg = beta_snips["beta_neg"]
+
+# 12) Per-essay SSD scores
+scores = ssd.ssd_scores(docs, include_all=True)
+
 ```
 ---
 
@@ -144,7 +149,29 @@ df.loc[mask, "ssd_cosine"] = scores
 - **Interpretation**: nearest neighbors to +β̂/−β̂, clustering neighbors into themes, and showing original sentences whose local context aligns with centroids or β̂.
 
 ---
+## Word2Vec Embeddings
 
+The method requires pre-trained word embeddings in either the .kv, .bin, .txt, or a .gz compression of the previous formats.
+In order to capture only the semantic information, without frequency-based artifacts, it is recommended to apply L2 normalization 
+and All-But-The-Top (ABTT) transformation to the embeddings before fitting SSD.
+
+```python
+from ssd import load_embeddings, normalize_kv
+
+MODEL_PATH = r"NLPResources\word2vec_model.kv"
+
+kv = load_embeddings(MODEL_PATH) # load embeddings
+
+kv = normalize_kv(kv, l2=True, abtt_m=1)  # L2 + ABTT (remove top-1 PC)
+```
+
+The model is not included in the package, and will differ depending on your language and domain.
+Look for pre-trained embeddings in your language, the more data they were trained on, the better.
+Pay attention to the vocabulary coverage of your texts.
+
+For polish, the nkjp+wiki-lemmas-all-300-cbow-hs.txt.gz (no. 25) from the [Polish Word2Vec model list](https://dsmodels.nlp.ipipan.waw.pl) was found to work well.
+
+---
 ## Preprocessing (spaCy)
 
 SSD uses spaCy to keep original sentences and lemmas aligned for later snippet extraction.
@@ -161,10 +188,19 @@ docs = build_docs_from_preprocessed(pre_docs)  # → list[list[str]] (lemmas wit
 
 Each PreprocessedDoc stores:
 
+- **raw**: original raw text
 - **sents_surface**: list[str], original sentences
 - **sents_lemmas**: list[list[str]]
 - **doc_lemmas**: flattened lemmas (list[str])
+- **sent_char_spans**: list of (start_char, end_char) per sentence
 - **token_to_sent**: index mapping lemma positions → sentence index
+
+Spacy models for various languages can be found [here](https://spacy.io/models).
+
+To install a spaCy model, run e.g.:
+```bash
+python -m spacy download pl_core_news_lg
+```
 
 ---
 ## Lexicon Utilities
@@ -185,18 +221,18 @@ Accepts a DataFrame (`text_col`, `score_col`) or a `(texts, y)` tuple where text
 from ssd import suggest_lexicon
 
 # Using a DataFrame
-cands_df = suggest_lexicon(df, text_col="stemmed", score_col="klimat_closed", top_k=150)
+cands_df = suggest_lexicon(df, text_col="lemmatized", score_col="questionnaire_result", top_k=150)
 
 # Or using a tuple (texts, y)
 texts = [" ".join(doc) for doc in docs]
-cands_df2 = suggest_lexicon((texts, y), top_k=150)
+cands_df2 = suggest_lexicon((docs, y), top_k=150)
 ```
 ### `token_presence_stats(...)`
 
 Per-token coverage & correlation diagnostics:
 ```python
 from ssd import token_presence_stats
-stats = token_presence_stats((texts, y), token="klimat", n_bins=4, verbose=True)
+stats = token_presence_stats((texts, y), token="concept_keyword_1", n_bins=4, verbose=True)
 print(stats)  # dict: token, docs, cov_all, cov_bal, corr, rank
 ```
 
@@ -212,7 +248,7 @@ from ssd import coverage_by_lexicon
 
 summary, per_tok = coverage_by_lexicon(
     (texts, y),
-    lexicon={"klimat", "klimatyczny", "zmiana"},
+    lexicon={"concept_keyword_1", "concept_keyword_2", "concept_keyword_3", "concept_keyword_4"},
     n_bins=4,
     verbose=True
 )
@@ -233,16 +269,17 @@ ssd = SSD(
     y=y,
     lexicon={"klimat", "klimatyczny", "zmiana"},
     l2_normalize_docs=True,
-    abtt_m_docs=0,     # no ABTT on doc matrix in the main pipeline
     N_PCA=PCA_K,
-    use_unit_beta=True # unit β̂ for neighbors/interpretation
+    use_unit_beta=True, # unit β̂ for neighbors/interpretation
+    windpow = 3, # context window ±3 tokens
+    SIF_a = 1e-3, # SIF weighting parameter
 )
 
 print(ssd.r2, ssd.f_stat, ssd.f_pvalue)
 ```
 Key outputs attached to the instance:
 - `beta` / `beta_unit` — semantic gradient (doc space)
-- `r2`, `f_stat`, `f_pvalue`
+- `r2`, `f_stat`, `f_pvalue`, 'r2_adj' — regression fit stats
 - `beta_norm_stdCN` — ||β|| in SD(y) per +1.0 cosine
 - `delta_per_0p10_raw` — change in raw 𝑦 per +0.10 cosine
 - `iqr_effect_raw` — IQR(of cosine)*slope in raw 𝑦
@@ -252,38 +289,31 @@ Key outputs attached to the instance:
 ## Neighbors & Clustering
 
 ### Nearest neighbors
-```python
-# Top neighbors of +β̂
-ssd.nbrs(sign=+1, n=20)  # → list of (word, cosine), filtered for readability
 
-# Top neighbors of −β̂
-ssd.nbrs(sign=-1, n=20)
+Get the top N nearest neighbors of +β̂/−β̂:
+
+```python
+top_words = ssd.top_words(n = 20, verbose = True)
 ```
 
 ### Clustering neighbors into themes
 Use `cluster_neighbors_sign` to group the top N neighbors of +β̂/−β̂ into k clusters (k-means; Euclidean on unit vectors ≈ cosine):
 
 ```python
-# POSITIVE pole (+β̂)
-df_pos_clusters, df_pos_members = ssd.cluster_neighbors_sign(
-    side="pos",        # or "neg"
-    topn=100,
-    k=4,               # or let the function choose via silhouette: k=None, k_min=2, k_max=10
-    restrict_vocab=50000,
-    random_state=13,
-    min_cluster_size=2,
-    top_words=10,      # top preview words in the cluster summary
-    verbose=True,      # pretty console preview
-)
-
-# NEGATIVE pole (−β̂)
-df_neg_clusters, df_neg_members = ssd.cluster_neighbors_sign(side="neg", topn=100, k=4, verbose=True)
+df_clusters, df_members = ssd.cluster_neighbors(topn = 100, 
+                                                k=None,
+                                                k_min = 2, 
+                                                k_max = 10, 
+                                                verbose = True,
+                                                random_state = 13, # for reproducibility
+                                                top_words = 5,
+                                                verbose = True)
 ```
 
 Returns
-- df_*_clusters (one row per cluster):
+- df_clusters (one row per cluster):
 - side, cluster_rank, size, centroid_cos_beta, coherence, top_words
-- df_*_members (one row per word):
+- df_members (one row per word):
   side, cluster_rank, word, cos_to_centroid, cos_to_beta
 
 The raw clusters (with all per-word cosines and internal ids) are kept internally as:
@@ -304,15 +334,19 @@ After clustering, SSD lets you **link the abstract directions in embedding space
 ### Snippets by cluster centroids
 
 ```python
-snips = ssd.snippets_from_clusters(
+snips = ssd.cluster_snippets(
     pre_docs=pre_docs,    # from preprocess_texts(...)
+    side="both",          # "pos", "neg", or "both"
     window_sentences=1,   # [sent-1, sent, sent+1]
-    seeds=ssd.lexicon,    # seed lemmas to anchor context windows
-    sif_a=1e-3,
     top_per_cluster=100,  # keep best K per cluster
 )
 
 df_pos_snip = snips["pos"]  # columns: centroid_label, doc_id, cosine, seed, sentence_before, sentence_anchor, sentence_after, window_text_surface, ...
+df_neg_snip = snips["neg"]
+
+
+
+df_pos_snip = snips["pos"] 
 df_neg_snip = snips["neg"]
 ```
 Each returned row represents a seed occurrence window, not a whole essay.  
@@ -322,13 +356,14 @@ Surface text (`sentence_before`, `sentence_anchor`, `sentence_after`) lets you r
 ### Snippets along β̂
 You can also extract windows that best illustrate the main semantic direction (rather than specific clusters):
 ```python
-beta_snips = ssd.snippets_along_beta(
+
+beta_snips = ssd.beta_snippets(
     pre_docs=pre_docs,
     window_sentences=1,
     seeds=ssd.lexicon,
-    sif_a=1e-3,
     top_per_side=200,
 )
+
 df_beta_pos = beta_snips["beta_pos"]
 df_beta_neg = beta_snips["beta_neg"]
 ```
@@ -358,9 +393,10 @@ For each document \(i\):
 These are available for **all documents**, with NaNs for those that did not contain any lexicon occurrences (i.e., were dropped before fitting).
 
 ```python
-scores = ssd.ssd_scores(include_all=True, return_df=True)
+scores = ssd.ssd_scores(
+    docs, # list[list[str]]
+    include_all=True) # include all docs, even those dropped due to no seed contexts
 
-print(scores.head())
 ```
 
 Returned columns:
@@ -391,26 +427,26 @@ from ssd import (
 - Attributes after fit: `beta`, `beta_unit`, `r2`, `f_stat`, `f_pvalue`, `beta_norm_stdCN`,  
 `delta_per_0p10_raw`, `iqr_effect_raw`, `y_corr_pred`, `n_kept`, etc.
 - Methods:
-  - nbrs(sign=+1, n=20) → list[(word, cosine)]
-  - cluster_neighbors_sign(side="pos", topn=100, k=None, k_min=2, k_max=10, restrict_vocab=50000, random_state=13, min_cluster_size=2, top_words=10, verbose=False) → (df_clusters, df_members) and stores raw clusters in pos_clusters_raw/neg_clusters_raw 
-  - snippets_from_clusters(pre_docs, window_sentences=1, seeds=None, sif_a=1e-3, top_per_cluster=100) → dict with "pos"/"neg" DataFrames 
-  - snippets_along_beta(pre_docs, window_sentences=1, seeds=None, sif_a=1e-3, top_per_side=200) → dict with "beta_pos"/"beta_neg" DataFrames 
-  - ssd_scores(docs) → numpy array of per-essay cosines
+  - `nbrs(sign=+1, n=20)` → list[(word, cosine)]
+  - `cluster_neighbors_sign(side="pos", topn=100, k=None, k_min=2, k_max=10, restrict_vocab=50000, random_state=13, min_cluster_size=2, top_words=10, verbose=False)` → `(df_clusters, df_members)` and stores raw clusters in `pos_clusters_raw`/`neg_clusters_raw`
+  - `snippets_from_clusters(pre_docs, window_sentences=1, seeds=None, sif_a=1e-3, top_per_cluster=100)` → dict with `"pos"`/`"neg"` DataFrames 
+  - `snippets_along_beta(pre_docs, window_sentences=1, seeds=None, sif_a=1e-3, top_per_side=200)` → dict with `"beta_pos"`/`"beta_neg"` DataFrames 
+  - `ssd_scores(docs)` → numpy array of per-essay cosines
 
 ### Embeddings
-- load_embeddings(path) → gensim.models.KeyedVectors
-- normalize_kv(kv, l2=True, abtt_m=0) → new KeyedVectors with L2 + optional ABTT (“all-but-the-top”, top-m PCs removed)
-- 
+- `load_embeddings(path)` → `gensim.models.KeyedVectors`
+- `normalize_kv(kv, l2=True, abtt_m=0)` → new KeyedVectors with L2 + optional ABTT (“all-but-the-top”, top-m PCs removed)
+
 ### Preprocessing
-- load_spacy(model_name="pl_core_news_lg") → spaCy nlp
-- load_stopwords(lang="pl") → list of stopwords (remote Polish list with sensible fallback)
-- preprocess_texts(texts, nlp, stopwords) → list of PreprocessedDoc
-- build_docs_from_preprocessed(pre_docs) → list[list[str]] (lemmas for modeling)
+- `load_spacy(model_name="pl_core_news_lg")` → spaCy nlp
+- `load_stopwords(lang="pl")` → list of stopwords (remote Polish list with sensible fallback)
+- `preprocess_texts(texts, nlp, stopwords)` → list of PreprocessedDoc
+- `build_docs_from_preprocessed(pre_docs)` → list[list[str]] (lemmas for modeling)
 
 ### Lexicon
-- suggest_lexicon(df_or_tuple, text_col=None, score_col=None, top_k=150, min_docs=5, n_bins=4, corr_cap=0.30) → DataFrame
-- token_presence_stats(df_or_tuple, token, n_bins=4, corr_cap=0.30, verbose=False) → dict
-- coverage_by_lexicon(df_or_tuple, lexicon, n_bins=4, verbose=False) → (summary, per_token_df)
+- `suggest_lexicon(df_or_tuple, text_col=None, score_col=None, top_k=150, min_docs=5, n_bins=4, corr_cap=0.30)` → DataFrame
+- `token_presence_stats(df_or_tuple, token, n_bins=4, corr_cap=0.30, verbose=False)` → dict
+- `coverage_by_lexicon(df_or_tuple, lexicon, n_bins=4, verbose=False)` → `(summary, per_token_df)`
 
 --- 
 ## Citing & License
