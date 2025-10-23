@@ -471,6 +471,116 @@ class SSD:
             min_cosine=min_cosine,
         )
 
+    def ssd_scores(
+            self,
+            include_all: bool = True,
+            return_df: bool = True,
+            include_true: bool = True,
+    ):
+        """
+        Compute per-document SSD scores from the fitted model.
+
+        Returns, for each original document index (0..n_raw-1):
+          - cos:        cosine alignment of the document vector to the unit gradient β̂
+          - yhat_std:   predicted outcome in standardized units (X @ β)
+          - yhat_raw:   predicted outcome mapped back to original units
+          - kept:       whether this doc contributed a valid concept vector (had seed context)
+          - (optional) y_true_std, y_true_raw for kept docs; NaN for dropped
+
+        Parameters
+        ----------
+        include_all : bool
+            If True (default), return a row for every original doc index, with NaNs for
+            dropped docs. If False, return only kept docs (those used in regression).
+        return_df : bool
+            If True (default), return a pandas.DataFrame. If False, return a dict of np.ndarrays.
+        include_true : bool
+            If True (default), include observed outcome values for kept docs
+            (`y_true_std`, `y_true_raw`).
+
+        Notes
+        -----
+        - Assumes `self.x` holds the (optionally row-L2’d and ABTT-processed) document
+          vectors for the kept docs (those with self.keep_mask == True).
+        - `self.beta` is the regression gradient in document space (standardized-y units).
+        - `self.beta_unit` is the unit-norm version of `self.beta`.
+        - `self.cos_align` was computed in _calibrate_effect() as
+             cos_align = normalize_rows(self.x) @ self.beta_unit
+          for the kept docs.
+        - Predictions in raw units are formed via the fitted `self.scaler_y`:
+             yhat_raw = y_mean + y_std * yhat_std
+        """
+        import numpy as np
+        try:
+            import pandas as pd
+        except Exception:
+            pd = None  # allow non-DataFrame return if pandas not available
+
+        if not hasattr(self, "x") or not hasattr(self, "beta") or not hasattr(self, "keep_mask"):
+            raise RuntimeError("Model appears unfitted: missing x/beta/keep_mask. Fit before calling ssd_scores().")
+
+        n_raw = getattr(self, "n_raw", len(self.docs))
+        keep = self.keep_mask
+        if keep is None or len(keep) != n_raw:
+            raise RuntimeError("Invalid or missing keep_mask; cannot map scores back to original doc indices.")
+
+        # Per-kept-doc projections in standardized y-units
+        # yhat_std_k: X_k @ β  (vector length = n_kept)
+        yhat_std_k = (self.x @ self.beta).astype(float).ravel()
+
+        # Cosine alignment for kept docs (already computed and stored)
+        cos_k = np.array(self.cos_align, dtype=float)
+
+        # Raw-scale mapping via fitted scaler on y
+        y_mean = float(
+            getattr(self, "y_mean", getattr(self, "scaler_y", None).mean_[0] if hasattr(self, "scaler_y") else 0.0))
+        y_std = float(
+            getattr(self, "y_std", getattr(self, "scaler_y", None).scale_[0] if hasattr(self, "scaler_y") else 1.0))
+        if y_std == 0.0:
+            y_std = 1.0
+        yhat_raw_k = y_mean + y_std * yhat_std_k
+
+        # Prepare full-length arrays (size = n_raw), fill with NaN, then insert kept
+        def _full_like(vals_k):
+            out = np.full((n_raw,), np.nan, dtype=float)
+            out[keep] = vals_k
+            return out
+
+        cos_full = _full_like(cos_k)
+        yhat_std_full = _full_like(yhat_std_k)
+        yhat_raw_full = _full_like(yhat_raw_k)
+        kept_full = keep.astype(bool).copy()
+
+        result = {
+            "doc_index": np.arange(n_raw, dtype=int),
+            "kept": kept_full,
+            "cos": cos_full if include_all else cos_k,
+            "yhat_std": yhat_std_full if include_all else yhat_std_k,
+            "yhat_raw": yhat_raw_full if include_all else yhat_raw_k,
+        }
+
+        if include_true and hasattr(self, "y_kept"):
+            # Standardized observed = self.ys (length n_kept)
+            ys_std_k = np.array(self.ys, dtype=float).ravel()
+            y_true_std_full = _full_like(ys_std_k)
+            y_true_raw_full = _full_like(y_mean + y_std * ys_std_k)
+            if include_all:
+                result["y_true_std"] = y_true_std_full
+                result["y_true_raw"] = y_true_raw_full
+            else:
+                result["y_true_std"] = ys_std_k
+                result["y_true_raw"] = y_mean + y_std * ys_std_k
+
+        if return_df:
+            if pd is None:
+                raise RuntimeError(
+                    "pandas is required to return a DataFrame. Call with return_df=False or install pandas.")
+            cols = ["doc_index", "kept", "cos", "yhat_std", "yhat_raw"]
+            if include_true:
+                cols += ["y_true_std", "y_true_raw"]
+            return pd.DataFrame({c: result[c] for c in cols})
+        return result
+
     @staticmethod
     def _unit(v: np.ndarray, eps: float = 1e-12) -> np.ndarray:
         n = float(np.linalg.norm(v))

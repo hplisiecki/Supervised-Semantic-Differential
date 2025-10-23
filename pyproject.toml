@@ -5,12 +5,16 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ssd"
 version = "0.1.0"
-description = "The Supervised Semantic Differential: an interpretable pipeline to extract semantic gradients from text using word embeddings."
+description = "Supervised Semantic Differential (SSD): interpretable, embedding-based analysis of concept meaning in text."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { file = "LICENSE" }
-authors = [{ name = "Your Name", email = "you@example.com" }]
-keywords = ["semantics", "embeddings", "NLP", "psychometrics", "interpretability"]
+authors = [
+  { name = "Hubert Plisiecki", email = "hplisiecki@gmail.com" }
+]
+
+keywords = ["NLP", "semantics", "word embeddings", "psychometrics", "semantic differential", "computational social science"]
+
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Science/Research",
@@ -22,29 +26,47 @@ classifiers = [
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
-  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Scientific/Engineering",
+  "Topic :: Scientific/Engineering :: Information Analysis",
   "Topic :: Text Processing :: Linguistic",
 ]
 
+# Runtime dependencies (non-optional)
 dependencies = [
-  "numpy>=1.23",
-  "pandas>=1.5",
-  "gensim>=4.3,<5",
-  "spacy>=3.6,<4",   # the model is *not* included; users install it separately
+  "numpy>=1.26.4",
+  "pandas>=2.1.4",
+  "scikit-learn>=1.3.2",
+  "gensim>=4.3.2",
+  "spacy>=3.7.2",
 ]
-
-[project.optional-dependencies]
-cluster = ["scikit-learn>=1.2"]
-dev = [
-  "pytest",
-  "ruff",
-  "build",
-  "twine",
-]
-# optionally expose a convenience extra that installs scikit-learn and spaCy:
-all = ["ssd[cluster]"]
 
 [project.urls]
-Homepage = "https://github.com/hplisiecki/ssd_p"
-Source = "https://github.com/yourname/ssd"
-Issues = "https://github.com/yourname/ssd/issues"
+Homepage = "https://github.com/hplisiecki/Supervised-Semantic-Differential"
+Repository = "https://github.com/hplisiecki/Supervised-Semantic-Differential"
+Issues = "https://github.com/hplisiecki/Supervised-Semantic-Differential/issues"
+Changelog = "https://github.com/hplisiecki/Supervised-Semantic-Differential/releases"
+
+[project.optional-dependencies]
+# Optional feature sets. Install via: pip install "ssd-semdiff[dev,gui]"
+dev = [
+  "pytest>=7.0",
+  "pytest-cov>=4.0",
+  "ruff>=0.5",
+  "mypy>=1.6",
+  "build>=1.0.0",
+  "twine>=4.0",
+]
+gui = [
+  "PySide6>=6.6"
+]
+
+[tool.setuptools]
+package-dir = {"" = "."}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ssd*"]
+exclude = ["tests*","examples*","docs*"]
+
+[tool.setuptools.package-data]
+"ssd" = ["py.typed", "py.typed", "resources/*"]
