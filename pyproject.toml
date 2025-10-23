@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ssd"
+version = "0.1.0"
+description = "The Supervised Semantic Differential: an interpretable pipeline to extract semantic gradients from text using word embeddings."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+authors = [{ name = "Your Name", email = "you@example.com" }]
+keywords = ["semantics", "embeddings", "NLP", "psychometrics", "interpretability"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Text Processing :: Linguistic",
+]
+
+dependencies = [
+  "numpy>=1.23",
+  "pandas>=1.5",
+  "gensim>=4.3,<5",
+  "spacy>=3.6,<4",   # the model is *not* included; users install it separately
+]
+
+[project.optional-dependencies]
+cluster = ["scikit-learn>=1.2"]
+dev = [
+  "pytest",
+  "ruff",
+  "build",
+  "twine",
+]
+# optionally expose a convenience extra that installs scikit-learn and spaCy:
+all = ["ssd[cluster]"]
+
+[project.urls]
+Homepage = "https://github.com/hplisiecki/ssd_p"
+Source = "https://github.com/yourname/ssd"
+Issues = "https://github.com/yourname/ssd/issues"
