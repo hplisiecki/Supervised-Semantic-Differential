@@ -461,3 +461,5 @@ from ssdiff import (
   - Documentation improvements
 
 Contact: hplisiecki@gmail.com
+
+Project was funded by the National Science Centre, Poland (grant no. 2020/38/E/HS6/00302).
