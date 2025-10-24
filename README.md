@@ -5,7 +5,7 @@
 
 **SSD**  lets you recover **interpretable semantic directions** related to specific concpets directly from open-ended text and relate them to **numeric outcomes** 
 (e.g., psychometric scales, judgments). It builds per-essay concept vectors from **local contexts around seed words**, 
-learns a **semantic gradient** that best predicts the outcome, and then provides multiple interpretability layers:
+learns a **semantic gradient (β̂)** that best predicts the outcome, and then provides multiple interpretability layers:
 
 - **Nearest neighbors** of each pole (+β̂ / −β̂)
 - **Clustering** of neighbors into themes
