@@ -29,25 +29,28 @@ def _centroid_unit_from_cluster_words(words: list[tuple], kv) -> np.ndarray:
 def cluster_snippets_by_centroids(
     *,
     pre_docs: List[PreprocessedDoc],
-    ssd,                                # fitted ssd
-    pos_clusters: List[dict] | None,   # clusters from +β̂
-    neg_clusters: List[dict] | None,   # clusters from −β̂
-    window_sentences: int = 1,         # take [sent-1, sent, sent+1]
+    ssd,                                # fitted SSD (must expose kv and lexicon)
+    pos_clusters: List[dict] | None,    # clusters from +β̂ (raw list-of-dicts, not DF)
+    neg_clusters: List[dict] | None,    # clusters from −β̂ (raw list-of-dicts, not DF)
+    token_window: int = 3,              # ±token_window around seed
     seeds: Iterable[str] | None = None,
     sif_a: float = 1e-3,
-    global_wc: dict[str,int] | None = None,
+    global_wc: dict[str, int] | None = None,
     total_tokens: int | None = None,
     top_per_cluster: int = 100,
 ) -> dict[str, pd.DataFrame]:
     """
     For each cluster (positive and/or negative), find occurrences of any seed lemma,
-    compute a SIF-weighted *unit* context vector around the occurrence (±3 tokens),
-    cosine it with the cluster centroid (unit), and collect the original sentences.
+    compute a SIF-weighted *unit* context vector around the occurrence (±token_window tokens),
+    cosine it with the cluster centroid (unit), and collect an anchor snippet:
+
+      - If the token window is fully inside the anchor sentence → snippet_anchor = anchor sentence.
+      - If it crosses a sentence boundary → snippet_anchor = two sentences (prev+anchor or anchor+next).
 
     Returns: {"pos": df_pos, "neg": df_neg} with columns:
-        centroid_label, doc_id, cosine, seed, sent_idx_min, sent_idx_max,
-        sentence_before, sentence_anchor, sentence_after,
-        window_text_surface, window_text_lemmas
+      centroid_label, doc_id, cosine, seed,
+      start_token_idx, end_token_idx, start_sent_idx, end_sent_idx,
+      snippet_anchor, essay_text_surface, essay_text_lemmas
     """
     # Build global SIF stats if not provided (over lemma stream)
     if global_wc is None or total_tokens is None:
@@ -62,12 +65,47 @@ def cluster_snippets_by_centroids(
     kv = ssd.kv
     seeds = set(seeds or getattr(ssd, "lexicon", []))
 
+    def make_snippet_anchor(P: PreprocessedDoc, i: int, start_tok: int, end_tok: int) -> tuple[str, int, int]:
+        """
+        Build snippet_anchor per the rule. Returns (snippet_anchor, sent_idx_min, sent_idx_max).
+        """
+        # sentence index of the seed
+        s_idx = P.token_to_sent[i] if i < len(P.token_to_sent) else 0
+
+        # sentence index of token window edges (clip to valid token range)
+        start_tok = max(0, min(start_tok, len(P.doc_lemmas) - 1))
+        end_tok   = max(0, min(end_tok,   len(P.doc_lemmas) - 1))
+
+        start_sent = P.token_to_sent[start_tok] if start_tok < len(P.token_to_sent) else s_idx
+        end_sent   = P.token_to_sent[end_tok]   if end_tok   < len(P.token_to_sent) else s_idx
+
+        # fully within anchor sentence
+        if start_sent == s_idx and end_sent == s_idx:
+            snippet = P.sents_surface[s_idx]
+            return snippet, s_idx, s_idx
+
+        # crosses into previous sentence?
+        if start_sent < s_idx:
+            prev_idx = s_idx - 1
+            if prev_idx >= 0:
+                snippet = (P.sents_surface[prev_idx] + " " + P.sents_surface[s_idx]).strip()
+                return snippet, prev_idx, s_idx
+
+        # otherwise crosses into next sentence (or fallback)
+        next_idx = s_idx + 1
+        if next_idx < len(P.sents_surface):
+            snippet = (P.sents_surface[s_idx] + " " + P.sents_surface[next_idx]).strip()
+            return snippet, s_idx, next_idx
+
+        # fallback: just the anchor sentence
+        return P.sents_surface[s_idx], s_idx, s_idx
+
     def score_side(clusters: List[dict] | None, side_label: str) -> pd.DataFrame:
         if not clusters:
             return pd.DataFrame(columns=[
-                "centroid_label","doc_id","cosine","seed","sent_idx_min","sent_idx_max",
-                "sentence_before","sentence_anchor","sentence_after",
-                "window_text_surface","window_text_lemmas"
+                "centroid_label","doc_id","cosine","seed",
+                "start_token_idx","end_token_idx","start_sent_idx","end_sent_idx",
+                "snippet_anchor","essay_text_surface","essay_text_lemmas"
             ])
 
         rows = []
@@ -84,10 +122,13 @@ def cluster_snippets_by_centroids(
                 if not idxs:
                     continue
 
+                essay_surface = " ".join(P.sents_surface)
+                essay_lemmas  = " ".join(P.doc_lemmas)
+
                 for i in idxs:
-                    # SIF-weighted context around this seed (±3 tokens), excluding the seed itself
-                    start = max(0, i - 3)
-                    end   = min(len(lemmas), i + 3 + 1)
+                    # SIF-weighted context around this seed (±token_window tokens), excluding the seed itself
+                    start = max(0, i - token_window)
+                    end   = min(len(lemmas), i + token_window + 1)
                     sum_v = np.zeros(kv.vector_size, dtype=np.float64)
                     w_sum = 0.0
                     for j in range(start, end):
@@ -102,43 +143,31 @@ def cluster_snippets_by_centroids(
                     if w_sum <= 0:
                         continue
 
-                    # UNIT normalize the occurrence context to get a true cosine
                     occ_vec = _unit(sum_v / w_sum)
                     cos = float(occ_vec @ uC)
 
-                    # sentence window from SURFACE text
-                    if i >= len(P.token_to_sent):
-                        continue
-                    s_idx = P.token_to_sent[i]
-                    s_min = max(0, s_idx - window_sentences)
-                    s_max = min(len(P.sents_surface) - 1, s_idx + window_sentences)
-
-                    sent_before = P.sents_surface[s_idx-1] if s_idx-1 >= 0 else ""
-                    sent_anchor = P.sents_surface[s_idx]
-                    sent_after  = P.sents_surface[s_idx+1] if (s_idx+1) < len(P.sents_surface) else ""
-
-                    window_surface = " ".join(P.sents_surface[s_min:s_max+1])
-                    window_lemmas  = " || ".join(" ".join(P.sents_lemmas[k]) for k in range(s_min, s_max+1))
+                    # Build snippet anchor based on whether token window crosses sentence boundary
+                    snippet_anchor, s_min, s_max = make_snippet_anchor(P, i, start, end - 1)
 
                     rows.append(dict(
                         centroid_label=label,
                         doc_id=doc_id,
                         cosine=cos,
                         seed=lemmas[i],
-                        sent_idx_min=s_min,
-                        sent_idx_max=s_max,
-                        sentence_before=sent_before,
-                        sentence_anchor=sent_anchor,
-                        sentence_after=sent_after,
-                        window_text_surface=window_surface,
-                        window_text_lemmas=window_lemmas,
+                        start_token_idx=start,
+                        end_token_idx=end - 1,
+                        start_sent_idx=s_min,
+                        end_sent_idx=s_max,
+                        snippet_anchor=snippet_anchor,
+                        essay_text_surface=essay_surface,
+                        essay_text_lemmas=essay_lemmas,
                     ))
 
         df = pd.DataFrame(rows)
         if df.empty:
             return df
 
-        # Sort: for both sides, higher cosine means closer to the cluster centroid
+        # Sort: higher cosine → closer to the cluster centroid
         df = df.sort_values(["centroid_label", "cosine"], ascending=[True, False]).reset_index(drop=True)
 
         # Keep top-K per cluster label
@@ -153,26 +182,30 @@ def cluster_snippets_by_centroids(
     }
 
 
+
 def snippets_along_beta(
     *,
     pre_docs: List[PreprocessedDoc],
-    ssd,                                # fitted ssd (must expose beta_unit and kv)
-    window_sentences: int = 1,         # take [sent-1, sent, sent+1]
+    ssd,                                # fitted SSD (must expose beta_unit and kv)
+    token_window: int = 3,              # ±token_window around seed
     seeds: Iterable[str] | None = None,
     sif_a: float = 1e-3,
-    global_wc: dict[str,int] | None = None,
+    global_wc: dict[str, int] | None = None,
     total_tokens: int | None = None,
-    top_per_side: int = 200,           # how many snippets to keep per side
-    min_cosine: float | None = None,   # optional cosine floor (e.g., 0.15)
+    top_per_side: int = 200,            # how many snippets to keep per side
+    min_cosine: float | None = None,    # optional cosine floor (e.g., 0.15)
 ) -> dict[str, pd.DataFrame]:
     """
-    Find SIF-weighted context snippets for each seed occurrence and score them by
-    cosine to +β̂ and −β̂ (unit). Returns two DataFrames: 'beta_pos' and 'beta_neg'.
+    For each seed occurrence, compute a SIF-weighted context vector (±token_window tokens),
+    cosine it with +β̂ and −β̂ (unit), and collect an anchor snippet:
 
-    Columns:
-      side_label, doc_id, cosine, seed, sent_idx_min, sent_idx_max,
-      sentence_before, sentence_anchor, sentence_after,
-      window_text_surface, window_text_lemmas
+      - If the token window is fully inside the anchor sentence → snippet_anchor = anchor sentence.
+      - If it crosses a sentence boundary → snippet_anchor = two sentences (prev+anchor or anchor+next).
+
+    Returns two DataFrames: 'beta_pos' and 'beta_neg', each with columns:
+      side_label, doc_id, cosine, seed,
+      start_token_idx, end_token_idx, start_sent_idx, end_sent_idx,
+      snippet_anchor, essay_text_surface, essay_text_lemmas
     """
     # Global SIF stats if not provided
     if global_wc is None or total_tokens is None:
@@ -188,6 +221,27 @@ def snippets_along_beta(
     b_unit = _unit(getattr(ssd, "beta_unit", getattr(ssd, "beta")))
     seeds = set(seeds or getattr(ssd, "lexicon", []))
 
+    def make_snippet_anchor(P: PreprocessedDoc, i: int, start_tok: int, end_tok: int) -> tuple[str, int, int]:
+        s_idx = P.token_to_sent[i] if i < len(P.token_to_sent) else 0
+        start_tok = max(0, min(start_tok, len(P.doc_lemmas) - 1))
+        end_tok   = max(0, min(end_tok,   len(P.doc_lemmas) - 1))
+        start_sent = P.token_to_sent[start_tok] if start_tok < len(P.token_to_sent) else s_idx
+        end_sent   = P.token_to_sent[end_tok]   if end_tok   < len(P.token_to_sent) else s_idx
+
+        if start_sent == s_idx and end_sent == s_idx:
+            return P.sents_surface[s_idx], s_idx, s_idx
+
+        if start_sent < s_idx:
+            prev_idx = s_idx - 1
+            if prev_idx >= 0:
+                return (P.sents_surface[prev_idx] + " " + P.sents_surface[s_idx]).strip(), prev_idx, s_idx
+
+        next_idx = s_idx + 1
+        if next_idx < len(P.sents_surface):
+            return (P.sents_surface[s_idx] + " " + P.sents_surface[next_idx]).strip(), s_idx, next_idx
+
+        return P.sents_surface[s_idx], s_idx, s_idx
+
     def score_side(target_vec: np.ndarray, side_label: str) -> pd.DataFrame:
         rows = []
         for doc_id, P in enumerate(pre_docs):
@@ -196,10 +250,13 @@ def snippets_along_beta(
             if not idxs:
                 continue
 
+            essay_surface = " ".join(P.sents_surface)
+            essay_lemmas  = " ".join(P.doc_lemmas)
+
             for i in idxs:
-                # SIF-weighted context around seed (±3 tokens), exclude the seed token
-                start = max(0, i - 3)
-                end   = min(len(lemmas), i + 3 + 1)
+                # SIF-weighted context around seed (±token_window tokens), excluding the seed token
+                start = max(0, i - token_window)
+                end   = min(len(lemmas), i + token_window + 1)
                 sum_v = np.zeros(kv.vector_size, dtype=np.float64)
                 w_sum = 0.0
                 for j in range(start, end):
@@ -217,49 +274,34 @@ def snippets_along_beta(
                 occ_vec = _unit(sum_v / w_sum)
                 cos = float(occ_vec @ target_vec)
 
-                # optional floor
                 if (min_cosine is not None) and (cos < min_cosine):
                     continue
 
-                # sentence window in SURFACE text
-                if i >= len(P.token_to_sent):
-                    continue
-                s_idx = P.token_to_sent[i]
-                s_min = max(0, s_idx - window_sentences)
-                s_max = min(len(P.sents_surface) - 1, s_idx + window_sentences)
-
-                sent_before = P.sents_surface[s_idx-1] if s_idx-1 >= 0 else ""
-                sent_anchor = P.sents_surface[s_idx]
-                sent_after  = P.sents_surface[s_idx+1] if (s_idx+1) < len(P.sents_surface) else ""
-
-                window_surface = " ".join(P.sents_surface[s_min:s_max+1])
-                window_lemmas  = " || ".join(" ".join(P.sents_lemmas[k]) for k in range(s_min, s_max+1))
+                snippet_anchor, s_min, s_max = make_snippet_anchor(P, i, start, end - 1)
 
                 rows.append(dict(
                     side_label=side_label,
                     doc_id=doc_id,
                     cosine=cos,
                     seed=lemmas[i],
-                    sent_idx_min=s_min,
-                    sent_idx_max=s_max,
-                    sentence_before=sent_before,
-                    sentence_anchor=sent_anchor,
-                    sentence_after=sent_after,
-                    window_text_surface=window_surface,
-                    window_text_lemmas=window_lemmas,
+                    start_token_idx=start,
+                    end_token_idx=end - 1,
+                    start_sent_idx=s_min,
+                    end_sent_idx=s_max,
+                    snippet_anchor=snippet_anchor,
+                    essay_text_surface=essay_surface,
+                    essay_text_lemmas=essay_lemmas,
                 ))
 
         if not rows:
             return pd.DataFrame(columns=[
-                "side_label","doc_id","cosine","seed","sent_idx_min","sent_idx_max",
-                "sentence_before","sentence_anchor","sentence_after",
-                "window_text_surface","window_text_lemmas"
+                "side_label","doc_id","cosine","seed",
+                "start_token_idx","end_token_idx","start_sent_idx","end_sent_idx",
+                "snippet_anchor","essay_text_surface","essay_text_lemmas"
             ])
 
         df = pd.DataFrame(rows)
-        # Sort by cosine desc (strongest alignment first)
         df = df.sort_values(["cosine"], ascending=[False]).reset_index(drop=True)
-        # Keep top-K
         if top_per_side is not None:
             df = df.head(top_per_side).reset_index(drop=True)
         return df

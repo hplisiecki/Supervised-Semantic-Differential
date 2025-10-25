@@ -94,8 +94,11 @@ def cluster_top_neighbors(
             "coherence": coherence,
             "words": rows,
         })
-
-    clusters.sort(key=lambda C: C["centroid_cos_beta"], reverse=True)
+    
+    if side == "pos":
+        clusters.sort(key=lambda C: C["centroid_cos_beta"], reverse=True)
+    else:
+        clusters.sort(key=lambda C: C["centroid_cos_beta"], reverse=False)
 
     return clusters
 

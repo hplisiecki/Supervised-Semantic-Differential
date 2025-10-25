@@ -154,7 +154,7 @@ class SSD:
                     "cos": float(sim),
                 })
 
-        df = pd.DataFrame(rows, columns=["side", "rank", "word", "cos", "shift", "shift_signed"])
+        df = pd.DataFrame(rows, columns=["side", "rank", "word", "cos"])
 
         if verbose:
             # Pretty print (unchanged look-and-feel)
@@ -184,7 +184,6 @@ class SSD:
 
         if n - p - 1 > 0:
             self.r2_adj = 1.0 - (1.0 - self.r2) * (n - 1) / (n - p - 1)
-            print('computed adjusted R2:', self.r2_adj)
         else:
             self.r2_adj = np.nan
 
@@ -442,7 +441,7 @@ class SSD:
             ssd=self,
             pos_clusters=pos_clusters,
             neg_clusters=neg_clusters,
-            window_sentences=window_sentences,
+            token_window = self.window,
             seeds=seeds,
             sif_a=self.SIF_a,
             top_per_cluster=top_per_cluster,
@@ -469,7 +468,7 @@ class SSD:
         return snippets_along_beta(
             pre_docs=pre_docs,
             ssd=self,
-            window_sentences=window_sentences,
+            token_window = self.window,
             seeds=seeds,
             sif_a=self.SIF_a,
             top_per_side=top_per_side,

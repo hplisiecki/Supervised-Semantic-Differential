@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ssdiff"
-version = "0.1.1"
+version = "0.1.3"
 description = "Supervised Semantic Differential (SSD): interpretable, embedding-based analysis of concept meaning in text."
 readme = "README.md"
 requires-python = ">=3.9"

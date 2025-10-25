@@ -88,7 +88,7 @@ lexicon = {"concept_keyword_1", "concept_keyword_2", "concept_keyword_3", "conce
 
 # 6) Choose PCA dimensionality based on sample size
 n_kept = len(docs)
-PCA_K = min(10, max(3, n_kept // 10))
+PCA_K = min(20, max(3, n_docs // 20))
 
 # 7) Fit SSD
 ssd = SSD(
@@ -260,7 +260,7 @@ from ssdiff import SSD, load_embeddings, normalize_kv
 
 kv = normalize_kv(load_embeddings(MODEL_PATH), l2=True, abtt_m=1)
 
-PCA_K = min(10, max(3, len(docs)//10))
+PCA_K = min(20, max(3, n_docs // 20))
 ssd = SSD(
     kv=kv,
     docs=docs,
