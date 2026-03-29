@@ -2,3 +2,4 @@
 numpy<2.1
 scipy<1.14
 scikit-learn<1.6
+pytest<9
