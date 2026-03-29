@@ -30,6 +30,7 @@ jobs:
         run: pip install -e ".[dev]"
         env:
           PIP_IGNORE_REQUIRES_PYTHON: ${{ matrix.python-version == '3.9' && '1' || '' }}
+          PIP_CONSTRAINT: ${{ matrix.python-version == '3.9' && '.github/constraints-py39.txt' || '' }}
 
       - name: Ruff check
         run: ruff check .
