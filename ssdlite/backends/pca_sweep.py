@@ -81,7 +81,7 @@ def _cluster_both_sides(
 
         # Auto-select k via silhouette score (matching official)
         upper = min(k_max, max(k_min, W.shape[0] - 1))
-        best_k, best_s, best_labels = None, -1.0, None
+        best_s, best_labels = -1.0, None
         for kk in range(max(2, k_min), max(2, upper) + 1):
             km = KMeans(n_clusters=kk, random_state=random_state, n_init="auto")
             labels = km.fit_predict(W)
@@ -89,7 +89,7 @@ def _cluster_both_sides(
                 continue
             s = silhouette_score(W, labels)
             if s > best_s:
-                best_s, best_k, best_labels = s, kk, labels
+                best_s, best_labels = s, labels
 
         if best_labels is None:
             km = KMeans(n_clusters=max(2, k_min), random_state=random_state, n_init="auto")

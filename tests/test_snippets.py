@@ -5,7 +5,6 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from ssdlite.utils.text import PreprocessedDoc
 from ssdlite.utils.snippets import (
     _centroid_unit_from_cluster_words,
     _iter_doclikes,

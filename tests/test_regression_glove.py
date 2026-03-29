@@ -18,12 +18,11 @@ from __future__ import annotations
 import json
 import os
 
-import numpy as np
 import pytest
 
 pd = pytest.importorskip("pandas")
 
-from ssdlite import SSD, Corpus, Embeddings
+from ssdlite import SSD, Corpus, Embeddings  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Paths

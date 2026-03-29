@@ -15,7 +15,7 @@ def _check_no_module_imported(
         f"'{ex}' not in m" for ex in exclude
     ) if exclude else "True"
     code = (
-        f"import sys; "
+        "import sys; "
         + "; ".join(f"import {m}" for m in imports)
         + f"; mods = [m for m in sys.modules if '{module_substring}' in m and {exclude_cond}]; "
         f"print(','.join(mods) if mods else 'CLEAN')"

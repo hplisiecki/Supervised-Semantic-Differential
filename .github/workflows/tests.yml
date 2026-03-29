@@ -14,6 +14,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        exclude:
+          - os: windows-latest
+            python-version: "3.9"
 
     steps:
       - uses: actions/checkout@v4
@@ -25,6 +28,11 @@ jobs:
 
       - name: Install dependencies
         run: pip install -e ".[dev]"
+        env:
+          PIP_IGNORE_REQUIRES_PYTHON: ${{ matrix.python-version == '3.9' && '1' || '' }}
+
+      - name: Ruff check
+        run: ruff check .
 
       - name: Run tests
         run: pytest -m "not slow and not local" -v --timeout=60

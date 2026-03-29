@@ -14,7 +14,7 @@ from ssdlite.utils.text import (
     build_docs_from_preprocessed,
     load_stopwords,
 )
-from tests.conftest import MockToken, FakeNlp
+from tests.conftest import MockToken
 
 
 # ---------------------------------------------------------------------------
