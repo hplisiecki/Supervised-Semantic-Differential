@@ -19,10 +19,10 @@ jobs:
             python-version: "3.9"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -31,6 +31,7 @@ jobs:
         env:
           PIP_IGNORE_REQUIRES_PYTHON: ${{ matrix.python-version == '3.9' && '1' || '' }}
           PIP_CONSTRAINT: ${{ matrix.python-version == '3.9' && '.github/constraints-py39.txt' || '' }}
+          PIP_BUILD_CONSTRAINT: ${{ matrix.python-version == '3.9' && '.github/constraints-py39.txt' || '' }}
 
       - name: Ruff check
         run: ruff check .
