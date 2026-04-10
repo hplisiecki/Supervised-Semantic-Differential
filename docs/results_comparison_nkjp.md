@@ -23,31 +23,31 @@
 | p-value | 0.05550 | 0.17854 | 0.17854 |
 | N (observations) | 655 | 655 | 655 |
 | Coverage | 69.2% | 69.2% | 69.2% |
-| Time (s) | 0.0 | 24.9 | 43.7 |
+| Time (s) | 0.0 | 3.0 | 43.7 |
 
 ### klimat
 
 | Metric | SSDLite PLS | SSDLite PCA+OLS | Official (PCA) |
 |--------|----------|----------|----------|
-| K (components) | 1 | 30 | 30 |
-| R² | 0.1407 | 0.1146 | 0.1146 |
-| adj R² | 0.1392 | 0.0649 | 0.0649 |
-| p-value | 0.00002 | 0.00013 | 0.00013 |
+| K (components) | 1 | 20 | 30 |
+| R² | 0.1407 | 0.0964 | 0.1146 |
+| adj R² | 0.1392 | 0.0631 | 0.0649 |
+| p-value | 0.00002 | 0.00003 | 0.00013 |
 | N (observations) | 655 | 655 | 655 |
 | Coverage | 86.3% | 86.3% | 86.3% |
-| Time (s) | 0.1 | 29.1 | 50.2 |
+| Time (s) | 0.1 | 4.6 | 50.2 |
 
 ### naukowcy
 
 | Metric | SSDLite PLS | SSDLite PCA+OLS | Official (PCA) |
 |--------|----------|----------|----------|
-| K (components) | 1 | 21 | 21 |
-| R² | 0.0999 | 0.0801 | 0.0801 |
-| adj R² | 0.0984 | 0.0465 | 0.0465 |
-| p-value | 0.00003 | 0.00054 | 0.00054 |
+| K (components) | 1 | 20 | 21 |
+| R² | 0.0999 | 0.0792 | 0.0801 |
+| adj R² | 0.0984 | 0.0473 | 0.0465 |
+| p-value | 0.00003 | 0.00039 | 0.00054 |
 | N (observations) | 648 | 648 | 648 |
 | Coverage | 92.1% | 92.1% | 92.1% |
-| Time (s) | 0.1 | 29.8 | 51.4 |
+| Time (s) | 0.1 | 3.7 | 51.4 |
 
 ### polityka
 
@@ -59,7 +59,7 @@
 | p-value | 0.00000 | 0.00000 | 0.00000 |
 | N (observations) | 648 | 648 | 648 |
 | Coverage | 89.5% | 89.5% | 89.5% |
-| Time (s) | 0.1 | 30.1 | 50.9 |
+| Time (s) | 0.1 | 7.3 | 50.9 |
 
 ### szczepienie
 
@@ -71,7 +71,7 @@
 | p-value | 0.00003 | 0.00007 | 0.00007 |
 | N (observations) | 655 | 655 | 655 |
 | Coverage | 91.1% | 91.1% | 91.1% |
-| Time (s) | 0.1 | 29.9 | 47.3 |
+| Time (s) | 0.1 | 3.7 | 47.3 |
 
 ### zaufanie
 
@@ -83,7 +83,7 @@
 | p-value | 0.00013 | 0.00512 | 0.00512 |
 | N (observations) | 636 | 636 | 636 |
 | Coverage | 93.5% | 93.5% | 93.5% |
-| Time (s) | 0.0 | 31.7 | 52.7 |
+| Time (s) | 0.0 | 3.9 | 52.7 |
 
 ### zdrowie
 
@@ -95,15 +95,15 @@
 | p-value | 0.01080 | 0.01634 | 0.01634 |
 | N (observations) | 636 | 636 | 636 |
 | Coverage | 85.1% | 85.1% | 85.1% |
-| Time (s) | 0.1 | 27.2 | 46.6 |
+| Time (s) | 0.1 | 3.0 | 46.6 |
 
 ## Summary
 
 | Dataset | K_PLS | R²_PLS | adj_PLS | K_PCA+OLS | R²_PCA+OLS | adj_PCA+OLS | K_(PCA) | R²_(PCA) | adj_(PCA) |
 |---|---|---|---|---|---|---|---|---|---|
 | imigrant | 1 | 0.1548 | 0.1529 | 17 | 0.0489 | 0.0117 | 17 | 0.0489 | 0.0117 |
-| klimat | 1 | 0.1407 | 0.1392 | 30 | 0.1146 | 0.0649 | 30 | 0.1146 | 0.0649 |
-| naukowcy | 1 | 0.0999 | 0.0984 | 21 | 0.0801 | 0.0465 | 21 | 0.0801 | 0.0465 |
+| klimat | 1 | 0.1407 | 0.1392 | 20 | 0.0964 | 0.0631 | 30 | 0.1146 | 0.0649 |
+| naukowcy | 1 | 0.0999 | 0.0984 | 20 | 0.0792 | 0.0473 | 21 | 0.0801 | 0.0465 |
 | polityka | 1 | 0.1421 | 0.1406 | 7 | 0.0938 | 0.0827 | 7 | 0.0938 | 0.0827 |
 | szczepienie | 1 | 0.1873 | 0.1859 | 18 | 0.0824 | 0.0538 | 18 | 0.0824 | 0.0538 |
 | zaufanie | 1 | 0.1182 | 0.1167 | 30 | 0.0886 | 0.0401 | 30 | 0.0886 | 0.0401 |
@@ -173,55 +173,55 @@ All-way overlap: 25%
 
 | # | SSDLite PLS | SSDLite PCA+OLS | Official (PCA) |
 |---||-------|-------|-------|
-| 1 | upał | komfort | komfort |
-| 2 | mróz | poczucie | poczucie |
-| 3 | zima | troska | troska |
-| 4 | zmęczenie | stres | stres |
-| 5 | deszcz | satysfakcja | satysfakcja |
-| 6 | śnieg | zmęczenie | zmęczenie |
-| 7 | stres | samopoczucie | samopoczucie |
-| 8 | opad | rywal | rywal |
-| 9 | powódź | wygoda | wygoda |
-| 10 | awaria | pogoda | pogoda |
-| 11 | zator | chęć | chęć |
-| 12 | niebezpieczeństwo | defensywa | defensywa |
-| 13 | pogoda | ostrzeżenie | ostrzeżenie |
-| 14 | woda | niebezpieczeństwo | niebezpieczeństwo |
-| 15 | korek | kierowca | kierowca |
-| 16 | drogowiec | ulga | ulga |
-| 17 | powietrze | obawa | obawa |
-| 18 | kłopot | warunki | warunki |
-| 19 | hałas | motywacja | motywacja |
-| 20 | pośpiech | smutek | smutek |
+| 1 | upał | stres | komfort |
+| 2 | mróz | kłopot | poczucie |
+| 3 | zima | niebezpieczeństwo | troska |
+| 4 | zmęczenie | obawa | stres |
+| 5 | deszcz | hałas | satysfakcja |
+| 6 | śnieg | sygnał | zmęczenie |
+| 7 | stres | zmęczenie | samopoczucie |
+| 8 | opad | komfort | rywal |
+| 9 | powódź | środek | wygoda |
+| 10 | awaria | narzekać | pogoda |
+| 11 | zator | zimno | chęć |
+| 12 | niebezpieczeństwo | upał | defensywa |
+| 13 | pogoda | pośpiech | ostrzeżenie |
+| 14 | woda | ulga | niebezpieczeństwo |
+| 15 | korek | ciepło | kierowca |
+| 16 | drogowiec | mróz | ulga |
+| 17 | powietrze | kierowca | obawa |
+| 18 | kłopot | dolegliwość | warunki |
+| 19 | hałas | satysfakcja | motywacja |
+| 20 | pośpiech | trudność | smutek |
 
-All-way overlap: 11%
+All-way overlap: 7%
 
 **Negative pole:**
 
 | # | SSDLite PLS | SSDLite PCA+OLS | Official (PCA) |
 |---||-------|-------|-------|
-| 1 | historyczny | ewolucja | ewolucja |
-| 2 | przedstawiać | historyczny | historyczny |
-| 3 | filozofia | rekonstrukcja | rekonstrukcja |
-| 4 | znawca | istnienie | istnienie |
-| 5 | abstrakcyjny | synteza | synteza |
-| 6 | twórca | przeciez | przeciez |
-| 7 | negować | badać | badać |
-| 8 | biblijny | opisywać | opisywać |
-| 9 | zasadniczo | przedstawiać | przedstawiać |
-| 10 | wybitny | negować | negować |
-| 11 | fundamentalny | słynny | słynny |
-| 12 | odrębny | dzieje | dzieje |
-| 13 | słynny | geologiczny | geologiczny |
-| 14 | opisywać | omawiać | omawiać |
-| 15 | uniwersalny | archeologiczny | archeologiczny |
-| 16 | wedle | abstrakcyjny | abstrakcyjny |
-| 17 | historyk | zasadniczo | zasadniczo |
-| 18 | ujmować | przerabiać | przerabiać |
-| 19 | kwestionować | odrębny | odrębny |
-| 20 | kreować | kwestionować | kwestionować |
+| 1 | historyczny | historyczny | ewolucja |
+| 2 | przedstawiać | wedle | historyczny |
+| 3 | filozofia | ewolucja | rekonstrukcja |
+| 4 | znawca | biblijny | istnienie |
+| 5 | abstrakcyjny | abstrakcyjny | synteza |
+| 6 | twórca | przedstawiać | przeciez |
+| 7 | negować | dzieje | badać |
+| 8 | biblijny | pierwotny | opisywać |
+| 9 | zasadniczo | oto | przedstawiać |
+| 10 | wybitny | nazwać | negować |
+| 11 | fundamentalny | fundamentalny | słynny |
+| 12 | odrębny | odrębny | dzieje |
+| 13 | słynny | następujący | geologiczny |
+| 14 | opisywać | opisywać | omawiać |
+| 15 | uniwersalny | czyli | archeologiczny |
+| 16 | wedle | historia | abstrakcyjny |
+| 17 | historyk | istnienie | zasadniczo |
+| 18 | ujmować | współczesny | przerabiać |
+| 19 | kwestionować | zasadniczo | odrębny |
+| 20 | kreować | niezmienny | kwestionować |
 
-All-way overlap: 29%
+All-way overlap: 15%
 
 ### naukowcy
 
@@ -230,54 +230,54 @@ All-way overlap: 29%
 | # | SSDLite PLS | SSDLite PCA+OLS | Official (PCA) |
 |---||-------|-------|-------|
 | 1 | zaangażowanie | dokonanie | dokonanie |
-| 2 | różnorodność | umiejętność | umiejętność |
-| 3 | twórczy | osiągnięcie | osiągnięcie |
-| 4 | materialny | zaangażowanie | zaangażowanie |
-| 5 | duchowy | rzetelny | rzetelny |
-| 6 | intelektualny | twórczy | twórczy |
-| 7 | dążenie | wrażliwość | wrażliwość |
-| 8 | bogactwo | gratulować | gratulować |
-| 9 | rozwój | życzliwość | życzliwość |
-| 10 | poznawczy | docenić | docenić |
-| 11 | społeczny | zdolność | zdolność |
-| 12 | naukowy | intelektualny | intelektualny |
-| 13 | życzliwość | talent | talent |
-| 14 | rzetelny | uczciwość | uczciwość |
-| 15 | kształtować | dążenie | dążenie |
-| 16 | praktyczny | osobowość | osobowość |
-| 17 | wzajemny | uznanie | uznanie |
-| 18 | doskonalić | samodzielność | samodzielność |
-| 19 | różnorodny | wierność | wierność |
-| 20 | aktywność | wiarygodność | wiarygodność |
+| 2 | różnorodność | osiągnięcie | umiejętność |
+| 3 | twórczy | zaangażowanie | osiągnięcie |
+| 4 | materialny | rzetelny | zaangażowanie |
+| 5 | duchowy | umiejętność | rzetelny |
+| 6 | intelektualny | wrażliwość | twórczy |
+| 7 | dążenie | życzliwość | wrażliwość |
+| 8 | bogactwo | twórczy | gratulować |
+| 9 | rozwój | dążenie | życzliwość |
+| 10 | poznawczy | zdolność | docenić |
+| 11 | społeczny | talent | zdolność |
+| 12 | naukowy | gratulować | intelektualny |
+| 13 | życzliwość | docenić | talent |
+| 14 | rzetelny | uznanie | uczciwość |
+| 15 | kształtować | zaufanie | dążenie |
+| 16 | praktyczny | intelektualny | osobowość |
+| 17 | wzajemny | osobowość | uznanie |
+| 18 | doskonalić | uczciwość | samodzielność |
+| 19 | różnorodny | wiarygodność | wierność |
+| 20 | aktywność | determinacja | wiarygodność |
 
-All-way overlap: 18%
+All-way overlap: 17%
 
 **Negative pole:**
 
 | # | SSDLite PLS | SSDLite PCA+OLS | Official (PCA) |
 |---||-------|-------|-------|
-| 1 | koleś | podobno | podobno |
-| 2 | kumpel | akurat | akurat |
-| 3 | podobno | znowu | znowu |
+| 1 | koleś | znowu | podobno |
+| 2 | kumpel | podobno | akurat |
+| 3 | podobno | akurat | znowu |
 | 4 | juz | gdzieś | gdzieś |
-| 5 | znowu | ostatnio | ostatnio |
-| 6 | zaraz | bodajże | bodajże |
+| 5 | znowu | bodajże | ostatnio |
+| 6 | zaraz | już | bodajże |
 | 7 | akurat | barak | barak |
-| 8 | kurwa | już | już |
-| 9 | xD | prawdopodobnie | prawdopodobnie |
+| 8 | kurwa | ostatnio | już |
+| 9 | xD | znów | prawdopodobnie |
 | 10 | kiedys | międzyczas | międzyczas |
-| 11 | chłopak | nieczynny | nieczynny |
-| 12 | budka | zaraz | zaraz |
-| 13 | facet | znów | znów |
-| 14 | kulka | nagle | nagle |
-| 15 | przypadkowo | kiedyś | kiedyś |
-| 16 | pijany | koleś | koleś |
-| 17 | kiedyś | teraz | teraz |
-| 18 | bodajże | tydzień | tydzień |
-| 19 | cos | budka | budka |
-| 20 | znów | noc | noc |
+| 11 | chłopak | koleś | nieczynny |
+| 12 | budka | teraz | zaraz |
+| 13 | facet | zaraz | znów |
+| 14 | kulka | nieczynny | nagle |
+| 15 | przypadkowo | strasznie | kiedyś |
+| 16 | pijany | tydzień | koleś |
+| 17 | kiedyś | odkąd | teraz |
+| 18 | bodajże | tam | tydzień |
+| 19 | cos | kiedyś | budka |
+| 20 | znów | nagle | noc |
 
-All-way overlap: 29%
+All-way overlap: 24%
 
 ### polityka
 
@@ -553,10 +553,12 @@ All-way overlap: 43%
 
 | Side | Rank | Size | Coherence | cos(β) | Top words |
 |------|------|------|-----------|--------|-----------|
-| pos | 1 | 38 | 0.442 | 0.528 | maluch, pasażer, posiłek, jedzenie, posiłki |
-| pos | 2 | 62 | 0.526 | 0.472 | zmęczenie, stres, zdenerwowanie, przygnębienie, rozdrażnienie |
-| neg | 1 | 49 | 0.511 | -0.571 | ewolucja, historyczny, socjologiczny, antropologiczny, geneza |
-| neg | 2 | 51 | 0.530 | -0.535 | opisywać, analizować, przedstawiać, przytaczać, opisać |
+| pos | 1 | 40 | 0.516 | 0.527 | zmarznąć, marznąć, zimno, przemarznąć, upał |
+| pos | 2 | 50 | 0.550 | 0.511 | dyskomfort, stres, zmęczenie, dolegliwość, trudność |
+| pos | 3 | 10 | 0.547 | 0.498 | sygnał, powiadomienie, ostrzeżenie, alarmować, narzekać |
+| neg | 1 | 29 | 0.574 | -0.543 | współczesny, historyczny, ponadczasowy, archetyp, antyczny |
+| neg | 2 | 44 | 0.570 | -0.537 | abstrakcyjny, metafizyczny, ontologiczny, semantyczny, deterministyczny |
+| neg | 3 | 27 | 0.582 | -0.530 | przedstawiać, opisywać, zestawiać, definiować, przedstawić |
 
 **Official (PCA):**
 
@@ -588,12 +590,10 @@ All-way overlap: 43%
 
 | Side | Rank | Size | Coherence | cos(β) | Top words |
 |------|------|------|-----------|--------|-----------|
-| pos | 1 | 20 | 0.575 | 0.679 | nieprzeciętny, ponadprzeciętny, wszechstronny, docenić, niepospolity |
-| pos | 2 | 55 | 0.652 | 0.630 | pracowitość, profesjonalizm, wszechstronność, kreatywność, pomysłowość |
-| pos | 3 | 14 | 0.649 | 0.562 | samoświadomość, zdolność, niezależność, samodzielność, dążenie |
-| pos | 4 | 11 | 0.723 | 0.532 | obiektywność, rzetelność, prawdziwość, trafność, wiarygodność |
-| neg | 1 | 62 | 0.482 | -0.561 | podobno, kiedyś, znowu, teraz, ponoć |
-| neg | 2 | 38 | 0.509 | -0.516 | barak, rudera, komin, korytarz, budynek |
+| pos | 1 | 82 | 0.589 | 0.681 | pracowitość, kreatywność, profesjonalizm, wszechstronność, zaradność |
+| pos | 2 | 18 | 0.613 | 0.612 | obiektywność, wiarygodność, trafność, rzetelność, prawdziwość |
+| neg | 1 | 65 | 0.486 | -0.547 | znowu, podobno, kiedyś, teraz, gdzieś |
+| neg | 2 | 35 | 0.516 | -0.501 | barak, rudera, komin, kiosk, budynek |
 
 **Official (PCA):**
 
@@ -759,8 +759,8 @@ All-way overlap: 43%
 ### SSDLite PCA+OLS
 - Datasets: 7
 - Significant (p < 0.05): 6/7
-- R² range: 0.0489 – 0.1146 (median 0.0824)
-- adj R² range: 0.0117 – 0.0827 (median 0.0465)
+- R² range: 0.0489 – 0.0964 (median 0.0824)
+- adj R² range: 0.0117 – 0.0827 (median 0.0473)
 
 ### Official (PCA)
 - Datasets: 7

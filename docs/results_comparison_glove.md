@@ -23,43 +23,43 @@
 | p-value | 0.02917 | 0.06405 | 0.06405 |
 | N (observations) | 655 | 655 | 655 |
 | Coverage | 69.2% | 69.2% | 69.2% |
-| Time (s) | 0.1 | 30.4 | 62.2 |
+| Time (s) | 0.1 | 6.0 | 62.2 |
 
 ### klimat
 
 | Metric | SSDLite PLS | SSDLite PCA+OLS | Official (PCA) |
 |--------|----------|----------|----------|
-| K (components) | 1 | 39 | 39 |
-| R² | 0.1725 | 0.1032 | 0.1032 |
-| adj R² | 0.1710 | 0.0365 | 0.0365 |
-| p-value | 0.00025 | 0.02027 | 0.02027 |
+| K (components) | 1 | 33 | 39 |
+| R² | 0.1725 | 0.1001 | 0.1032 |
+| adj R² | 0.1710 | 0.0442 | 0.0365 |
+| p-value | 0.00025 | 0.00503 | 0.02027 |
 | N (observations) | 655 | 655 | 655 |
 | Coverage | 86.3% | 86.3% | 86.3% |
-| Time (s) | 0.1 | 31.7 | 75.8 |
+| Time (s) | 0.1 | 7.6 | 75.8 |
 
 ### naukowcy
 
 | Metric | SSDLite PLS | SSDLite PCA+OLS | Official (PCA) |
 |--------|----------|----------|----------|
-| K (components) | 1 | 68 | 68 |
-| R² | 0.1987 | 0.2170 | 0.2170 |
-| adj R² | 0.1974 | 0.1161 | 0.1161 |
+| K (components) | 1 | 36 | 68 |
+| R² | 0.1987 | 0.1688 | 0.2170 |
+| adj R² | 0.1974 | 0.1154 | 0.1161 |
 | p-value | 0.00000 | 0.00000 | 0.00000 |
 | N (observations) | 648 | 648 | 648 |
 | Coverage | 92.1% | 92.1% | 92.1% |
-| Time (s) | 0.1 | 34.1 | 152.6 |
+| Time (s) | 0.1 | 7.7 | 152.6 |
 
 ### polityka
 
 | Metric | SSDLite PLS | SSDLite PCA+OLS | Official (PCA) |
 |--------|----------|----------|----------|
-| K (components) | 1 | 90 | 90 |
-| R² | 0.1663 | 0.2710 | 0.2710 |
-| adj R² | 0.1649 | 0.1369 | 0.1369 |
+| K (components) | 1 | 87 | 90 |
+| R² | 0.1663 | 0.2705 | 0.2710 |
+| adj R² | 0.1649 | 0.1415 | 0.1369 |
 | p-value | 0.00000 | 0.00000 | 0.00000 |
 | N (observations) | 648 | 648 | 648 |
 | Coverage | 89.5% | 89.5% | 89.5% |
-| Time (s) | 0.6 | 35.3 | 86.1 |
+| Time (s) | 0.6 | 20.7 | 86.1 |
 
 ### szczepienie
 
@@ -71,7 +71,7 @@
 | p-value | 0.00000 | 0.00000 | 0.00000 |
 | N (observations) | 655 | 655 | 655 |
 | Coverage | 91.1% | 91.1% | 91.1% |
-| Time (s) | 0.1 | 33.6 | 76.7 |
+| Time (s) | 0.1 | 5.7 | 76.7 |
 
 ### zaufanie
 
@@ -83,7 +83,7 @@
 | p-value | 0.00062 | 0.00948 | 0.00948 |
 | N (observations) | 636 | 636 | 636 |
 | Coverage | 93.5% | 93.5% | 93.5% |
-| Time (s) | 0.1 | 31.7 | 75.0 |
+| Time (s) | 0.1 | 8.0 | 75.0 |
 
 ### zdrowie
 
@@ -95,16 +95,16 @@
 | p-value | 0.00742 | 0.03688 | 0.03688 |
 | N (observations) | 636 | 636 | 636 |
 | Coverage | 85.2% | 85.2% | 85.2% |
-| Time (s) | 0.1 | 32.2 | 175.6 |
+| Time (s) | 0.1 | 6.6 | 175.6 |
 
 ## Summary
 
 | Dataset | K_PLS | R²_PLS | adj_PLS | K_PCA+OLS | R²_PCA+OLS | adj_PCA+OLS | K_(PCA) | R²_(PCA) | adj_(PCA) |
 |---|---|---|---|---|---|---|---|---|---|
 | imigrant | 1 | 0.3006 | 0.2990 | 23 | 0.0746 | 0.0250 | 23 | 0.0746 | 0.0250 |
-| klimat | 1 | 0.1725 | 0.1710 | 39 | 0.1032 | 0.0365 | 39 | 0.1032 | 0.0365 |
-| naukowcy | 1 | 0.1987 | 0.1974 | 68 | 0.2170 | 0.1161 | 68 | 0.2170 | 0.1161 |
-| polityka | 1 | 0.1663 | 0.1649 | 90 | 0.2710 | 0.1369 | 90 | 0.2710 | 0.1369 |
+| klimat | 1 | 0.1725 | 0.1710 | 33 | 0.1001 | 0.0442 | 39 | 0.1032 | 0.0365 |
+| naukowcy | 1 | 0.1987 | 0.1974 | 36 | 0.1688 | 0.1154 | 68 | 0.2170 | 0.1161 |
+| polityka | 1 | 0.1663 | 0.1649 | 87 | 0.2705 | 0.1415 | 90 | 0.2710 | 0.1369 |
 | szczepienie | 1 | 0.3015 | 0.3003 | 13 | 0.1017 | 0.0817 | 13 | 0.1017 | 0.0817 |
 | zaufanie | 1 | 0.1729 | 0.1715 | 14 | 0.0488 | 0.0258 | 14 | 0.0488 | 0.0258 |
 | zdrowie | 1 | 0.2237 | 0.2223 | 27 | 0.0758 | 0.0273 | 27 | 0.0758 | 0.0273 |
@@ -173,28 +173,28 @@ All-way overlap: 18%
 
 | # | SSDLite PLS | SSDLite PCA+OLS | Official (PCA) |
 |---||-------|-------|-------|
-| 1 | upał | zmniejszenie | zmniejszenie |
-| 2 | narastający | utrata | utrata |
-| 3 | nadciągać | zwiększenie | zwiększenie |
+| 1 | upał | utrata | zmniejszenie |
+| 2 | narastający | zmniejszenie | utrata |
+| 3 | nadciągać | grozić | zwiększenie |
 | 4 | zmęczenie | przerażać | przerażać |
-| 5 | odczuwać | grozić | grozić |
-| 6 | niepokój | zwiększyć | zwiększyć |
-| 7 | deszcz | gotowość | gotowość |
-| 8 | sztorm | długotrwały | długotrwały |
-| 9 | narastać | gwarantować | gwarantować |
+| 5 | odczuwać | narastający | grozić |
+| 6 | niepokój | opuszczenie | zwiększyć |
+| 7 | deszcz | zwiększenie | gotowość |
+| 8 | sztorm | zmniejszyć | długotrwały |
+| 9 | narastać | zwiększyć | gwarantować |
 | 10 | poczuć | wzrastać | wzrastać |
-| 11 | głód | zwiększać | zwiększać |
-| 12 | grozić | zmniejszyć | zmniejszyć |
-| 13 | mdłości | opuszczenie | opuszczenie |
-| 14 | narażać | utrzymanie | utrzymanie |
-| 15 | dokuczać | osłabienie | osłabienie |
-| 16 | chłód | głód | głód |
-| 17 | wilgoć | obniżyć | obniżyć |
-| 18 | odczuć | odczuwać | odczuwać |
-| 19 | panika | brak | brak |
-| 20 | przypływ | zapewnić | zapewnić |
+| 11 | głód | głód | zwiększać |
+| 12 | grozić | zmęczenie | zmniejszyć |
+| 13 | mdłości | zwiększać | opuszczenie |
+| 14 | narażać | niecierpliwość | utrzymanie |
+| 15 | dokuczać | odczuwać | osłabienie |
+| 16 | chłód | klęska | głód |
+| 17 | wilgoć | wyczerpanie | obniżyć |
+| 18 | odczuć | brak | odczuwać |
+| 19 | panika | skarżyć | brak |
+| 20 | przypływ | upał | zapewnić |
 
-All-way overlap: 8%
+All-way overlap: 7%
 
 **Negative pole:**
 
@@ -204,24 +204,24 @@ All-way overlap: 8%
 | 2 | sa | propaganda | propaganda |
 | 3 | cykl | twór | twór |
 | 4 | pogląd | fantastyczny | fantastyczny |
-| 5 | teza | dzieło | dzieło |
+| 5 | teza | mit | dzieło |
 | 6 | propaganda | literacki | literacki |
 | 7 | interpretacja | poglądy | poglądy |
 | 8 | autorstwo | fikcyjny | fikcyjny |
-| 9 | zbiór | mit | mit |
+| 9 | zbiór | dzieło | mit |
 | 10 | portret | inspirować | inspirować |
-| 11 | dzieło | twórczość | twórczość |
-| 12 | biografia | ożywiony | ożywiony |
-| 13 | teoria | wątek | wątek |
-| 14 | zajmujący | autorstwo | autorstwo |
-| 15 | twierdzenie | temat | temat |
-| 16 | poglądy | wymyślić | wymyślić |
-| 17 | twórczość | wpływowy | wpływowy |
-| 18 | historyk | poetycki | poetycki |
-| 19 | kanon | motyw | motyw |
-| 20 | wytwór | ideologia | ideologia |
+| 11 | dzieło | ożywiony | twórczość |
+| 12 | biografia | wymyślić | ożywiony |
+| 13 | teoria | bajka | wątek |
+| 14 | zajmujący | poetycki | autorstwo |
+| 15 | twierdzenie | pogląd | temat |
+| 16 | poglądy | baśń | wymyślić |
+| 17 | twórczość | twórczość | wpływowy |
+| 18 | historyk | science | poetycki |
+| 19 | kanon | fantazja | motyw |
+| 20 | wytwór | cykl | ideologia |
 
-All-way overlap: 18%
+All-way overlap: 13%
 
 ### naukowcy
 
@@ -229,55 +229,55 @@ All-way overlap: 18%
 
 | # | SSDLite PLS | SSDLite PCA+OLS | Official (PCA) |
 |---||-------|-------|-------|
-| 1 | zaangażowanie | świadectwo | świadectwo |
-| 2 | szacunek | artykuł | artykuł |
-| 3 | osiągnięcie | ufność | ufność |
-| 4 | świadectwo | szacunek | szacunek |
-| 5 | ufność | mądrość | mądrość |
-| 6 | moralny | dowód | dowód |
-| 7 | wkład | pokora | pokora |
-| 8 | twórczy | cierpliwość | cierpliwość |
-| 9 | dążenie | niewinność | niewinność |
-| 10 | wiara | podziw | podziw |
-| 11 | rozwój | wiara | wiara |
-| 12 | zapewnienie | gwarancja | gwarancja |
-| 13 | zasług | zadziwiający | zadziwiający |
-| 14 | uznanie | zapewnienie | zapewnienie |
-| 15 | postęp | potęga | potęga |
-| 16 | duchowy | powaga | powaga |
-| 17 | zaufanie | bogactwo | bogactwo |
-| 18 | zdolności | niebiosa | niebiosa |
-| 19 | materialny | odwaga | odwaga |
-| 20 | troska | milczenie | milczenie |
+| 1 | zaangażowanie | ufność | świadectwo |
+| 2 | szacunek | poświęcenie | artykuł |
+| 3 | osiągnięcie | chwała | ufność |
+| 4 | świadectwo | podziw | szacunek |
+| 5 | ufność | szacunek | mądrość |
+| 6 | moralny | męstwo | dowód |
+| 7 | wkład | wdzięczność | pokora |
+| 8 | twórczy | wiara | cierpliwość |
+| 9 | dążenie | zasług | niewinność |
+| 10 | wiara | spełnienie | podziw |
+| 11 | rozwój | zapał | wiara |
+| 12 | zapewnienie | zaufanie | gwarancja |
+| 13 | zasług | powaga | zadziwiający |
+| 14 | uznanie | świadectwo | zapewnienie |
+| 15 | postęp | dowód | potęga |
+| 16 | duchowy | odwaga | powaga |
+| 17 | zaufanie | uznanie | bogactwo |
+| 18 | zdolności | niewinność | niebiosa |
+| 19 | materialny | godny | odwaga |
+| 20 | troska | oddanie | milczenie |
 
-All-way overlap: 14%
+All-way overlap: 9%
 
 **Negative pole:**
 
 | # | SSDLite PLS | SSDLite PCA+OLS | Official (PCA) |
 |---||-------|-------|-------|
-| 1 | cholera | kierownica | kierownica |
+| 1 | cholera | wyeliminować | kierownica |
 | 2 | kurwa | wynaleźć | wynaleźć |
-| 3 | okropnie | przewodzić | przewodzić |
-| 4 | dzieciak | zlikwidować | zlikwidować |
-| 5 | pogadać | podłączyć | podłączyć |
-| 6 | dzwonić | końcówka | końcówka |
-| 7 | strasznie | praktycznie | praktycznie |
-| 8 | sukinsyn | zmodyfikować | zmodyfikować |
-| 9 | skłamać | cholera | cholera |
-| 10 | pewnie | wtedy | wtedy |
-| 11 | zgadnąć | wyeliminować | wyeliminować |
-| 12 | śmierdzieć | wirus | wirus |
-| 13 | ukraść | wykręcić | wykręcić |
-| 14 | niedobrze | przejmować | przejmować |
-| 15 | oszaleć | układy | układy |
-| 16 | spóźnić | wylecieć | wylecieć |
-| 17 | denerwować | wyprzeć | wyprzeć |
-| 18 | zabawić | kurwa | kurwa |
-| 19 | wleźć | czujnik | czujnik |
-| 20 | facet | znienawidzić | znienawidzić |
+| 3 | okropnie | śmierdzieć | przewodzić |
+| 4 | dzieciak | cholerny | zlikwidować |
+| 5 | pogadać | praktycznie | podłączyć |
+| 6 | dzwonić | zlikwidować | końcówka |
+| 7 | strasznie | blokada | praktycznie |
+| 8 | sukinsyn | gorzeć | zmodyfikować |
+| 9 | skłamać | kompletnie | cholera |
+| 10 | pewnie | produkować | wtedy |
+| 11 | zgadnąć | pieprzyć | wyeliminować |
+| 12 | śmierdzieć | wyprzeć | wirus |
+| 13 | ukraść | zepsuć | wykręcić |
+| 14 | niedobrze | podłączyć | przejmować |
+| 15 | oszaleć | rura | układy |
+| 16 | spóźnić | zablokować | wylecieć |
+| 17 | denerwować | smród | wyprzeć |
+| 18 | zabawić | zasilać | kurwa |
+| 19 | wleźć | cholera | czujnik |
+| 20 | facet | pewnie | znienawidzić |
 
-All-way overlap: 5%
+All-way overlap: 2%
 
 ### polityka
 
@@ -288,23 +288,23 @@ All-way overlap: 5%
 | 1 | parlamentarny | przyczyniać | przyczyniać |
 | 2 | wybory | socjalny | socjalny |
 | 3 | wyborczy | zróżnicowanie | zróżnicowanie |
-| 4 | samorządowy | powszechny | powszechny |
-| 5 | głosowanie | omówić | omówić |
-| 6 | parlament | świadczenie | świadczenie |
-| 7 | prezydencki | wynik | wynik |
-| 8 | obywatelski | kształtować | kształtować |
-| 9 | uczestnictwo | dzięki | dzięki |
-| 10 | samorząd | obniżenie | obniżenie |
-| 11 | mandat | ćwiczenie | ćwiczenie |
-| 12 | kadencja | oświata | oświata |
-| 13 | konstytucyjny | dyskusja | dyskusja |
-| 14 | sejm | przystosowanie | przystosowanie |
-| 15 | poprzez | prawidłowy | prawidłowy |
+| 4 | samorządowy | dzięki | powszechny |
+| 5 | głosowanie | powszechny | omówić |
+| 6 | parlament | omówić | świadczenie |
+| 7 | prezydencki | obniżenie | wynik |
+| 8 | obywatelski | świadczenie | kształtować |
+| 9 | uczestnictwo | przystosowanie | dzięki |
+| 10 | samorząd | oświata | obniżenie |
+| 11 | mandat | wynik | ćwiczenie |
+| 12 | kadencja | prawidłowy | oświata |
+| 13 | konstytucyjny | pomagać | dyskusja |
+| 14 | sejm | dyskusja | przystosowanie |
+| 15 | poprzez | kształtować | prawidłowy |
 | 16 | uchwalić | szkolnictwo | szkolnictwo |
-| 17 | ubiegać | modlitwa | modlitwa |
-| 18 | senat | podwyższenie | podwyższenie |
-| 19 | demokratyczny | mieszkaniowy | mieszkaniowy |
-| 20 | członkowski | forum | forum |
+| 17 | ubiegać | ćwiczenie | modlitwa |
+| 18 | senat | podziękować | podwyższenie |
+| 19 | demokratyczny | modlitwa | mieszkaniowy |
+| 20 | członkowski | wypowiadać | forum |
 
 All-way overlap: 0%
 
@@ -318,22 +318,22 @@ All-way overlap: 0%
 | 4 | głupiec | szpieg | szpieg |
 | 5 | interesować | podejrzewać | podejrzewać |
 | 6 | chyba | podejrzana | podejrzana |
-| 7 | czyżby | żaden | żaden |
-| 8 | cóż | podróżnik | podróżnik |
+| 7 | czyżby | podróżnik | żaden |
+| 8 | cóż | żaden | podróżnik |
 | 9 | kompletnie | intruz | intruz |
-| 10 | wiedzieć | nikt | nikt |
-| 11 | głupi | szaleniec | szaleniec |
-| 12 | pieprzyć | idiota | idiota |
-| 13 | domyślać | znać | znać |
-| 14 | ależ | banda | banda |
-| 15 | burknąć | morderca | morderca |
-| 16 | podejrzewać | prócz | prócz |
+| 10 | wiedzieć | szaleniec | nikt |
+| 11 | głupi | idiota | szaleniec |
+| 12 | pieprzyć | banda | idiota |
+| 13 | domyślać | nikt | znać |
+| 14 | ależ | morderca | banda |
+| 15 | burknąć | znać | morderca |
+| 16 | podejrzewać | dziwka | prócz |
 | 17 | nikt | niebezpieczny | niebezpieczny |
-| 18 | idiota | nic | nic |
-| 19 | doprawdy | dziwka | dziwka |
-| 20 | wariat | interesować | interesować |
+| 18 | idiota | koga | nic |
+| 19 | doprawdy | nic | dziwka |
+| 20 | wariat | włóczęga | interesować |
 
-All-way overlap: 21%
+All-way overlap: 17%
 
 ### szczepienie
 
@@ -556,11 +556,10 @@ All-way overlap: 29%
 
 | Side | Rank | Size | Coherence | cos(β) | Top words |
 |------|------|------|-----------|--------|-----------|
-| pos | 1 | 44 | 0.485 | 0.378 | odczuwać, niepokój, poczucie, zmęczenie, głód |
-| pos | 2 | 56 | 0.507 | 0.368 | zwiększenie, zmniejszenie, konieczność, zwiększać, zwiększyć |
-| neg | 1 | 23 | 0.431 | -0.476 | wywrotowy, propaganda, rozpowszechniać, demaskować, antypolski |
-| neg | 2 | 26 | 0.481 | -0.432 | historyjka, zmyślić, anegdota, wymyślić, opowieść |
-| neg | 3 | 51 | 0.490 | -0.404 | literacki, twórczość, literatura, inspirować, temat |
+| pos | 1 | 54 | 0.492 | 0.386 | odczuwać, niepokój, zmęczenie, przygnębienie, udręka |
+| pos | 2 | 46 | 0.512 | 0.367 | zwiększać, zwiększenie, zmniejszenie, zwiększyć, konieczność |
+| neg | 1 | 30 | 0.455 | -0.479 | oszczerstwo, rozpowszechniać, nieprawdziwy, kłamliwy, fikcja |
+| neg | 2 | 70 | 0.455 | -0.449 | literacki, autor, twórczość, literatura, opowieść |
 
 **Official (PCA):**
 
@@ -591,10 +590,10 @@ All-way overlap: 29%
 
 | Side | Rank | Size | Coherence | cos(β) | Top words |
 |------|------|------|-----------|--------|-----------|
-| pos | 1 | 73 | 0.446 | 0.401 | niezwykły, pełny, mądrość, bogactwo, godny |
-| pos | 2 | 27 | 0.575 | 0.301 | życzliwość, odwaga, łagodność, szlachetność, cierpliwość |
-| neg | 1 | 56 | 0.288 | -0.559 | pokłócić, połapać, popsuć, oberwać, niechcący |
-| neg | 2 | 44 | 0.393 | -0.415 | sterowany, sterujący, montować, podłączyć, obudowa |
+| pos | 1 | 28 | 0.504 | 0.437 | zapewnienie, zaangażowanie, uznanie, dowód, dokonanie |
+| pos | 2 | 72 | 0.521 | 0.430 | odwaga, męstwo, niezwykły, podziw, wytrwałość |
+| neg | 1 | 64 | 0.310 | -0.524 | cholerny, pieprzyć, śmierdzieć, paskudnie, wykończyć |
+| neg | 2 | 36 | 0.394 | -0.416 | praktycznie, unieruchomić, podłączyć, sterowany, montować |
 
 **Official (PCA):**
 
@@ -621,10 +620,10 @@ All-way overlap: 29%
 
 | Side | Rank | Size | Coherence | cos(β) | Top words |
 |------|------|------|-----------|--------|-----------|
-| pos | 1 | 47 | 0.283 | 0.496 | dyskusja, dzięki, modlitwa, spontanicznie, debata |
-| pos | 2 | 53 | 0.356 | 0.402 | przyczyniać, socjalny, kształtować, obniżenie, efektywność |
-| neg | 1 | 55 | 0.435 | -0.378 | nikt, nic, żaden, podejrzewać, znaczyć |
-| neg | 2 | 45 | 0.489 | -0.335 | łajdak, oszust, banda, morderca, złodziej |
+| pos | 1 | 46 | 0.314 | 0.453 | pomagać, wypowiadać, dzięki, dyskusja, modlitwa |
+| pos | 2 | 54 | 0.335 | 0.425 | przyczyniać, oświata, socjalny, szkolnictwo, kształtować |
+| neg | 1 | 47 | 0.444 | -0.373 | nikt, nic, żaden, chyba, podejrzewać |
+| neg | 2 | 53 | 0.464 | -0.355 | łajdak, oszust, złodziej, morderca, głupiec |
 
 **Official (PCA):**
 
@@ -751,8 +750,8 @@ All-way overlap: 29%
 ### SSDLite PCA+OLS
 - Datasets: 7
 - Significant (p < 0.05): 6/7
-- R² range: 0.0488 – 0.2710 (median 0.1017)
-- adj R² range: 0.0250 – 0.1369 (median 0.0365)
+- R² range: 0.0488 – 0.2705 (median 0.1001)
+- adj R² range: 0.0250 – 0.1415 (median 0.0442)
 
 ### Official (PCA)
 - Datasets: 7

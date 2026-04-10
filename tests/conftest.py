@@ -1,4 +1,4 @@
-"""Shared fixtures for ssdlite test suite.
+"""Shared fixtures for ssdiff test suite.
 
 All fixtures use tiny in-memory Embeddings — no real embeddings,
 network access, or spaCy downloads needed.
@@ -11,10 +11,9 @@ from dataclasses import dataclass
 import numpy as np
 import pytest
 
-from ssdlite.embeddings import Embeddings
-from ssdlite.corpus import Corpus
-from ssdlite.utils.text import PreprocessedDoc
-
+from ssdiff.corpus import Corpus
+from ssdiff.embeddings import Embeddings
+from ssdiff.utils.text import PreprocessedDoc
 
 # ---------------------------------------------------------------------------
 # Vocabulary
@@ -116,6 +115,60 @@ def sample_groups() -> np.ndarray:
 @pytest.fixture(scope="session")
 def sample_groups_3() -> np.ndarray:
     return np.array(["X", "X", "X", "Y", "Y", "Z", "Z", "Z"], dtype=object)
+
+
+# --- Larger fixtures for group tests (need >=20 docs per group) ---
+
+def _make_large_docs(n: int, rng: np.random.Generator) -> list[list[str]]:
+    """Generate n docs with random tokens, each containing >=1 seed."""
+    seeds = ["kraj", "narod", "panstwo"]
+    context = ["piekny", "silny", "zly", "dobry", "wielki", "maly",
+               "stary", "nowy", "dom", "szkola", "praca", "miasto"]
+    docs = []
+    for i in range(n):
+        seed = seeds[i % len(seeds)]
+        ctx = list(rng.choice(context, size=3, replace=False))
+        docs.append([seed] + ctx)
+    return docs
+
+
+@pytest.fixture(scope="session")
+def large_docs() -> list[list[str]]:
+    """50 docs for group tests."""
+    rng = np.random.default_rng(42)
+    return _make_large_docs(50, rng)
+
+
+@pytest.fixture(scope="session")
+def large_groups_2() -> np.ndarray:
+    """2 groups, 25 each."""
+    return np.array(["A"] * 25 + ["B"] * 25, dtype=object)
+
+
+@pytest.fixture(scope="session")
+def large_groups_3() -> np.ndarray:
+    """3 groups: 20, 15, 15."""
+    return np.array(["X"] * 20 + ["Y"] * 15 + ["Z"] * 15, dtype=object)
+
+
+@pytest.fixture(scope="session")
+def large_docs_3x20() -> list[list[str]]:
+    """60 docs (3 groups × 20) for 3-group tests."""
+    rng = np.random.default_rng(99)
+    return _make_large_docs(60, rng)
+
+
+@pytest.fixture(scope="session")
+def large_groups_3x20() -> np.ndarray:
+    """3 groups, 20 each."""
+    return np.array(["X"] * 20 + ["Y"] * 20 + ["Z"] * 20, dtype=object)
+
+
+@pytest.fixture(scope="session")
+def large_y() -> np.ndarray:
+    """50 continuous y values."""
+    rng = np.random.default_rng(42)
+    return rng.normal(loc=5, scale=2, size=50)
 
 
 # ---------------------------------------------------------------------------
@@ -227,8 +280,8 @@ def fake_nlp():
 @pytest.fixture(scope="session")
 def ssd_instance(tiny_kv, sample_docs, sample_y, lexicon):
     """SSD data container (no fit yet)."""
-    from ssdlite.ssd import SSD
-    corpus = Corpus(sample_docs, pretokenized=True)
+    from ssdiff.ssd import SSD
+    corpus = Corpus(sample_docs, pretokenized=True, lang="pl")
     return SSD(tiny_kv, corpus, sample_y, lexicon)
 
 
@@ -242,3 +295,30 @@ def pls_result(ssd_instance):
 def pcaols_result(ssd_instance):
     """Fitted PCAOLSResult from SSD.fit_ols()."""
     return ssd_instance.fit_ols(n_components=3)
+
+
+@pytest.fixture(scope="session")
+def pcaols_result_sweep(tiny_kv, large_docs, large_y, lexicon):
+    """Fitted PCAOLSResult with sweep (n_components=None)."""
+    from ssdiff.ssd import SSD
+    corpus = Corpus(large_docs, pretokenized=True, lang="pl")
+    ssd = SSD(tiny_kv, corpus, large_y, lexicon)
+    return ssd.fit_ols(n_components=None, k_min=2, k_max=6, k_step=1)
+
+
+@pytest.fixture(scope="session")
+def group_result_2g(tiny_kv, large_docs, large_groups_2, lexicon):
+    """Fitted GroupResult with 2 groups."""
+    from ssdiff.ssd import SSD
+    corpus = Corpus(large_docs, pretokenized=True, lang="pl")
+    ssd = SSD(tiny_kv, corpus, large_groups_2, lexicon)
+    return ssd.fit_groups(n_perm=50, random_state=42)
+
+
+@pytest.fixture(scope="session")
+def group_result_3g(tiny_kv, large_docs_3x20, large_groups_3x20, lexicon):
+    """Fitted GroupResult with 3 groups."""
+    from ssdiff.ssd import SSD
+    corpus = Corpus(large_docs_3x20, pretokenized=True, lang="pl")
+    ssd = SSD(tiny_kv, corpus, large_groups_3x20, lexicon)
+    return ssd.fit_groups(n_perm=50, random_state=42)

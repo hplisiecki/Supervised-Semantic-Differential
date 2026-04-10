@@ -1,8 +1,8 @@
-"""Tests for ssdlite.corpus — Corpus class."""
+"""Tests for ssdiff.corpus — Corpus class."""
 
 import pytest
 
-from ssdlite.corpus import Corpus
+from ssdiff.corpus import Corpus
 
 
 class TestCorpusPretokenized:

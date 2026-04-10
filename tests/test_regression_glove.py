@@ -22,7 +22,7 @@ import pytest
 
 pd = pytest.importorskip("pandas")
 
-from ssdlite import SSD, Corpus, Embeddings  # noqa: E402
+from ssdiff import SSD, Corpus, Embeddings  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -71,7 +71,7 @@ def glove_embeddings():
 def benchmark_pls():
     """Load PLS entries from the GloVe benchmark results."""
     _skip_missing(RESULTS_PATH)
-    with open(RESULTS_PATH, "r", encoding="utf-8") as f:
+    with open(RESULTS_PATH, encoding="utf-8") as f:
         all_rows = json.load(f)
     return {r["dataset"]: r for r in all_rows if r["version"] == "pls"}
 

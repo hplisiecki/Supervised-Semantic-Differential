@@ -1,21 +1,20 @@
-"""Tests for ssdlite/utils/text.py — preprocessing pipeline."""
+"""Tests for ssdiff/utils/text.py — preprocessing pipeline."""
 
 from __future__ import annotations
 
 import pytest
 
-from ssdlite.utils.text import (
+from ssdiff.utils.text import (
     PreprocessedDoc,
     PreprocessedProfile,
-    _keep_token,
     _is_profile_input,
+    _keep_token,
     _sanitize_posts,
-    preprocess_texts,
     build_docs_from_preprocessed,
     load_stopwords,
+    preprocess_texts,
 )
 from tests.conftest import MockToken
-
 
 # ---------------------------------------------------------------------------
 # _keep_token

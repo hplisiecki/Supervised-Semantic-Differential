@@ -1,21 +1,22 @@
-"""Tests for ssdlite/utils/snippets.py — snippet extraction helpers."""
+"""Tests for ssdiff/utils/snippets.py — snippet extraction helpers."""
 
 from __future__ import annotations
 
 import numpy as np
 import pytest
 
-from ssdlite.utils.snippets import (
-    _centroid_unit_from_cluster_words,
-    _iter_doclikes,
+from ssdiff.utils.snippets import (
     _build_global_sif,
-    _make_snippet_anchor,
+    _centroid_unit_from_cluster_words,
     _DocLike,
+    _iter_doclikes,
+    _make_snippet_anchor,
     _sort_rows_by_cosine_desc,
     _sort_rows_by_label_and_cosine,
     _top_per_group,
+    cluster_snippets_by_centroids,
+    snippets_along_beta,
 )
-
 
 # ---------------------------------------------------------------------------
 # _centroid_unit_from_cluster_words
@@ -195,3 +196,192 @@ class TestTopPerGroup:
 
     def test_empty_input(self):
         assert _top_per_group([], "g", n=5) == []
+
+
+# ---------------------------------------------------------------------------
+# Mock fitted SSD for public API tests
+# ---------------------------------------------------------------------------
+
+class _MockFittedSSD:
+    """Minimal duck-typed stand-in for a fitted SSD result."""
+    def __init__(self, kv, beta, lexicon):
+        self.kv = kv
+        self.beta = beta
+        self.beta_unit = beta / np.linalg.norm(beta)
+        self.lexicon = lexicon
+        self.window = 3
+        self.sif_a = 1e-3
+
+
+# ---------------------------------------------------------------------------
+# snippets_along_beta
+# ---------------------------------------------------------------------------
+
+class TestSnippetsAlongBeta:
+    @pytest.fixture
+    def mock_ssd(self, tiny_kv, lexicon):
+        rng = np.random.default_rng(42)
+        beta = rng.normal(size=tiny_kv.vector_size)
+        return _MockFittedSSD(tiny_kv, beta, lexicon)
+
+    def test_returns_pos_neg_dict(self, mock_ssd, sample_preprocessed_docs):
+        result = snippets_along_beta(
+            pre_docs=sample_preprocessed_docs,
+            ssd=mock_ssd,
+            token_window=3,
+            top_per_side=10,
+            n_jobs=1,
+            progress=False,
+        )
+        assert isinstance(result, dict)
+        assert "pos" in result
+        assert "neg" in result
+
+    def test_snippet_dicts_have_required_keys(self, mock_ssd, sample_preprocessed_docs):
+        result = snippets_along_beta(
+            pre_docs=sample_preprocessed_docs,
+            ssd=mock_ssd,
+            token_window=3,
+            top_per_side=10,
+            n_jobs=1,
+            progress=False,
+        )
+        expected_keys = {
+            "side_label", "profile_id", "post_id", "cosine", "seed",
+            "start_token_idx", "end_token_idx", "start_sent_idx", "end_sent_idx",
+            "snippet_anchor", "essay_text_surface", "essay_text_lemmas",
+        }
+        for side in ("pos", "neg"):
+            for row in result[side]:
+                assert set(row.keys()) == expected_keys
+
+    def test_pos_sorted_by_cosine_desc(self, mock_ssd, sample_preprocessed_docs):
+        result = snippets_along_beta(
+            pre_docs=sample_preprocessed_docs,
+            ssd=mock_ssd,
+            token_window=3,
+            top_per_side=10,
+            n_jobs=1,
+            progress=False,
+        )
+        cosines = [r["cosine"] for r in result["pos"]]
+        assert cosines == sorted(cosines, reverse=True)
+
+    def test_min_cosine_filters(self, mock_ssd, sample_preprocessed_docs):
+        # With a very high threshold, should get empty or very few results
+        result = snippets_along_beta(
+            pre_docs=sample_preprocessed_docs,
+            ssd=mock_ssd,
+            token_window=3,
+            top_per_side=10,
+            min_cosine=0.999,
+            n_jobs=1,
+            progress=False,
+        )
+        # All returned cosines should be >= threshold
+        for row in result["pos"]:
+            assert row["cosine"] >= 0.999
+
+    def test_empty_docs(self, mock_ssd):
+        result = snippets_along_beta(
+            pre_docs=[],
+            ssd=mock_ssd,
+            token_window=3,
+            n_jobs=1,
+            progress=False,
+        )
+        assert result == {"pos": [], "neg": []}
+
+    def test_no_seeds_uses_sentence_fallback(self, tiny_kv, sample_preprocessed_docs):
+        """When lexicon is empty, should fall back to sentence-based occurrences."""
+        rng = np.random.default_rng(42)
+        beta = rng.normal(size=tiny_kv.vector_size)
+        mock = _MockFittedSSD(tiny_kv, beta, set())  # empty lexicon
+        result = snippets_along_beta(
+            pre_docs=sample_preprocessed_docs,
+            ssd=mock,
+            token_window=3,
+            top_per_side=10,
+            n_jobs=1,
+            progress=False,
+        )
+        assert isinstance(result, dict)
+        # Should still produce results from sentence fallback
+        assert "pos" in result and "neg" in result
+
+
+# ---------------------------------------------------------------------------
+# cluster_snippets_by_centroids
+# ---------------------------------------------------------------------------
+
+class TestClusterSnippetsByCentroids:
+    @pytest.fixture
+    def mock_ssd(self, tiny_kv, lexicon):
+        rng = np.random.default_rng(42)
+        beta = rng.normal(size=tiny_kv.vector_size)
+        return _MockFittedSSD(tiny_kv, beta, lexicon)
+
+    @pytest.fixture
+    def mock_clusters(self):
+        return [
+            {"words": [{"word": "kraj"}, {"word": "narod"}]},
+            {"words": [{"word": "piekny"}, {"word": "silny"}]},
+        ]
+
+    def test_returns_pos_neg_dict(self, mock_ssd, sample_preprocessed_docs, mock_clusters):
+        result = cluster_snippets_by_centroids(
+            pre_docs=sample_preprocessed_docs,
+            ssd=mock_ssd,
+            pos_clusters=mock_clusters,
+            neg_clusters=mock_clusters,
+            token_window=3,
+            top_per_cluster=10,
+            n_jobs=1,
+            progress=False,
+        )
+        assert isinstance(result, dict)
+        assert "pos" in result
+        assert "neg" in result
+
+    def test_snippet_dicts_have_required_keys(self, mock_ssd, sample_preprocessed_docs, mock_clusters):
+        result = cluster_snippets_by_centroids(
+            pre_docs=sample_preprocessed_docs,
+            ssd=mock_ssd,
+            pos_clusters=mock_clusters,
+            neg_clusters=None,
+            token_window=3,
+            top_per_cluster=10,
+            n_jobs=1,
+            progress=False,
+        )
+        expected_keys = {
+            "centroid_label", "profile_id", "post_id", "cosine", "seed",
+            "start_token_idx", "end_token_idx", "start_sent_idx", "end_sent_idx",
+            "snippet_anchor", "essay_text_surface", "essay_text_lemmas",
+        }
+        for row in result["pos"]:
+            assert set(row.keys()) == expected_keys
+
+    def test_no_clusters_returns_empty(self, mock_ssd, sample_preprocessed_docs):
+        result = cluster_snippets_by_centroids(
+            pre_docs=sample_preprocessed_docs,
+            ssd=mock_ssd,
+            pos_clusters=None,
+            neg_clusters=None,
+            token_window=3,
+            n_jobs=1,
+            progress=False,
+        )
+        assert result == {"pos": [], "neg": []}
+
+    def test_empty_docs(self, mock_ssd, mock_clusters):
+        result = cluster_snippets_by_centroids(
+            pre_docs=[],
+            ssd=mock_ssd,
+            pos_clusters=mock_clusters,
+            neg_clusters=None,
+            token_window=3,
+            n_jobs=1,
+            progress=False,
+        )
+        assert result == {"pos": [], "neg": []}

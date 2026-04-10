@@ -2,7 +2,7 @@
 
 Stores spaCy model defaults, bundled stopword file names, and token-filter
 patterns for each supported language.  Every language-dependent decision in
-ssdlite should read from this module.
+ssdiff should read from this module.
 
 # Future: allow users to load custom config (e.g. from a YAML/JSON file)
 # to override defaults without touching library code.
@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-
 
 # ---------------------------------------------------------------------------
 # Language config dataclass
@@ -27,7 +26,7 @@ class LangConfig:
     spacy_model : str
         Default spaCy model name (e.g. ``"pl_core_news_lg"``).
     stopwords_file : str or None
-        Bundled stopword file name under ``ssdlite/utils/``, or ``None``
+        Bundled stopword file name under ``ssdiff/utils/``, or ``None``
         to fall back to spaCy built-in stopwords.
     bad_token_re : re.Pattern
         Compiled regex — tokens matching this are filtered out in neighbor
@@ -57,7 +56,6 @@ _CYRILLIC_UPPER = r"А-ЯЁЂЄІЇҐЉЊЋЏЎЍ"
 
 _RE_LATIN = re.compile(rf".*\d|^[{_LATIN_UPPER}]")
 _RE_CYRILLIC = re.compile(rf".*\d|^[{_CYRILLIC_UPPER}]")
-_RE_CJK_DIGIT = re.compile(r".*\d")  # CJK: no uppercase concept, filter digits only
 
 
 LANGUAGES: dict[str, LangConfig] = {
@@ -70,8 +68,6 @@ LANGUAGES: dict[str, LangConfig] = {
     "fr": LangConfig("fr_core_news_lg", bad_token_re=_RE_LATIN),
     "hr": LangConfig("hr_core_news_lg", bad_token_re=_RE_LATIN),
     "it": LangConfig("it_core_news_lg", bad_token_re=_RE_LATIN),
-    "ja": LangConfig("ja_core_news_lg", bad_token_re=_RE_CJK_DIGIT),
-    "ko": LangConfig("ko_core_news_lg", bad_token_re=_RE_CJK_DIGIT),
     "lt": LangConfig("lt_core_news_lg", bad_token_re=_RE_LATIN),
     "mk": LangConfig("mk_core_news_lg", bad_token_re=_RE_CYRILLIC),
     "nb": LangConfig("nb_core_news_lg", bad_token_re=_RE_LATIN),
@@ -84,7 +80,6 @@ LANGUAGES: dict[str, LangConfig] = {
     "sl": LangConfig("sl_core_news_lg", bad_token_re=_RE_LATIN),
     "sv": LangConfig("sv_core_news_lg", bad_token_re=_RE_LATIN),
     "uk": LangConfig("uk_core_news_lg", bad_token_re=_RE_CYRILLIC),
-    "zh": LangConfig("zh_core_web_lg", bad_token_re=_RE_CJK_DIGIT),
 }
 
 # Full-name aliases → ISO code
@@ -98,8 +93,6 @@ _ALIASES: dict[str, str] = {
     "french": "fr",
     "croatian": "hr",
     "italian": "it",
-    "japanese": "ja",
-    "korean": "ko",
     "lithuanian": "lt",
     "macedonian": "mk",
     "norwegian": "nb",
@@ -111,7 +104,6 @@ _ALIASES: dict[str, str] = {
     "slovenian": "sl",
     "swedish": "sv",
     "ukrainian": "uk",
-    "chinese": "zh",
 }
 
 
@@ -119,8 +111,13 @@ _ALIASES: dict[str, str] = {
 # Public helpers
 # ---------------------------------------------------------------------------
 
-def _resolve_lang(lang: str) -> str:
+def _resolve_lang(lang: str | None) -> str:
     """Resolve a language string (ISO code or full name) to an ISO code."""
+    if lang is None:
+        raise ValueError(
+            "Language is required but not set. Pass lang= to Corpus() "
+            "or use a pretokenized Corpus with an explicit lang code."
+        )
     key = lang.strip().lower()
     if key in LANGUAGES:
         return key

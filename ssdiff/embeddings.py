@@ -5,9 +5,10 @@ from __future__ import annotations
 import gzip
 import os
 import pickle
+
 import numpy as np
 
-from ssdlite.utils.math import l2_normalize_rows_inplace
+from ssdiff.utils.math import l2_normalize_rows_inplace
 
 
 class Embeddings:
@@ -237,7 +238,7 @@ class Embeddings:
         except ImportError:
             raise ImportError(
                 "gensim is required to save .kv files. "
-                "Install it with: pip install ssdlite[gensim]"
+                "Install it with: pip install ssdiff[gensim]"
             ) from None
         kv = KeyedVectors(vector_size=self.vector_size)
         kv.add_vectors(self.index_to_key, self.vectors)

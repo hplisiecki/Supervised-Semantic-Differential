@@ -1,9 +1,9 @@
-"""Tests for ssdlite.utils.neighbors — neighbor search and clustering."""
+"""Tests for ssdiff.utils.neighbors — neighbor search and clustering."""
 
 import numpy as np
 import pytest
 
-from ssdlite.utils.neighbors import filtered_neighbors, cluster_top_neighbors
+from ssdiff.utils.neighbors import cluster_top_neighbors, filtered_neighbors
 
 
 class TestFilteredNeighbors:
@@ -15,6 +15,11 @@ class TestFilteredNeighbors:
         words = [w for w, _ in nbrs]
         assert "ABC123" not in words
         assert "Warszawa" not in words
+        # Neighbors should be sorted by descending similarity
+        sims = [s for _, s in nbrs]
+        assert sims == sorted(sims, reverse=True)
+        # Similarities should be in valid cosine range (small tolerance for float precision)
+        assert all(-1 - 1e-6 <= s <= 1 + 1e-6 for _, s in nbrs)
 
     def test_returns_tuples(self, tiny_kv):
         vec = tiny_kv["piekny"]
@@ -40,6 +45,14 @@ class TestClusterTopNeighbors:
             assert "coherence" in c
             assert "words" in c
             assert isinstance(c["words"], list)
+            assert c["size"] > 0
+            assert 0 <= c["coherence"] <= 1
+            assert len(c["words"]) > 0
+            # Each word entry should have actual values
+            for w in c["words"]:
+                assert "word" in w
+                assert "cos_centroid" in w
+                assert -1 <= w["cos_centroid"] <= 1
 
     def test_not_enough_neighbors(self, tiny_kv):
         beta = np.ones(8, dtype=np.float64)
