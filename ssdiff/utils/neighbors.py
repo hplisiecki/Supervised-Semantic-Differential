@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import numpy as np
 
+from ssdiff.lang_config import get_config
+
 from .math import kmeans, kmeans_auto_k, unit_vector
-from ssdlite.lang_config import get_config
 
 
 def filtered_neighbors(
@@ -21,7 +22,7 @@ def filtered_neighbors(
     Queries the embedding model for candidate neighbors, then discards tokens
     that contain digits or start with an uppercase letter, returning the first
     ``topn`` clean results.  The filter pattern is language-aware (configured
-    in :mod:`ssdlite.lang_config`).
+    in :mod:`ssdiff.lang_config`).
 
     Parameters
     ----------
@@ -61,20 +62,19 @@ def cluster_top_neighbors(
     kv,
     beta: np.ndarray,
     *,
-    use_unit_beta: bool = True,
     topn: int = 100,
     k: int | None = None,
     k_min: int = 2,
     k_max: int = 10,
     restrict_vocab: int = 50000,
-    random_state: int = 13,
+    random_state: int = 2137,
     min_cluster_size: int = 2,
     side: str = "pos",
     lang: str = "pl",
 ) -> list[dict]:
     """Cluster top neighbors of +/-beta into interpretable themes.
 
-    Uses pure-numpy KMeans (no sklearn needed).
+    Uses pure-numpy KMeans.
 
     Returns list of cluster dicts with keys:
         id, size, centroid_cos_beta, coherence, words
@@ -121,7 +121,7 @@ def cluster_top_neighbors(
 
         clusters.append({
             "id": int(cid),
-            "size": int(len(idx)),
+            "size": len(idx),
             "centroid_cos_beta": cos_beta,
             "coherence": coherence,
             "words": rows,

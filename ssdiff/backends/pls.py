@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from ssdlite.utils.math import standardize
+from ssdiff.utils.math import standardize
 
 
 @dataclass(frozen=True)
@@ -158,7 +158,7 @@ def pls1_cv_select(
 
         # Optional PCA reduction inside the fold
         if pca_k is not None:
-            from ssdlite.utils.math import pca_fit_transform
+            from ssdiff.utils.math import pca_fit_transform
             k = min(pca_k, Xs_tr.shape[0] - 1, Xs_tr.shape[1])
             Xs_tr, comps, _ = pca_fit_transform(Xs_tr, k)
             Xs_val = Xs_val @ comps.T
@@ -227,7 +227,7 @@ def _pls1_cv_r2(X, y, n_components, n_folds, fold_indices, pca_k=None) -> float:
         Xs_val = (X_val - x_mean) / x_scale
 
         if pca_k is not None:
-            from ssdlite.utils.math import pca_fit_transform
+            from ssdiff.utils.math import pca_fit_transform
             k = min(pca_k, Xs_tr.shape[0] - 1, Xs_tr.shape[1])
             Xs_tr, comps, _ = pca_fit_transform(Xs_tr, k)
             Xs_val = Xs_val @ comps.T
@@ -322,7 +322,7 @@ def _split_half_correlations(
 
     Internal helper shared by all split-test aggregation methods.
     """
-    from ssdlite.utils.math import pca_fit_transform
+    from ssdiff.utils.math import pca_fit_transform
 
     n = X.shape[0]
     n_train = max(int(n * split_ratio), n_components + 2)
@@ -395,7 +395,7 @@ def pls1_split_test(
     p_split : corrected one-sided p-value.
     mean_r : mean Pearson r across splits (back-transformed from z).
     """
-    from ssdlite.utils.math import t_sf
+    from ssdiff.utils.math import t_sf
 
     rng = np.random.default_rng(seed)
     r_splits = _split_half_correlations(

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Sequence, Union
+from collections.abc import Sequence
+from typing import Union
 
-from ssdlite.utils.text import (
+from ssdiff.utils.text import (
     build_docs_from_preprocessed,
     lang_to_model,
     load_spacy,
@@ -88,6 +89,51 @@ class Corpus:
         self.lang = resolved_lang
         self.pre_docs = preprocess_texts(texts, nlp, stopwords or [])
         self.docs = build_docs_from_preprocessed(self.pre_docs)
+
+    def suggest_lexicon(
+        self,
+        y,
+        *,
+        top_k: int = 30,
+        min_docs: int = 5,
+        n_bins: int = 4,
+        corr_cap: float = 0.30,
+        var_type: str = "continuous",
+    ) -> list[str]:
+        """Suggest seed words ranked by balanced coverage.
+
+        Uses the lemmatized tokens on this Corpus instance — no
+        re-tokenization, consistent with what SSD will consume.
+
+        Parameters
+        ----------
+        y : array-like
+            Outcome variable (numeric for continuous, labels for categorical).
+        top_k : int, default 30
+            Maximum number of candidate tokens to return.
+        min_docs : int, default 5
+            Minimum document frequency for a token to be considered.
+        n_bins : int, default 4
+            Number of quantile bins for continuous outcomes.
+        corr_cap : float, default 0.30
+            Association cap for rank penalty.
+        var_type : str, default "continuous"
+            ``"continuous"`` or ``"categorical"``.
+
+        Returns
+        -------
+        list[str]
+            Token strings sorted by descending rank.
+        """
+        from .utils.lexicon import _filter_y, _rank_tokens, _token_sets
+
+        docs, y_clean = _filter_y(self.docs, y, var_type=var_type)
+        token_sets = _token_sets(docs)
+        return _rank_tokens(
+            token_sets, y_clean,
+            top_k=top_k, min_docs=min_docs, n_bins=n_bins,
+            corr_cap=corr_cap, var_type=var_type,
+        )
 
     @property
     def n_texts(self) -> int:

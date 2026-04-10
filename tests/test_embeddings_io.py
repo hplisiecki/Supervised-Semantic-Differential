@@ -16,7 +16,7 @@ import time
 import numpy as np
 import pytest
 
-from ssdlite.embeddings import Embeddings
+from ssdiff.embeddings import Embeddings
 
 MODELS = "/home/plenartowicz/Projekty/SSD/Models"
 

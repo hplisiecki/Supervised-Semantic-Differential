@@ -1,4 +1,4 @@
-"""Tests for ssdlite.embeddings — Embeddings class."""
+"""Tests for ssdiff.embeddings — Embeddings class."""
 
 import os
 import tempfile
@@ -6,7 +6,7 @@ import tempfile
 import numpy as np
 import pytest
 
-from ssdlite.embeddings import Embeddings
+from ssdiff.embeddings import Embeddings
 
 
 class TestEmbeddingsConstruction:
@@ -20,6 +20,10 @@ class TestEmbeddingsConstruction:
         vec = tiny_kv["kraj"]
         assert vec.shape == (8,)
         assert vec.dtype == np.float32
+        # Vector should not be all zeros
+        assert np.any(vec != 0)
+        # Should be finite
+        assert np.all(np.isfinite(vec))
 
     def test_get_vector_norm(self, tiny_kv):
         v_raw = tiny_kv.get_vector("kraj", norm=False)
@@ -39,10 +43,16 @@ class TestEmbeddingsNormalize:
         keys = ["a", "b", "c"]
         vecs = np.array([[3.0, 4.0], [1.0, 0.0], [0.0, 2.0]], dtype=np.float32)
         emb = Embeddings(keys, vecs)
+        # Verify norms are NOT 1.0 before normalizing
+        norms_before = np.linalg.norm(emb.vectors, axis=1)
+        assert not np.allclose(norms_before, 1.0, atol=1e-5), "Pre-normalization norms should not all be 1.0"
         result = emb.normalize(l2=True, abtt_m=0)
         assert result is emb  # in-place, returns self
+        norms_after = np.linalg.norm(emb.vectors, axis=1)
         for i in range(3):
-            assert np.allclose(np.linalg.norm(emb.vectors[i]), 1.0, atol=1e-5)
+            assert np.allclose(norms_after[i], 1.0, atol=1e-5)
+        # Confirm normalization actually changed the vectors
+        assert not np.allclose(norms_before, norms_after)
 
     def test_abtt(self):
         rng = np.random.default_rng(0)

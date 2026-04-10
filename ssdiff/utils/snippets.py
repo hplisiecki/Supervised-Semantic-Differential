@@ -1,4 +1,4 @@
-# ===== ssdlite/utils/snippets.py =====
+# ===== ssdiff/utils/snippets.py =====
 """
 Snippet extraction along beta and cluster centroids.
 
@@ -6,14 +6,17 @@ Ported from ssdiff.snippets — all pandas usage replaced with plain Python type
 Mathematical logic is identical.
 """
 from __future__ import annotations
-from typing import List, Iterable, Iterator, Tuple, Optional, Dict, Any
-import sys
-import numpy as np
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from ssdlite.utils.math import unit_vector
-from ssdlite.utils.text import PreprocessedDoc
-from ssdlite.utils.vectors import compute_global_sif
+import sys
+from collections.abc import Iterable, Iterator
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any
+
+import numpy as np
+
+from ssdiff.utils.math import unit_vector
+from ssdiff.utils.text import PreprocessedDoc
+from ssdiff.utils.vectors import compute_global_sif
 
 
 def _centroid_unit_from_cluster_words(words: list, kv) -> np.ndarray:
@@ -36,10 +39,10 @@ def _centroid_unit_from_cluster_words(words: list, kv) -> np.ndarray:
 # a lightweight "doc-like" view used for both single-doc and per-post in profiles
 class _DocLike:
     __slots__ = (
-        "profile_id",
-        "post_id",
-        "sents_surface",
         "doc_lemmas",
+        "post_id",
+        "profile_id",
+        "sents_surface",
         "token_to_sent",
     )
 
@@ -47,9 +50,9 @@ class _DocLike:
         self,
         profile_id: int,
         post_id: int,
-        sents_surface: List[str],
-        doc_lemmas: List[str],
-        token_to_sent: List[int],
+        sents_surface: list[str],
+        doc_lemmas: list[str],
+        token_to_sent: list[int],
     ) -> None:
         self.profile_id = profile_id  # for PreprocessedDoc: equals doc_id
         self.post_id = post_id  # for PreprocessedDoc: 0
@@ -59,7 +62,7 @@ class _DocLike:
 
 
 def _iter_doclikes(
-    pre_docs: List[PreprocessedDoc],
+    pre_docs: list[PreprocessedDoc],
 ) -> Iterator[_DocLike]:
     """
     Iterate over all docs as _DocLike objects.
@@ -77,7 +80,7 @@ def _iter_doclikes(
         )
 
 
-def _build_global_sif(pre_docs) -> Tuple[dict[str, int], int]:
+def _build_global_sif(pre_docs) -> tuple[dict[str, int], int]:
     """Build global word counts and total token count from pre_docs."""
     flat = [D.doc_lemmas for D in _iter_doclikes(pre_docs)]
     return compute_global_sif(flat)
@@ -128,7 +131,7 @@ def _precompute_doc_arrays(
     sif_a: float,
     global_wc: dict[str, int],
     total_tokens: int,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Build SIF-weighted token matrix once per doc:
       - w      : (N,) SIF weights
@@ -176,7 +179,7 @@ def _precompute_doc_arrays(
 
 def _occ_vec(
     CW: np.ndarray, W: np.ndarray, i: int, L: int, R: int
-) -> Optional[np.ndarray]:
+) -> np.ndarray | None:
     """Inclusive [L,R], exclude center i. Returns unit vector or None if zero."""
     L = max(0, L)
     R = min(W.shape[0] - 1, R)
@@ -190,10 +193,10 @@ def _occ_vec(
 
 
 def _collect_occurrences_for_doc(
-    DA: Dict[str, Any],
+    DA: dict[str, Any],
     seeds_set: set[str],
     token_window: int,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Return per-doc occurrences with their prebuilt snippet metadata and occ vectors."""
     if not DA or DA.get("N", 0) == 0:
         return None
@@ -233,7 +236,7 @@ def _collect_occurrences_for_doc(
 
 # small helper to reuse the existing _make_snippet_anchor signature without copying arrays around
 class _DL_proxy(_DocLike):
-    def __init__(self, DA: Dict[str, Any]) -> None:
+    def __init__(self, DA: dict[str, Any]) -> None:
         self.profile_id = DA["profile_id"]
         self.post_id = DA["post_id"]
         self.sents_surface = DA["sents_surface"]
@@ -243,20 +246,20 @@ class _DL_proxy(_DocLike):
 
 # ---------- parallel driver ----------
 def _precompute_all_docs(
-    pre_docs: List[PreprocessedDoc],
+    pre_docs: list[PreprocessedDoc],
     kv,
     sif_a,
     global_wc,
     total_tokens,
     n_jobs: int,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Precompute per-doc arrays in parallel.
     Returns list of per-doc dicts with precomputed arrays.
     """
     doclikes = list(_iter_doclikes(pre_docs))
     # Threaded precompute (BLAS inside get_vector won't block; read-only kv is safe)
-    results: List[Optional[Dict[str, Any]]] = [None] * len(doclikes)
+    results: list[dict[str, Any] | None] = [None] * len(doclikes)
     with ThreadPoolExecutor(
         max_workers=(None if n_jobs in (-1, 0, None) else int(n_jobs))
     ) as ex:
@@ -273,13 +276,13 @@ def _precompute_all_docs(
 
 
 def _collect_all_occurrences(
-    doc_arrays: List[Dict[str, Any]],
+    doc_arrays: list[dict[str, Any]],
     seeds_set: set[str],
     token_window: int,
     n_jobs: int,
     progress: bool = False,
     desc: str = "Snippets: occurrences",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Collect all occurrences from all docs based on seeds_set and token_window.
     """
@@ -291,7 +294,7 @@ def _collect_all_occurrences(
     if progress and _tqdm is not None and sys.stderr is not None:
         iterator = _tqdm(iterator, total=len(doc_arrays), desc=desc)
 
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     # Threading again (occ computations are mostly BLAS on arrays)
     with ThreadPoolExecutor(
         max_workers=(None if n_jobs in (-1, 0, None) else int(n_jobs))
@@ -308,9 +311,9 @@ def _collect_all_occurrences(
 
 
 def _collect_sentence_occurrences_for_doc(
-    DA: Dict[str, Any],
+    DA: dict[str, Any],
     token_window: int,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """
     Fallback mode when we have *no seeds* (no lexicon).
     Treat each sentence as a single 'occurrence':
@@ -334,7 +337,7 @@ def _collect_sentence_occurrences_for_doc(
 
     # gather token indices per sentence
     n_sents = max(token_to_sent) + 1 if token_to_sent else 0
-    sent_to_indices: List[List[int]] = [[] for _ in range(n_sents)]
+    sent_to_indices: list[list[int]] = [[] for _ in range(n_sents)]
     for i, s_idx in enumerate(token_to_sent):
         if 0 <= s_idx < n_sents:
             sent_to_indices[s_idx].append(i)
@@ -381,12 +384,12 @@ def _collect_sentence_occurrences_for_doc(
 
 
 def _collect_sentence_occurrences(
-    doc_arrays: List[Dict[str, Any]],
+    doc_arrays: list[dict[str, Any]],
     token_window: int,
     n_jobs: int,
     progress: bool = False,
     desc: str = "Snippets: sentences",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Fallback collector when seeds_set is empty:
     one occurrence per sentence per doc.
@@ -400,7 +403,7 @@ def _collect_sentence_occurrences(
     if progress and _tqdm is not None and sys.stderr is not None:
         iterator = _tqdm(iterator, total=len(doc_arrays), desc=desc)
 
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     with ThreadPoolExecutor(
         max_workers=(None if n_jobs in (-1, 0, None) else int(n_jobs))
     ) as ex:
@@ -417,8 +420,8 @@ def _collect_sentence_occurrences(
 
 #####################
 def _collect_doc_occurrences_for_doc(
-    DA: Dict[str, Any],
-) -> Optional[Dict[str, Any]]:
+    DA: dict[str, Any],
+) -> dict[str, Any] | None:
     """
     Fallback mode when we want *one occurrence per whole text*.
 
@@ -474,11 +477,11 @@ def _collect_doc_occurrences_for_doc(
 
 
 def _collect_doc_occurrences(
-    doc_arrays: List[Dict[str, Any]],
+    doc_arrays: list[dict[str, Any]],
     n_jobs: int,
     progress: bool = False,
     desc: str = "Snippets: docs",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     One occurrence per doc/post, based on *whole text*.
     """
@@ -491,7 +494,7 @@ def _collect_doc_occurrences(
     if progress and _tqdm is not None and sys.stderr is not None:
         iterator = _tqdm(iterator, total=len(doc_arrays), desc=desc)
 
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     with ThreadPoolExecutor(
         max_workers=(None if n_jobs in (-1, 0, None) else int(n_jobs))
     ) as ex:
@@ -532,10 +535,10 @@ def _top_per_group(rows: list[dict], group_key: str, n: int) -> list[dict]:
 # ---------- public API ----------
 def cluster_snippets_by_centroids(
     *,
-    pre_docs: List[PreprocessedDoc],
+    pre_docs: list[PreprocessedDoc],
     ssd,  # fitted SSD (must expose kv and lexicon)
-    pos_clusters: List[dict] | None,  # clusters from +beta
-    neg_clusters: List[dict] | None,  # clusters from -beta
+    pos_clusters: list[dict] | None,  # clusters from +beta
+    neg_clusters: list[dict] | None,  # clusters from -beta
     token_window: int = 3,
     seeds: Iterable[str] | None = None,
     sif_a: float = 1e-3,
@@ -560,7 +563,7 @@ def cluster_snippets_by_centroids(
         Preprocessed documents to extract snippets from.
     ssd : fitted SSD model
         Duck-typed object exposing .kv (Embeddings), .beta_unit, .beta,
-        .use_unit_beta, .lexicon, .window, .sif_a.
+        .lexicon, .window, .sif_a.
     pos_clusters : List[dict] | None
         List of clusters from +beta side (each cluster is a dict with 'words' key).
     neg_clusters : List[dict] | None
@@ -595,10 +598,10 @@ def cluster_snippets_by_centroids(
     seeds_set = set(seeds or getattr(ssd, "lexicon", []))
 
     # targets (cluster centroids)
-    targets: List[np.ndarray] = []
-    labels: List[str] = []
+    targets: list[np.ndarray] = []
+    labels: list[str] = []
 
-    def _add_side(clusters: Optional[List[dict]], side: str):
+    def _add_side(clusters: list[dict] | None, side: str):
         if not clusters:
             return
         for rank, C in enumerate(clusters, start=1):
@@ -643,7 +646,7 @@ def cluster_snippets_by_centroids(
     for occ in occs:
         Omat = occ["occ_mat"]  # (m, d)
         C = Omat @ T.T  # (m, K)
-        for r, (i, seed, L, R, smin, smax, snippet) in enumerate(occ["meta"]):
+        for r, (_i, seed, L, R, smin, smax, snippet) in enumerate(occ["meta"]):
             cos_row = C[r]  # (K,)
             for k, lab in enumerate(labels):
                 rows.append(
@@ -677,7 +680,7 @@ def cluster_snippets_by_centroids(
 
 def snippets_along_beta(
     *,
-    pre_docs: List[PreprocessedDoc],
+    pre_docs: list[PreprocessedDoc],
     ssd,  # fitted SSD (must expose beta_unit and kv)
     token_window: int = 3,
     seeds: Iterable[str] | None = None,
@@ -704,7 +707,7 @@ def snippets_along_beta(
         Preprocessed documents to extract snippets from.
     ssd : fitted SSD model
         Duck-typed object exposing .kv (Embeddings), .beta_unit, .beta,
-        .use_unit_beta, .lexicon, .window, .sif_a.
+        .lexicon, .window, .sif_a.
     token_window : int, optional
         Token window size around seed occurrences, by default 3.
     seeds : Iterable[str] | None, optional
@@ -734,7 +737,7 @@ def snippets_along_beta(
         global_wc, total_tokens = _build_global_sif(pre_docs)
 
     kv = ssd.kv
-    b_unit = unit_vector(getattr(ssd, "beta_unit", getattr(ssd, "beta")))
+    b_unit = unit_vector(getattr(ssd, "beta_unit", ssd.beta))
     seeds_set = set(seeds or getattr(ssd, "lexicon", []))
 
     # 1) precompute per-doc arrays once (parallel)
@@ -760,7 +763,7 @@ def snippets_along_beta(
         cos_pos = Omat @ b_unit
         cos_neg = -cos_pos
 
-        for r, (i, seed, L, R, smin, smax, snippet) in enumerate(occ["meta"]):
+        for r, (_i, seed, L, R, smin, smax, snippet) in enumerate(occ["meta"]):
             cp = float(cos_pos[r])
             cn = float(cos_neg[r])
 

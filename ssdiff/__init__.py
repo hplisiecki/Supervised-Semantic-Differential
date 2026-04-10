@@ -1,23 +1,15 @@
-# ssdiff/__init__.py
-from .core import SSD
-from .crossgroup import SSDGroup, SSDContrast
-from .clusters import cluster_top_neighbors
-from .utils import (
-    load_embeddings, normalize_kv, compute_global_sif,
-    build_doc_vectors, filtered_neighbors
-)
-from .lexicon import suggest_lexicon, coverage_by_lexicon, token_presence_stats
-from .preprocess import load_spacy, load_stopwords, preprocess_texts, build_docs_from_preprocessed
-from .sweep import pca_sweep
+"""ssdiff — Supervised Semantic Differential."""
 
-__all__ = [
-    "SSD",
-    "SSDGroup",
-    "SSDContrast",
-    "cluster_top_neighbors",
-    "load_embeddings", "normalize_kv", "compute_global_sif",
-    "build_doc_vectors", "filtered_neighbors", "build_docs_from_preprocessed",
-    "suggest_lexicon", "coverage_by_lexicon", "token_presence_stats",
-    "load_spacy", "load_stopwords", "preprocess_texts",
-    "pca_sweep",
-]
+from ssdiff.corpus import Corpus
+from ssdiff.embeddings import Embeddings
+from ssdiff.ssd import SSD
+
+__all__ = ["SSD", "Corpus", "Embeddings"]
+
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _version
+
+try:
+    __version__ = _version("ssdiff")
+except PackageNotFoundError:
+    __version__ = "1.0.0"  # fallback for uninstalled dev

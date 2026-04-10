@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from importlib import resources
-from typing import Optional, Sequence, Union
+from typing import Union
 
 import spacy
 
-from ssdlite.lang_config import lang_to_model, get_config  # noqa: F401 — re-export
-
+from ssdiff.lang_config import get_config, lang_to_model  # noqa: F401 — re-export
 
 # ---------- Stopwords ----------
 
@@ -28,7 +28,7 @@ def load_stopwords(lang: str = "pl", *, lowercase: bool = True) -> list[str]:
 
     cfg = get_config(lang)
     if cfg.stopwords_file is not None:
-        ref = resources.files("ssdlite.utils").joinpath(cfg.stopwords_file)
+        ref = resources.files("ssdiff.utils").joinpath(cfg.stopwords_file)
         text = ref.read_text(encoding="utf-8")
         words = [s.strip() for s in text.splitlines() if s.strip()]
         return [w.lower() for w in words] if lowercase else words
@@ -217,7 +217,7 @@ def _sanitize_posts(posts) -> list[str]:
 def preprocess_texts(
     texts: Sequence[Union[str, Sequence[str]]],
     nlp,
-    stopwords: Optional[Sequence[str]] = None,
+    stopwords: Sequence[str] | None = None,
     batch_size: int = 64,
     n_process: int = 1,
 ) -> list[Union[PreprocessedDoc, PreprocessedProfile]]:

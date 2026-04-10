@@ -1,4 +1,4 @@
-"""Pure-numpy replacements for sklearn StandardScaler, PCA, KMeans, silhouette_score."""
+"""Pure-numpy math utilities: standardize, PCA, KMeans, silhouette score."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ def standardize(X: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
 def pca_fit_transform(
     X: np.ndarray, n_components: int
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """PCA via full SVD (matches sklearn svd_solver='full').
+    """PCA via full SVD.
 
     Parameters
     ----------
@@ -128,7 +128,7 @@ def kmeans(
     X: np.ndarray,
     k: int,
     *,
-    random_state: int | None = None,
+    random_state: int = 2137,
     max_iter: int = 300,
     n_init: int = 1,
 ) -> tuple[np.ndarray, np.ndarray, float]:
@@ -258,7 +258,7 @@ def kmeans_auto_k(
     k_min: int = 2,
     k_max: int = 5,
     *,
-    random_state: int | None = None,
+    random_state: int = 2137,
     n_init: int = 1,
 ) -> tuple[np.ndarray, np.ndarray, float, int]:
     """K-Means with automatic *k* selection via silhouette score.
@@ -344,7 +344,7 @@ def _betainc(a: float, b: float, x: float) -> float:
     if x > (a + 1) / (a + b + 2):
         return 1.0 - _betainc(b, a, 1.0 - x)
 
-    from math import lgamma, exp, log
+    from math import exp, lgamma, log
 
     lbeta_ab = lgamma(a) + lgamma(b) - lgamma(a + b)
     front = exp(a * log(x) + b * log(1.0 - x) - lbeta_ab) / a
@@ -405,7 +405,7 @@ def _gammainc_lower(a: float, x: float) -> float:
     if x <= 0:
         return 0.0
 
-    from math import lgamma, exp, log
+    from math import exp, lgamma, log
 
     if x < a + 1:
         # series representation

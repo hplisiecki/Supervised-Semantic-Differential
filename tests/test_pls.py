@@ -1,8 +1,9 @@
-"""Tests for ssdlite.backends.pls — PLS1 NIPALS backend."""
+"""Tests for ssdiff.backends.pls — PLS1 NIPALS backend."""
 
 import numpy as np
+import pytest
 
-from ssdlite.backends.pls import pls1_fit, pls1_cv_select, pls1_permutation_test
+from ssdiff.backends.pls import pls1_cv_select, pls1_fit, pls1_permutation_test
 
 
 class TestPLS1Fit:
@@ -16,6 +17,13 @@ class TestPLS1Fit:
         assert W.shape == (5, 3)
         assert Q.shape == (3,)
         assert coef.shape == (5,)
+
+        # Verify prediction quality: PLS coefficients should reconstruct well
+        y_pred = X @ coef
+        ss_res = np.sum((y - y_pred) ** 2)
+        ss_tot = np.sum((y - y.mean()) ** 2)
+        r2 = 1 - ss_res / ss_tot
+        assert r2 > 0.8  # Good fit for low-noise data
 
     def test_prediction_quality(self):
         rng = np.random.default_rng(42)
@@ -55,6 +63,10 @@ class TestPLS1CVSelect:
         # 1SE rule should pick fewer components
         assert result.best_n_components <= 3
 
+        # Without 1SE rule should select >= the parsimonious result
+        result_no1se = pls1_cv_select(X, y, max_components=5, n_folds=5, seed=42, use_1se_rule=False)
+        assert result.best_n_components <= result_no1se.best_n_components
+
 
 class TestPermutationTest:
     def test_basic(self):
@@ -68,6 +80,12 @@ class TestPermutationTest:
         assert isinstance(cv_r2_obs, float)
         assert null.shape == (50,)
 
+        # Null distribution should have real variation
+        assert np.std(null) > 0
+        # p-value should be computed as (b+1)/(m+1) formula
+        expected_p = (np.sum(null >= cv_r2_obs) + 1) / (50 + 1)
+        assert p == pytest.approx(expected_p, abs=1e-10)
+
     def test_random_data_high_pvalue(self):
         rng = np.random.default_rng(42)
         X = rng.normal(size=(30, 5))
@@ -78,7 +96,7 @@ class TestPermutationTest:
 
 class TestPLS1SplitTest:
     def test_basic(self):
-        from ssdlite.backends.pls import pls1_split_test
+        from ssdiff.backends.pls import pls1_split_test
         rng = np.random.default_rng(42)
         n, D = 60, 10
         X = rng.normal(size=(n, D))
@@ -93,7 +111,7 @@ class TestPLS1SplitTest:
         assert p_split < 0.1
 
     def test_null(self):
-        from ssdlite.backends.pls import pls1_split_test
+        from ssdiff.backends.pls import pls1_split_test
         rng = np.random.default_rng(99)
         n, D = 60, 10
         X = rng.normal(size=(n, D))
@@ -106,23 +124,55 @@ class TestPLS1SplitTest:
         assert p_split > 0.01
 
 
+class TestSplitTestCalibrated:
+    def test_basic(self):
+        from ssdiff.backends.pls import pls1_split_test_calibrated
+        rng = np.random.default_rng(42)
+        n, D = 60, 10
+        X = rng.normal(size=(n, D))
+        beta_true = rng.normal(size=D)
+        y = X @ beta_true + rng.normal(size=n) * 0.5
+
+        p_cal, mean_r = pls1_split_test_calibrated(
+            X, y, n_components=2, n_splits=20, n_perm=50, seed=42,
+        )
+        assert 0 <= p_cal <= 1
+        assert -1 <= mean_r <= 1
+        # Real signal should yield low p-value
+        assert p_cal < 0.2
+
+    def test_null_data(self):
+        from ssdiff.backends.pls import pls1_split_test_calibrated
+        rng = np.random.default_rng(99)
+        n, D = 60, 10
+        X = rng.normal(size=(n, D))
+        y = rng.normal(size=n)
+
+        p_cal, mean_r = pls1_split_test_calibrated(
+            X, y, n_components=2, n_splits=20, n_perm=50, seed=99,
+        )
+        assert 0 <= p_cal <= 1
+        # No signal: p-value should not be small
+        assert p_cal > 0.01
+
+
 class TestTSF:
     def test_zero(self):
-        from ssdlite.utils.math import t_sf
+        from ssdiff.utils.math import t_sf
         assert t_sf(0.0, 10.0) == 0.5
 
     def test_large_positive(self):
-        from ssdlite.utils.math import t_sf
+        from ssdiff.utils.math import t_sf
         p = t_sf(5.0, 30.0)
         assert 0 < p < 0.001
 
     def test_negative_t(self):
-        from ssdlite.utils.math import t_sf
+        from ssdiff.utils.math import t_sf
         p = t_sf(-2.0, 10.0)
         assert p > 0.95
 
     def test_symmetry(self):
-        from ssdlite.utils.math import t_sf
+        from ssdiff.utils.math import t_sf
         p_pos = t_sf(2.0, 20.0)
         p_neg = t_sf(-2.0, 20.0)
         assert abs(p_pos + p_neg - 1.0) < 1e-10

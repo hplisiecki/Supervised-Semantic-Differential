@@ -168,6 +168,6 @@ def overall_interpretability(
         mean_coherence=mean_coh,
         mean_abs_cosb=mean_abs,
         aggregate=float(mean_coh * mean_abs),
-        n_clusters=int(len(clusters)),
+        n_clusters=len(clusters),
         total_size=int(np.nansum(sizes)),
     )

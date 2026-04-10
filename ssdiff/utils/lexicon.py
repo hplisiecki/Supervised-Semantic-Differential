@@ -1,16 +1,16 @@
-# ssdlite/utils/lexicon.py
+# ssdiff/utils/lexicon.py
 """Lexicon suggestion and coverage utilities (pandas-free)."""
 from __future__ import annotations
 
 from collections import Counter
-from typing import Iterable, Sequence
+from collections.abc import Iterable, Sequence
 
 import numpy as np
 
 __all__ = [
+    "coverage_by_lexicon",
     "suggest_lexicon",
     "token_presence_stats",
-    "coverage_by_lexicon",
 ]
 
 # -------------------------
@@ -256,14 +256,34 @@ def _rank_for_token_stats(
 
 
 # -------------------------
-# Public API
+# Shared helpers (used by Corpus.suggest_lexicon and standalone API)
 # -------------------------
 
 
-def suggest_lexicon(
-    df_or_texts,
-    text_col: str | None = None,
-    score_col: str | None = None,
+def _filter_y(
+    docs: list[list[str]], y, *, var_type: str = "continuous",
+) -> tuple[list[list[str]], np.ndarray]:
+    """Filter docs and y for valid entries. Returns (docs, y_clean)."""
+    _validate_var_type(var_type)
+    if var_type == "categorical":
+        y_arr = np.asarray(y, dtype=object)
+        mask = _categorical_mask(y_arr)
+        if not mask.all():
+            docs = [docs[i] for i in range(len(docs)) if mask[i]]
+            y_arr = y_arr[mask]
+        return docs, y_arr
+    else:
+        y_arr = _as_float_array(y)
+        mask = np.isfinite(y_arr)
+        if not mask.all():
+            docs = [docs[i] for i in range(len(docs)) if mask[i]]
+            y_arr = y_arr[mask]
+        return docs, y_arr
+
+
+def _rank_tokens(
+    token_sets: list[set[str]],
+    y: np.ndarray,
     *,
     top_k: int = 150,
     min_docs: int = 5,
@@ -271,81 +291,24 @@ def suggest_lexicon(
     corr_cap: float = 0.30,
     var_type: str = "continuous",
 ) -> list[str]:
-    """
-    Suggest candidate tokens ranked by coverage with a mild penalty for strong
-    association with *y*.
+    """Rank tokens by balanced coverage with association penalty.
 
     Parameters
     ----------
-    df_or_texts : dict-of-lists | Sequence[str] | Sequence[list[str]]
-        If a dict with string keys (column-oriented table), also pass
-        *text_col* and *score_col*.
-        Otherwise pass ``(texts, y)`` as a tuple where *texts* is
-        ``list[str]`` or ``list[list[str]]``.
-    text_col : str | None
-        Key with preprocessed text (space-separated) if dict provided.
-    score_col : str | None
-        Key with outcome variable if dict provided (numeric for continuous,
-        any hashable for categorical).
-    var_type : str
-        ``'continuous'`` (default) for numeric outcomes or ``'categorical'``
-        for group labels.
+    token_sets : list of sets of str
+        Per-doc unique token sets.
+    y : ndarray
+        Outcome variable (already cleaned).
+    top_k, min_docs, n_bins, corr_cap, var_type :
+        Same as ``suggest_lexicon``.
 
     Returns
     -------
     list[str]
         Token strings sorted by descending rank, at most *top_k*.
     """
-    _validate_var_type(var_type)
     is_categorical = var_type == "categorical"
 
-    # Allow passing a tuple (texts, y) directly
-    if isinstance(df_or_texts, dict):
-        if not text_col or not score_col:
-            raise ValueError(
-                "Provide text_col and score_col when using a dict table."
-            )
-        raw_texts = df_or_texts[text_col]
-        raw_y = df_or_texts[score_col]
-        # Apply fillna equivalent and cast to str
-        raw_texts = [str(t) if t is not None else "" for t in raw_texts]
-        if is_categorical:
-            y = np.asarray(raw_y, dtype=object)
-            mask = _categorical_mask(y)
-            texts = _texts_to_token_lists(
-                [raw_texts[i] for i in range(len(raw_texts)) if mask[i]]
-            )
-            y = y[mask]
-        else:
-            y = _as_float_array(raw_y)
-            mask = np.isfinite(y)
-            texts = _texts_to_token_lists(
-                [raw_texts[i] for i in range(len(raw_texts)) if mask[i]]
-            )
-            y = y[mask]
-    elif isinstance(df_or_texts, tuple) and len(df_or_texts) == 2:
-        texts, y = df_or_texts
-        texts = _texts_to_token_lists(texts)
-        if is_categorical:
-            y = np.asarray(y, dtype=object)
-            mask = _categorical_mask(y)
-            if not mask.all():
-                texts = [texts[i] for i in range(len(texts)) if mask[i]]
-                y = y[mask]
-        else:
-            y = _as_float_array(y)
-            mask = np.isfinite(y)
-            if not mask.all():
-                texts = [texts[i] for i in range(len(texts)) if mask[i]]
-                y = y[mask]
-    else:
-        raise ValueError(
-            "Pass either a dict table with text_col/score_col, "
-            "or a (texts, y) tuple."
-        )
-
-    # Build doc-frequency counts
-    token_sets = _token_sets(texts)
     df_counts: Counter = Counter()
     for ts in token_sets:
         df_counts.update(ts)
@@ -370,9 +333,57 @@ def suggest_lexicon(
         docs = int(pres.sum())
         rows.append((t, rank, cov_bal, docs))
 
-    # Sort by (rank desc, cov_bal desc, docs desc)
     rows.sort(key=lambda r: (-r[1], -r[2], -r[3]))
     return [r[0] for r in rows[:top_k]]
+
+
+# -------------------------
+# Public API
+# -------------------------
+
+
+def suggest_lexicon(
+    texts_and_y: tuple,
+    *,
+    top_k: int = 150,
+    min_docs: int = 5,
+    n_bins: int = 4,
+    corr_cap: float = 0.30,
+    var_type: str = "continuous",
+) -> list[str]:
+    """
+    Suggest candidate tokens ranked by coverage with a mild penalty for strong
+    association with *y*.
+
+    Parameters
+    ----------
+    texts_and_y : tuple (token_lists, y)
+        ``token_lists`` is ``list[list[str]]`` (already tokenized).
+        ``y`` is the outcome variable (numeric or categorical labels).
+    var_type : str
+        ``'continuous'`` (default) for numeric outcomes or ``'categorical'``
+        for group labels.
+
+    Returns
+    -------
+    list[str]
+        Token strings sorted by descending rank, at most *top_k*.
+    """
+    _validate_var_type(var_type)
+
+    if not isinstance(texts_and_y, tuple) or len(texts_and_y) != 2:
+        raise ValueError(
+            "Pass a (token_lists, y) tuple."
+        )
+
+    texts, y = texts_and_y
+    docs, y_clean = _filter_y(list(texts), y, var_type=var_type)
+    token_sets = _token_sets(docs)
+    return _rank_tokens(
+        token_sets, y_clean,
+        top_k=top_k, min_docs=min_docs, n_bins=n_bins,
+        corr_cap=corr_cap, var_type=var_type,
+    )
 
 
 def token_presence_stats(

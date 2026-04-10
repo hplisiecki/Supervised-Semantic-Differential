@@ -1,23 +1,22 @@
-"""Tests for ssdlite/utils/lexicon.py — lexicon suggestion and coverage."""
+"""Tests for ssdiff/utils/lexicon.py — lexicon suggestion and coverage."""
 
 from __future__ import annotations
 
 import numpy as np
 import pytest
 
-from ssdlite.utils.lexicon import (
+from ssdiff.utils.lexicon import (
     _as_float_array,
-    _texts_to_token_lists,
-    _quantile_bins,
-    _crosstab,
     _cramers_v,
+    _crosstab,
     _effect_direction,
+    _quantile_bins,
+    _texts_to_token_lists,
     _validate_var_type,
+    coverage_by_lexicon,
     suggest_lexicon,
     token_presence_stats,
-    coverage_by_lexicon,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -175,14 +174,6 @@ class TestSuggestLexicon:
         )
         assert result == []
 
-    def test_dict_input(self, simple_texts, simple_y):
-        data = {"text": simple_texts, "score": simple_y.tolist()}
-        result = suggest_lexicon(
-            data, text_col="text", score_col="score", top_k=10, min_docs=1
-        )
-        assert isinstance(result, list)
-        assert len(result) > 0
-
     def test_categorical(self):
         texts = ["alpha beta", "alpha gamma", "beta delta", "gamma delta"]
         groups = ["A", "A", "B", "B"]
@@ -194,10 +185,6 @@ class TestSuggestLexicon:
     def test_invalid_input_raises(self):
         with pytest.raises(ValueError):
             suggest_lexicon("not a valid input")
-
-    def test_dict_missing_cols_raises(self):
-        with pytest.raises(ValueError, match="text_col and score_col"):
-            suggest_lexicon({"text": ["a"]})
 
     def test_nan_y_filtered(self, simple_texts):
         y = np.array([1.0, np.nan, 3.0, 4.0, np.nan, 6.0])

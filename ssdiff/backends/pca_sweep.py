@@ -1,49 +1,35 @@
-"""PCA-K sweep and selection for SSD (sklearn backend).
+"""PCA-K sweep and selection for SSD.
 
 Single-pass sweep over PCA_K values evaluating interpretability (cluster-based)
 and beta stability, then selects the best K via a joint AUCK score.
-
-Matches the algorithm in the official ``ssdiff`` package exactly:
-uses sklearn StandardScaler, PCA, KMeans, and silhouette_score.
 """
 
 from __future__ import annotations
 
-import warnings
-from typing import Sequence
+from collections.abc import Sequence
 
 import numpy as np
 
-from ssdlite.backends._sweep_math import (
+from ssdiff.backends._sweep_math import (
     PCAKSelectionResult,
-    cosine as _cosine,
-    zscore_ignore_nan as _zscore_ignore_nan,
+)
+from ssdiff.backends._sweep_math import (
     compute_auck as _compute_auck,
+)
+from ssdiff.backends._sweep_math import (
+    cosine as _cosine,
+)
+from ssdiff.backends._sweep_math import (
     detrend_by_variance as _detrend_by_variance,
+)
+from ssdiff.backends._sweep_math import (
     overall_interpretability as _overall_interpretability,
 )
-from ssdlite.utils.math import unit_vector
-from ssdlite.utils.neighbors import filtered_neighbors
-
-warnings.filterwarnings(
-    "ignore",
-    message=r"KMeans is known to have a memory leak on Windows with MKL.*",
-    category=UserWarning,
-    module=r"sklearn\.cluster\._kmeans",
+from ssdiff.backends._sweep_math import (
+    zscore_ignore_nan as _zscore_ignore_nan,
 )
-
-
-def _require_sklearn():
-    try:
-        from sklearn.preprocessing import StandardScaler  # noqa: F401
-        from sklearn.decomposition import PCA  # noqa: F401
-        from sklearn.cluster import KMeans  # noqa: F401
-        from sklearn.metrics import silhouette_score  # noqa: F401
-    except ImportError:
-        raise ImportError(
-            "scikit-learn is required for the PCA sweep backend. "
-            "Install: pip install scikit-learn"
-        )
+from ssdiff.utils.math import unit_vector
+from ssdiff.utils.neighbors import cluster_top_neighbors
 
 
 def _cluster_both_sides(
@@ -54,62 +40,41 @@ def _cluster_both_sides(
     k_min: int = 2,
     k_max: int = 5,
     restrict_vocab: int = 50000,
-    random_state: int = 13,
+    random_state: int = 2137,
     lang: str = "pl",
     min_cluster_size: int = 2,
 ) -> list[dict]:
-    """Cluster top neighbors of both +beta and -beta using sklearn KMeans.
+    """Cluster top neighbors of both +beta and -beta poles.
 
-    Matches the official ``ssd.cluster_neighbors()`` behavior: clusters both
-    poles and returns a combined list of cluster dicts.
+    Wraps :func:`~ssdiff.utils.neighbors.cluster_top_neighbors` (pure numpy)
+    for both poles and returns a combined list of cluster dicts compatible
+    with :func:`~ssdiff.backends._sweep_math.overall_interpretability`.
     """
-    from sklearn.cluster import KMeans
-    from sklearn.metrics import silhouette_score
-
-    bu = unit_vector(beta)
     all_clusters: list[dict] = []
 
-    for side, vec in (("pos", bu), ("neg", -bu)):
-        pairs = filtered_neighbors(kv, vec, topn=topn, restrict=restrict_vocab, lang=lang)
-        words = [w for (w, _s) in pairs]
-        if len(words) < max(2, k_min):
+    for side in ("pos", "neg"):
+        try:
+            clusters = cluster_top_neighbors(
+                kv, beta,
+                topn=topn,
+                k=None,
+                k_min=k_min,
+                k_max=k_max,
+                restrict_vocab=restrict_vocab,
+                random_state=random_state,
+                min_cluster_size=min_cluster_size,
+                side=side,
+                lang=lang,
+            )
+        except ValueError:
             continue
 
-        W = np.vstack(
-            [kv.get_vector(w, norm=True).astype(np.float64) for w in words]
-        )
-
-        # Auto-select k via silhouette score (matching official)
-        upper = min(k_max, max(k_min, W.shape[0] - 1))
-        best_s, best_labels = -1.0, None
-        for kk in range(max(2, k_min), max(2, upper) + 1):
-            km = KMeans(n_clusters=kk, random_state=random_state, n_init="auto")
-            labels = km.fit_predict(W)
-            if len(set(labels)) <= 1 or np.max(np.bincount(labels)) <= 1:
-                continue
-            s = silhouette_score(W, labels)
-            if s > best_s:
-                best_s, best_labels = s, labels
-
-        if best_labels is None:
-            km = KMeans(n_clusters=max(2, k_min), random_state=random_state, n_init="auto")
-            best_labels = km.fit_predict(W)
-
-        for cid in sorted(set(best_labels)):
-            idx = np.where(best_labels == cid)[0]
-            if len(idx) < min_cluster_size:
-                continue
-            Wc = W[idx]
-            centroid = unit_vector(Wc.mean(axis=0))
-            cos_beta = float(centroid @ bu)
-            cos_to_centroid = (Wc @ centroid).astype(float)
-            coherence = float(np.mean(cos_to_centroid))
-
+        for c in clusters:
             all_clusters.append({
                 "side": side,
-                "size": int(len(idx)),
-                "centroid_cos_beta": cos_beta,
-                "coherence": coherence,
+                "size": c["size"],
+                "centroid_cos_beta": c["centroid_cos_beta"],
+                "coherence": c["coherence"],
             })
 
     return all_clusters
@@ -122,7 +87,6 @@ def pca_sweep(
     x: np.ndarray,
     ys: np.ndarray,
     kv,
-    use_unit_beta: bool = True,
     pca_k_values: Sequence[int] | None = None,
     cluster_topn: int = 100,
     cluster_k_min: int = 2,
@@ -137,7 +101,7 @@ def pca_sweep(
 ) -> PCAKSelectionResult:
     """Single-pass sweep over PCA_K on pre-standardized doc vectors.
 
-    For each candidate K the function fits sklearn PCA(K) → OLS → beta, then
+    For each candidate K the function fits PCA(K) → OLS → beta, then
     evaluates interpretability (via cluster-based scoring on BOTH poles) and
     beta stability (cosine change between consecutive K).  The best K is
     chosen by a joint AUCK score.
@@ -145,7 +109,7 @@ def pca_sweep(
     Parameters
     ----------
     Xs : (n, D) array
-        Standardized document vectors (from sklearn StandardScaler).
+        Standardized document vectors.
     X_scale : (D,) array
         Column standard deviations (``scaler.scale_``).
     x : (n, D) array
@@ -154,8 +118,6 @@ def pca_sweep(
         Standardized outcome variable.
     kv : Embeddings
         Word embeddings for neighbor lookup and clustering.
-    use_unit_beta : bool
-        Whether to use unit-normed beta for neighbor search.
     pca_k_values : sequence of int, optional
         PCA_K values to try.  Default ``range(20, 121, 2)``.
     cluster_topn : int
@@ -180,8 +142,6 @@ def pca_sweep(
     PCAKSelectionResult
         ``best_k`` and ``df_joined`` (list of row-dicts with all metrics).
     """
-    _require_sklearn()
-
     if pca_k_values is None:
         pca_k_values = list(range(20, 121, 2))
 
@@ -195,7 +155,6 @@ def pca_sweep(
     beta_prev: np.ndarray | None = None
 
     # Precompute full SVD once — each K just slices the first K components.
-    # Equivalent to sklearn PCA(svd_solver='full') which also uses LAPACK SVD.
     U_full, S_full, Vt_full = np.linalg.svd(Xs, full_matrices=False)
     explained_var_full = (S_full ** 2) / (n - 1)
     total_var_full = float(explained_var_full.sum())
@@ -209,7 +168,7 @@ def pca_sweep(
             if max_k < 1:
                 raise ValueError(f"PCA_K={K} too large for data (n={n}, D={D})")
 
-            # Slice precomputed SVD (equivalent to sklearn PCA with full SVD)
+            # Slice precomputed SVD
             components_k = Vt_full[:max_k]          # (max_k, D)
             z = Xs @ components_k.T                  # (n, max_k)
             var_expl = float(explained_var_full[:max_k].sum() / total_var_full * 100) if total_var_full > 0 else 0.0

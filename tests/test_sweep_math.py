@@ -1,19 +1,18 @@
-"""Tests for ssdlite/backends/_sweep_math.py — PCA sweep math utilities."""
+"""Tests for ssdiff/backends/_sweep_math.py — PCA sweep math utilities."""
 
 from __future__ import annotations
 
 import numpy as np
 import pytest
 
-from ssdlite.backends._sweep_math import (
+from ssdiff.backends._sweep_math import (
     PCAKSelectionResult,
-    cosine,
-    zscore_ignore_nan,
     compute_auck,
+    cosine,
     detrend_by_variance,
     overall_interpretability,
+    zscore_ignore_nan,
 )
-
 
 # ---------------------------------------------------------------------------
 # cosine
