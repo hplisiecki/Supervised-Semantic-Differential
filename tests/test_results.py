@@ -9,7 +9,8 @@ import pytest
 class TestPLSResultAttributes:
     def test_has_fit_stats(self, pls_result):
         assert hasattr(pls_result, "r2")
-        assert hasattr(pls_result, "r2_adj")
+        # r2_adj is None for PLS (not meaningful)
+        assert pls_result.r2_adj is None
         assert hasattr(pls_result, "pvalue")
         assert 0 <= pls_result.r2 <= 1
 
@@ -345,6 +346,22 @@ class TestPlotSweep:
             pcaols_result.plot_sweep()
 
 
+class TestPlotSweepMatplotlibOptional:
+    def test_raises_import_error_without_matplotlib(self, pcaols_result_sweep, monkeypatch):
+        """plot_sweep() raises ImportError when matplotlib is not installed."""
+        import builtins
+        real_import = builtins.__import__
+
+        def mock_import(name, *args, **kwargs):
+            if name == "matplotlib.pyplot" or name == "matplotlib":
+                raise ImportError("mocked")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", mock_import)
+        with pytest.raises(ImportError, match="matplotlib is required"):
+            pcaols_result_sweep.plot_sweep()
+
+
 class TestSnippetsOnResult:
     """_SSDResultBase.snippets() on real result objects."""
 
@@ -384,6 +401,75 @@ class TestGroupResultNeighborsTuples:
         nbrs = group_result_3g.neighbors("pos", n=3)
         labels = {item[0] for item in nbrs}
         assert len(labels) == 3  # C(3,2) = 3 contrasts
+
+
+class TestPLSResultHyperparams:
+    def test_stores_random_state(self, pls_result):
+        assert hasattr(pls_result, "random_state")
+        assert pls_result.random_state == 42
+
+    def test_stores_n_perm(self, pls_result):
+        assert hasattr(pls_result, "n_perm")
+        assert pls_result.n_perm == 50
+
+    def test_stores_n_splits(self, pls_result):
+        assert hasattr(pls_result, "n_splits")
+        assert pls_result.n_splits == 50  # default
+
+    def test_stores_split_ratio(self, pls_result):
+        assert hasattr(pls_result, "split_ratio")
+        assert pls_result.split_ratio == 0.5  # default
+
+
+class TestPCAOLSResultHyperparams:
+    def test_stores_k_min_none_when_explicit(self, pcaols_result):
+        """When n_components is explicitly set, sweep params are None."""
+        assert hasattr(pcaols_result, "k_min")
+        assert pcaols_result.k_min is None
+
+    def test_stores_k_max_none_when_explicit(self, pcaols_result):
+        assert hasattr(pcaols_result, "k_max")
+        assert pcaols_result.k_max is None
+
+    def test_stores_k_step_none_when_explicit(self, pcaols_result):
+        assert hasattr(pcaols_result, "k_step")
+        assert pcaols_result.k_step is None
+
+    def test_stores_k_params_when_sweep(self, pcaols_result_sweep):
+        """When sweep is used, k_min/k_max/k_step are stored."""
+        assert pcaols_result_sweep.k_min == 2
+        assert pcaols_result_sweep.k_max == 6
+        assert pcaols_result_sweep.k_step == 1
+
+
+class TestGroupResultHyperparams:
+    def test_stores_random_state(self, group_result_2g):
+        assert hasattr(group_result_2g, "random_state")
+        assert group_result_2g.random_state == 42
+
+    def test_stores_random_state_3g(self, group_result_3g):
+        assert group_result_3g.random_state == 42
+
+
+class TestR2AdjPlacement:
+    def test_pls_has_no_r2_adj(self, pls_result):
+        """PLSResult should not have r2_adj (not meaningful for PLS)."""
+        assert pls_result.r2_adj is None
+
+    def test_pcaols_has_r2_adj(self, pcaols_result):
+        """PCAOLSResult should still have r2_adj."""
+        assert pcaols_result.r2_adj is not None
+        assert isinstance(pcaols_result.r2_adj, float)
+
+    def test_pls_summary_no_r2_adj(self, pls_result):
+        """PLS summary should not mention R²_adj."""
+        s = pls_result.summary()
+        assert "R²_adj" not in s
+
+    def test_pcaols_summary_has_r2_adj(self, pcaols_result):
+        """PCA+OLS summary should still show R²_adj."""
+        s = pcaols_result.summary()
+        assert "R²_adj" in s
 
 
 class TestGroupResultSnippets:

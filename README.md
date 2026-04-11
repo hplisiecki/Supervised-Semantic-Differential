@@ -122,7 +122,10 @@ emb = Embeddings.load("path/to/model.bin", verbose=True)
 emb.normalize(l2=True, abtt_m=1)   # L2 + ABTT (remove top-1 PC)
 ```
 
-> **Tip:** Save normalized embeddings as `.ssdembed` for fast reloading: `emb.save("model_normalized", fmt="ssdembed")`
+Calling `normalize()` with no arguments applies both L2 and ABTT (m=1) by default.
+Processing state is tracked — calling it again safely skips already-applied steps.
+
+> **Tip:** Save normalized embeddings as `.ssdembed` to preserve both vectors and processing metadata (L2, ABTT state). Other formats (`.kv`, `.bin`, `.txt`) only store raw vectors.
 
 The model is not included in the package and will differ depending on your language and domain.
 Look for pre-trained static word embeddings in your language with good vocabulary coverage for your domain. GloVe and word2vec trained on large general corpora are a reliable starting point.
@@ -538,7 +541,7 @@ from ssdiff import Embeddings, Corpus, SSD
 ### `Embeddings`
 
 - `Embeddings.load(path, verbose=False, parallel=False)` — load `.ssdembed`, `.kv`, `.bin`, `.txt`, `.vec` (and `.gz` variants)
-- `.normalize(l2=True, abtt_m=0, re_normalize=True)` — in-place L2 + optional ABTT
+- `.normalize(l2=True, abtt_m=1, re_normalize=True)` — in-place L2 + ABTT; tracks state, safe to call repeatedly
 - `.save(filename=None, fmt="ssdembed")` — save to native, text, binary, or gensim format
 - `emb["word"]` — vector lookup
 - `"word" in emb` — membership check

@@ -53,6 +53,11 @@ def test_no_sklearn_at_import():
     _check_no_module_imported("sklearn", CORE_IMPORTS)
 
 
+def test_no_matplotlib_at_import():
+    """ssdiff core imports should not pull in matplotlib."""
+    _check_no_module_imported("matplotlib", CORE_IMPORTS)
+
+
 def test_public_api():
     """All documented public names should be importable."""
     from ssdiff import SSD, Corpus, Embeddings

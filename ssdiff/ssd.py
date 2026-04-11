@@ -385,10 +385,13 @@ class SSD:
             pca_k=pca_k,
             p_method=resolved,
             split_mean_r=split_mean_r,
+            random_state=random_state,
+            n_perm=n_perm,
+            n_splits=n_splits,
+            split_ratio=split_ratio,
             beta=beta,
             pvalue=pvalue,
             r2=stats["r2"],
-            r2_adj=stats["r2_adj"],
             **kwargs,
         )
 
@@ -475,6 +478,9 @@ class SSD:
         return PCAOLSResult(
             n_components=n_pca,
             sweep_result=sweep_result,
+            k_min=k_min if sweep_result is not None else None,
+            k_max=k_max if sweep_result is not None else None,
+            k_step=k_step if sweep_result is not None else None,
             beta=beta,
             pvalue=stats["f_pvalue"],
             r2=stats["r2"],
@@ -575,6 +581,7 @@ class SSD:
             G=G,
             n_perm=n_perm,
             correction=correction,
+            random_state=random_state,
         )
 
     def __repr__(self) -> str:
