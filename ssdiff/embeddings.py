@@ -5,6 +5,7 @@ from __future__ import annotations
 import gzip
 import os
 import pickle
+import warnings
 
 import numpy as np
 
@@ -41,6 +42,8 @@ class Embeddings:
         self._norms: np.ndarray | None = None
         self._normed_vectors: np.ndarray | None = None
         self._is_unit_normed: bool = False
+        self._l2_normalized: bool = False
+        self._abtt_m: int = 0
         self._source_path: str | None = None
 
     # ---- construction ----
@@ -72,13 +75,16 @@ class Embeddings:
 
     # ---- normalization ----
 
-    def normalize(self, *, l2: bool = True, abtt_m: int = 0, re_normalize: bool = True) -> Embeddings:
+    def normalize(self, *, l2: bool = True, abtt_m: int = 1, re_normalize: bool = True) -> Embeddings:
         """Normalize embeddings in-place. Returns self for chaining.
 
         Parameters
         ----------
-        l2 : L2-normalize rows.
-        abtt_m : Remove projection onto top-m principal components (ABTT).
+        l2 : L2-normalize rows. Skipped if already applied.
+        abtt_m : Target number of top principal components to remove (ABTT).
+            Absolute: if ABTT was already applied with a smaller m, only the
+            remaining components are removed.  Equal m is a no-op.  Smaller m
+            than already applied raises ValueError (ABTT is irreversible).
         re_normalize : L2-normalize again after ABTT.
         """
         V = self.vectors
@@ -86,31 +92,55 @@ class Embeddings:
             V = np.array(V)
             self.vectors = V
 
-        if l2:
+        # --- L2 normalization ---
+        did_l2 = False
+        if l2 and not self._l2_normalized:
             l2_normalize_rows_inplace(V)
+            self._l2_normalized = True
+            did_l2 = True
 
+        # --- ABTT ---
+        did_abtt = False
         if abtt_m > 0:
-            V -= V.mean(axis=0)
-            gram = V.T @ V
-            eigvals, eigvecs = np.linalg.eigh(gram)
-            m = min(abtt_m, eigvecs.shape[1])
-            top = np.ascontiguousarray(eigvecs[:, -m:].T, dtype=V.dtype)
-            del eigvals, eigvecs, gram
-            coeffs = V @ top.T
-            _CHUNK = 100_000
-            for j in range(m):
-                c = coeffs[:, j]
-                for s in range(0, len(V), _CHUNK):
-                    e = min(s + _CHUNK, len(V))
-                    V[s:e] -= c[s:e, None] * top[j]
+            if abtt_m < self._abtt_m:
+                raise ValueError(
+                    f"Cannot reduce ABTT from {self._abtt_m} to {abtt_m}. "
+                    "ABTT is irreversible — reload the original embeddings."
+                )
+            if abtt_m == self._abtt_m:
+                warnings.warn(
+                    f"ABTT with m={abtt_m} already applied. Skipping.",
+                    stacklevel=2,
+                )
+            else:
+                delta = abtt_m - self._abtt_m
+                V -= V.mean(axis=0)
+                gram = V.T @ V
+                eigvals, eigvecs = np.linalg.eigh(gram)
+                m = min(delta, eigvecs.shape[1])
+                top = np.ascontiguousarray(eigvecs[:, -m:].T, dtype=V.dtype)
+                del eigvals, eigvecs, gram
+                coeffs = V @ top.T
+                _CHUNK = 100_000
+                for j in range(m):
+                    c = coeffs[:, j]
+                    for s in range(0, len(V), _CHUNK):
+                        e = min(s + _CHUNK, len(V))
+                        V[s:e] -= c[s:e, None] * top[j]
+                self._abtt_m = abtt_m
+                did_abtt = True
 
-        if re_normalize:
+        # --- Re-normalize after ABTT ---
+        if re_normalize and did_abtt:
             l2_normalize_rows_inplace(V)
 
-        self._is_unit_normed = l2 or re_normalize
-        self._norms = None
-        self._normed_vectors = None
-        self.fill_norms()
+        # --- Update state ---
+        if did_l2 or did_abtt:
+            self._is_unit_normed = not did_abtt or re_normalize
+            self._norms = None
+            self._normed_vectors = None
+            self.fill_norms()
+
         return self
 
     # ---- internal helpers ----
@@ -218,6 +248,12 @@ class Embeddings:
         """
         if fmt not in self._FORMATS:
             raise ValueError(f"Unknown format {fmt!r}; choose from {sorted(self._FORMATS)}")
+        if fmt != "ssdembed" and (self._l2_normalized or self._abtt_m > 0):
+            warnings.warn(
+                f"Saving as .{fmt} — normalization and ABTT metadata will be lost. "
+                "Use .ssdembed format to preserve processing history.",
+                stacklevel=2,
+            )
         if filename is None:
             if self._source_path is None:
                 raise ValueError("filename is required (no source path to derive from)")

@@ -50,16 +50,23 @@ emb = Embeddings.load(path, verbose=False, parallel=False)
 #### Normalize embeddings
 
 ```python
-emb.normalize(l2=True, abtt_m=0, re_normalize=True)
+emb.normalize(l2=True, abtt_m=1, re_normalize=True)
 ```
 
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
-| `l2` | `bool` | `True` | L2-normalize each word vector to unit length |
-| `abtt_m` | `int` | `0` | Remove projection onto top-m principal components (All-But-The-Top). 0 = skip |
+| `l2` | `bool` | `True` | L2-normalize each word vector to unit length. Skipped if already applied. |
+| `abtt_m` | `int` | `1` | Target number of top principal components to remove (ABTT). Absolute: if ABTT was already applied with a smaller m, only the remaining components are removed. 0 = skip. |
 | `re_normalize` | `bool` | `True` | L2-normalize again after ABTT removal |
 
 Returns `self` for chaining.
+
+Processing state is tracked on the instance (`_l2_normalized`, `_abtt_m`) and persisted in `.ssdembed` files:
+- **L2**: skipped if already applied.
+- **ABTT**: absolute target — requesting m=3 on embeddings with m=1 already applied removes 2 more components. Requesting m < current raises `ValueError`. Requesting m == current is a no-op (warning).
+- **`re_normalize`**: only runs if ABTT actually removed components.
+
+> **Note:** Saving to non-`.ssdembed` formats (`.kv`, `.bin`, `.txt`) emits a warning that normalization and ABTT metadata will be lost.
 
 #### Save embeddings
 

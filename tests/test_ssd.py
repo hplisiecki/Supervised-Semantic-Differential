@@ -59,9 +59,8 @@ class TestSSDPLS:
         assert pls_result.beta_unit.ndim == 1
         # beta_unit should be a unit vector
         assert np.linalg.norm(pls_result.beta_unit) == pytest.approx(1.0, abs=1e-6)
-        # r2_adj should exist and be <= r2
-        assert hasattr(pls_result, "r2_adj")
-        assert pls_result.r2_adj <= pls_result.r2 + 1e-12
+        # r2_adj is None for PLS (not meaningful)
+        assert pls_result.r2_adj is None
 
     def test_pls_specific(self, pls_result):
         assert pls_result.n_components == 2

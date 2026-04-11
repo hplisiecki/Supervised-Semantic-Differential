@@ -204,8 +204,8 @@ class _SSDResultBase(_Interpretable):
         _y_scale: np.ndarray,
         beta: np.ndarray,
         r2: float,
-        r2_adj: float,
         pvalue: float,
+        r2_adj: float | None = None,
     ):
         self.kv = kv
         self.lexicon = lexicon
@@ -270,7 +270,10 @@ class _SSDResultBase(_Interpretable):
         lines = [
             f"Docs:  {self.n_kept} kept / {self.n_raw} total ({self.n_dropped} dropped)",
         ]
-        lines.append(f"R² = {self.r2:.4f}   R²_adj = {self.r2_adj:.4f}")
+        if self.r2_adj is not None:
+            lines.append(f"R² = {self.r2:.4f}   R²_adj = {self.r2_adj:.4f}")
+        else:
+            lines.append(f"R² = {self.r2:.4f}")
         lines.append("")
         lines.append("Effect sizes:")
         lines.append(f"  ‖β‖ (SD(y) per +1.0 cos) = {self.beta_norm:.4f}")
@@ -465,6 +468,10 @@ class PLSResult(_SSDResultBase):
         pca_k: int | None = None,
         p_method: str | None = None,
         split_mean_r: float | None = None,
+        random_state: int | None = None,
+        n_perm: int | None = None,
+        n_splits: int | None = None,
+        split_ratio: float | None = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -475,6 +482,10 @@ class PLSResult(_SSDResultBase):
         self.pca_k = pca_k
         self.p_method = p_method
         self.split_mean_r = split_mean_r
+        self.random_state = random_state
+        self.n_perm = n_perm
+        self.n_splits = n_splits
+        self.split_ratio = split_ratio
 
     def summary(self) -> str:
         title = "SSD Model Summary (PLS)"
@@ -548,10 +559,22 @@ class PCAOLSResult(_SSDResultBase):
 
     result_type = "pca_ols"
 
-    def __init__(self, *, n_components: int, sweep_result=None, **kwargs):
+    def __init__(
+        self,
+        *,
+        n_components: int,
+        sweep_result=None,
+        k_min: int | None = None,
+        k_max: int | None = None,
+        k_step: int | None = None,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
         self.n_components = n_components
         self.sweep_result = sweep_result
+        self.k_min = k_min
+        self.k_max = k_max
+        self.k_step = k_step
 
     def plot_sweep(self, path: str | None = None, *, dpi: int = 300) -> bytes:
         """Render the PCA-K sweep plot as a dual-axis chart."""
@@ -562,9 +585,15 @@ class PCAOLSResult(_SSDResultBase):
                 "the PCA-K sweep."
             )
 
-        import io
+        try:
+            import matplotlib.pyplot as plt
+        except ImportError:
+            raise ImportError(
+                "matplotlib is required for plot_sweep(). "
+                "Install it with: pip install ssdiff[plot]"
+            ) from None
 
-        import matplotlib.pyplot as plt
+        import io
 
         rows = self.sweep_result.df_joined
         x = [r["PCA_K"] for r in rows]
@@ -668,6 +697,7 @@ class GroupResult(_Interpretable):
         G: int,
         n_perm: int,
         correction: str,
+        random_state: int | None = None,
         _original_omnibus: dict | None = None,
         _original_group_labels: list | None = None,
     ):
@@ -692,6 +722,7 @@ class GroupResult(_Interpretable):
         self.G = G
         self.n_perm = n_perm
         self.correction = correction
+        self.random_state = random_state
 
         # For filtered results: keep original omnibus for display
         self._original_omnibus = _original_omnibus
