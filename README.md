@@ -1,6 +1,10 @@
 # Supervised Semantic Differential (SSD)
 
-[![PyPI version](https://img.shields.io/pypi/v/ssdiff.svg)](https://pypi.org/project/ssdiff/)
+[![Tests](https://github.com/hplisiecki/Supervised-Semantic-Differential/workflows/Tests/badge.svg)](https://github.com/hplisiecki/Supervised-Semantic-Differential/actions)
+[![PyPI](https://img.shields.io/pypi/v/ssdiff)](https://pypi.org/project/ssdiff/)
+[![Python](https://img.shields.io/pypi/pyversions/ssdiff)](https://pypi.org/project/ssdiff/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
+[![DOI](https://img.shields.io/badge/DOI-10.31234%2Fosf.io%2Fgvrsb__v1-blue)](https://doi.org/10.31234/osf.io/gvrsb_v1)
 
 **SSD** lets you recover **interpretable semantic directions** related to specific concepts directly from open-ended text and relate them to **numeric outcomes**
 (e.g., psychometric scales, judgments) or **categorical groups** (e.g., clinical diagnosis, experimental condition). It builds per-document concept vectors from **local contexts around seed words**,
