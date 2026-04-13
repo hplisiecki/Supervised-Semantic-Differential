@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import namedtuple
+from typing import Literal
 
 import numpy as np
 
@@ -135,7 +136,7 @@ class _Interpretable:
                 out.append({"side": side, "rank": rank, "word": word, "cos": float(cos)})
         return out
 
-    def neighbors(self, side: str = "pos", n: int = 20) -> list[tuple[str, float]]:
+    def neighbors(self, side: Literal["pos", "neg"] = "pos", n: int = 20) -> list[tuple[str, float]]:
         """Top cosine neighbors to +beta (pos) or -beta (neg)."""
         b = self.beta_unit
         vec = b if side == "pos" else -b
@@ -143,7 +144,7 @@ class _Interpretable:
 
     def cluster_neighbors(
         self,
-        side: str = "pos",
+        side: Literal["pos", "neg"] = "pos",
         *,
         topn: int = 100,
         k: int | None = None,
@@ -172,6 +173,42 @@ class _Interpretable:
         return snippets_along_beta(
             pre_docs=pre_docs, ssd=self,
             top_per_side=top_per_side, **kwargs,
+        )
+
+    def cluster_snippets(
+        self,
+        pre_docs,
+        pos_clusters=None,
+        neg_clusters=None,
+        *,
+        top_per_cluster: int = 100,
+        **kwargs,
+    ) -> dict:
+        """Extract text snippets scored against cluster centroids.
+
+        Parameters
+        ----------
+        pre_docs : list[PreprocessedDoc]
+            Preprocessed documents.
+        pos_clusters, neg_clusters : list[dict] | None
+            Cluster dicts from ``cluster_neighbors()``.  If None, falls back
+            to ``self.pos_clusters_raw`` / ``self.neg_clusters_raw`` (set
+            automatically by ``cluster_neighbors()``).
+        top_per_cluster : int
+            Max snippets per cluster (default 100).
+
+        Returns
+        -------
+        dict with 'pos' and 'neg' lists of snippet dicts, each containing
+        a ``centroid_label`` field (e.g. ``"pos_cluster_1"``).
+        """
+        from ssdiff.utils.snippets import cluster_snippets_by_centroids
+        pos = pos_clusters if pos_clusters is not None else getattr(self, "pos_clusters_raw", None)
+        neg = neg_clusters if neg_clusters is not None else getattr(self, "neg_clusters_raw", None)
+        return cluster_snippets_by_centroids(
+            pre_docs=pre_docs, ssd=self,
+            pos_clusters=pos, neg_clusters=neg,
+            top_per_cluster=top_per_cluster, **kwargs,
         )
 
 
@@ -345,7 +382,7 @@ class _SSDResultBase(_Interpretable):
         }
 
     def extreme_docs(
-        self, k: int = 50, by: str = "predicted",
+        self, k: int = 50, by: Literal["predicted", "observed"] = "predicted",
     ) -> list[dict]:
         """Select top-k and bottom-k documents by predicted or observed outcome."""
         if by not in ("predicted", "observed"):
@@ -411,7 +448,7 @@ class _SSDResultBase(_Interpretable):
         )
 
     def misdiagnosed(
-        self, k: int = 20, side: str = "both",
+        self, k: int = 20, side: Literal["both", "over", "under"] = "both",
     ) -> list[dict]:
         """Documents where model predictions diverge most from observed."""
         if side not in ("both", "over", "under"):
@@ -515,7 +552,7 @@ class PLSResult(_SSDResultBase):
         n_splits: int = 50,
         split_ratio: float = 0.5,
         seed: int = 42,
-        method: str = "split",
+        method: Literal["split", "split_cal"] = "split",
         n_perm: int = 200,
     ) -> dict:
         """Split-half significance test."""
@@ -777,7 +814,7 @@ class GroupResult(_Interpretable):
                     })
         return out
 
-    def neighbors(self, side: str = "pos", n: int = 20) -> list[tuple[str, str, float]]:
+    def neighbors(self, side: Literal["pos", "neg"] = "pos", n: int = 20) -> list[tuple[str, str, float]]:
         """Neighbors for all contrasts.
 
         Returns list of (contrast_label, word, cosine) tuples for all pairs.
@@ -795,7 +832,7 @@ class GroupResult(_Interpretable):
 
     def cluster_neighbors(
         self,
-        side: str = "pos",
+        side: Literal["pos", "neg"] = "pos",
         **kwargs,
     ) -> list[dict]:
         """Cluster neighbors for all contrasts.

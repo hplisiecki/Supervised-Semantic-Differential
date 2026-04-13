@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 import numpy as np
 
 from ssdiff.lang_config import get_config
@@ -69,7 +71,7 @@ def cluster_top_neighbors(
     restrict_vocab: int = 50000,
     random_state: int = 2137,
     min_cluster_size: int = 2,
-    side: str = "pos",
+    side: Literal["pos", "neg"] = "pos",
     lang: str = "pl",
 ) -> list[dict]:
     """Cluster top neighbors of +/-beta into interpretable themes.

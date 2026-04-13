@@ -7,6 +7,8 @@ from collections.abc import Iterable, Sequence
 
 import numpy as np
 
+from .math import _categorical_mask
+
 __all__ = [
     "coverage_by_lexicon",
     "suggest_lexicon",
@@ -27,18 +29,48 @@ def _as_float_array(y: Iterable) -> np.ndarray:
     )
 
 
-def _texts_to_token_lists(texts: Sequence) -> list[list[str]]:
+def _to_unit_tokens(unit) -> list[str]:
+    """Convert a single text unit to a flat token list.
+
+    Handles str, list[str], list[list[str]] (profiles), and None.
     """
-    Normalize texts into token lists:
-      - list[list[str]] → passthrough
-      - list[str]       → split on whitespace
+    if unit is None:
+        return []
+    if isinstance(unit, str):
+        return unit.split()
+    if isinstance(unit, (list, tuple)):
+        if not unit:
+            return []
+        first = unit[0]
+        if isinstance(first, str):
+            return list(unit)
+        if isinstance(first, (list, tuple)):
+            out: list[str] = []
+            for post in unit:
+                if isinstance(post, (list, tuple)):
+                    out.extend(t for t in post if isinstance(t, str))
+                elif isinstance(post, str):
+                    out.extend(post.split())
+            return out
+    return str(unit).split()
+
+
+def _texts_to_token_lists(texts: Sequence) -> list[list[str]]:
+    """Batch-convert text units to token lists.
+
+    Fast path for homogeneous str or list[str] inputs;
+    falls back to per-element :func:`_to_unit_tokens` for profiles
+    and mixed inputs.
     """
     if not texts:
         return []
     first = texts[0]
     if isinstance(first, (list, tuple)):
-        return [list(map(str, t)) for t in texts]
-    return [str(t).split() for t in texts]
+        if first and isinstance(first[0], str):
+            return [list(map(str, t)) for t in texts]
+    elif isinstance(first, str):
+        return [str(t).split() for t in texts]
+    return [_to_unit_tokens(t) for t in texts]
 
 
 def _token_sets(texts: Sequence) -> list[set[str]]:
@@ -82,20 +114,6 @@ def _validate_var_type(var_type: str) -> None:
         raise ValueError(
             f"var_type must be 'continuous' or 'categorical', got {var_type!r}"
         )
-
-
-def _categorical_mask(y) -> np.ndarray:
-    """Boolean mask: True for valid categorical entries (not None/NaN/empty)."""
-    arr = np.asarray(y, dtype=object)
-    return np.array(
-        [
-            g is not None
-            and g != ""
-            and (not isinstance(g, float) or np.isfinite(g))
-            for g in arr
-        ],
-        dtype=bool,
-    )
 
 
 def _crosstab(a: np.ndarray, b: np.ndarray) -> tuple[np.ndarray, list, list]:
@@ -547,35 +565,6 @@ def coverage_by_lexicon(
     _validate_var_type(var_type)
     is_categorical = var_type == "categorical"
 
-    # --- small internal adapters (robust to nested inputs) --------------------
-
-    def _to_unit_tokens(unit) -> list[str]:
-        if unit is None:
-            return []
-        if isinstance(unit, str):
-            return unit.split()
-        if isinstance(unit, (list, tuple)):
-            if not unit:
-                return []
-            first = unit[0]
-            if isinstance(first, str):
-                return list(unit)
-            if isinstance(first, (list, tuple)):
-                out: list[str] = []
-                for post in unit:
-                    if isinstance(post, (list, tuple)):
-                        out.extend([t for t in post if isinstance(t, str)])
-                    elif isinstance(post, str):
-                        out.extend(post.split())
-                return out
-        return str(unit).split()
-
-    def _local_texts_to_token_lists(texts_like) -> list[list[str]]:
-        return [_to_unit_tokens(u) for u in texts_like]
-
-    def _local_token_sets(text_lists: list[list[str]]) -> list[set[str]]:
-        return [set(toks) if toks else set() for toks in text_lists]
-
     # --- coerce inputs --------------------------------------------------------
     if isinstance(df_or_texts, dict):
         if not text_col or not score_col:
@@ -588,16 +577,16 @@ def coverage_by_lexicon(
             mask = _categorical_mask(y)
             s = [s[i] for i in range(len(s)) if mask[i]]
             y = y[mask]
-            texts = _local_texts_to_token_lists(s)
+            texts = _texts_to_token_lists(s)
         else:
             y = _as_float_array(df_or_texts[score_col])
             mask = np.isfinite(y)
             s = [s[i] for i in range(len(s)) if mask[i]]
             y = y[mask]
-            texts = _local_texts_to_token_lists(s)
+            texts = _texts_to_token_lists(s)
     elif isinstance(df_or_texts, tuple) and len(df_or_texts) == 2:
         texts, y = df_or_texts
-        texts = _local_texts_to_token_lists(texts)
+        texts = _texts_to_token_lists(texts)
         if is_categorical:
             y = np.asarray(y, dtype=object)
             mask = _categorical_mask(y)
@@ -635,7 +624,7 @@ def coverage_by_lexicon(
 
     # --- prep features --------------------------------------------------------
     lex = [str(w) for w in lexicon]
-    token_sets = _local_token_sets(texts)
+    token_sets = _token_sets(texts)
 
     # presence of ANY lexicon word per unit
     pres_any = np.fromiter(
