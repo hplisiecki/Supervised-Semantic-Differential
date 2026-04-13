@@ -1,7 +1,5 @@
 """Tests for result objects returned by SSD.fit_pls() and SSD.fit_ols()."""
 
-import io
-
 import numpy as np
 import pytest
 
@@ -502,3 +500,67 @@ class TestGroupResultSnippets:
                 contrasts.add(row["contrast"])
         # Should have snippets from multiple contrasts
         assert len(contrasts) >= 1
+
+
+class TestClusterSnippetsOnResult:
+    """_Interpretable.cluster_snippets() integration via real result objects."""
+
+    def test_pls_with_explicit_clusters(self, pls_result, sample_preprocessed_docs):
+        clusters = pls_result.cluster_neighbors("pos", topn=10, k=2)
+        result = pls_result.cluster_snippets(
+            sample_preprocessed_docs,
+            pos_clusters=clusters,
+            neg_clusters=[],
+            top_per_cluster=10,
+        )
+        assert isinstance(result, dict)
+        assert "pos" in result and "neg" in result
+        # neg_clusters=[] → neg side empty
+        assert result["neg"] == []
+
+    def test_pls_falls_back_to_cached_clusters(self, pls_result, sample_preprocessed_docs):
+        # cluster_neighbors() caches on the result object
+        pls_result.cluster_neighbors("pos", topn=10, k=2)
+        pls_result.cluster_neighbors("neg", topn=10, k=2)
+        result = pls_result.cluster_snippets(
+            sample_preprocessed_docs, top_per_cluster=10,
+        )
+        assert isinstance(result, dict)
+        assert "pos" in result and "neg" in result
+
+    def test_pls_empty_clusters_returns_empty(self, pls_result, sample_preprocessed_docs):
+        # Passing empty lists explicitly bypasses any cached clusters
+        result = pls_result.cluster_snippets(
+            sample_preprocessed_docs,
+            pos_clusters=[],
+            neg_clusters=[],
+            top_per_cluster=10,
+        )
+        assert result == {"pos": [], "neg": []}
+
+    def test_pcaols_cluster_snippets(self, pcaols_result, sample_preprocessed_docs):
+        clusters = pcaols_result.cluster_neighbors("pos", topn=10, k=2)
+        result = pcaols_result.cluster_snippets(
+            sample_preprocessed_docs,
+            pos_clusters=clusters,
+            top_per_cluster=10,
+        )
+        assert isinstance(result, dict)
+        assert "pos" in result and "neg" in result
+
+    def test_snippet_dicts_have_centroid_label(self, pls_result, sample_preprocessed_docs):
+        clusters = pls_result.cluster_neighbors("pos", topn=10, k=2)
+        result = pls_result.cluster_snippets(
+            sample_preprocessed_docs,
+            pos_clusters=clusters,
+            top_per_cluster=10,
+        )
+        for row in result["pos"]:
+            assert "centroid_label" in row
+
+    def test_group_result_no_cache(self, group_result_2g, sample_preprocessed_docs):
+        # GroupResult.cluster_neighbors() doesn't cache, so fallback gives empty
+        result = group_result_2g.cluster_snippets(
+            sample_preprocessed_docs, top_per_cluster=10,
+        )
+        assert result == {"pos": [], "neg": []}
