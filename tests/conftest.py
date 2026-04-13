@@ -153,7 +153,7 @@ def large_groups_3() -> np.ndarray:
 
 @pytest.fixture(scope="session")
 def large_docs_3x20() -> list[list[str]]:
-    """60 docs (3 groups × 20) for 3-group tests."""
+    """60 docs (3 groups x 20) for 3-group tests."""
     rng = np.random.default_rng(99)
     return _make_large_docs(60, rng)
 
