@@ -275,6 +275,30 @@ def _precompute_all_docs(
     return [r for r in results if r is not None and r.get("N", 0) > 0]
 
 
+def _parallel_collect(
+    worker,
+    items: list,
+    n_jobs: int,
+    progress: bool = False,
+    desc: str = "",
+) -> list[dict[str, Any]]:
+    """Submit *worker(item)* to a thread pool, collect non-None results."""
+    try:
+        from tqdm.auto import tqdm as _tqdm
+    except Exception:
+        _tqdm = None
+
+    iterator = items
+    if progress and _tqdm is not None and sys.stderr is not None:
+        iterator = _tqdm(iterator, total=len(items), desc=desc)
+
+    with ThreadPoolExecutor(
+        max_workers=(None if n_jobs in (-1, 0, None) else int(n_jobs))
+    ) as ex:
+        futs = [ex.submit(worker, item) for item in iterator]
+        return [r for f in as_completed(futs) if (r := f.result()) is not None]
+
+
 def _collect_all_occurrences(
     doc_arrays: list[dict[str, Any]],
     seeds_set: set[str],
@@ -283,31 +307,11 @@ def _collect_all_occurrences(
     progress: bool = False,
     desc: str = "Snippets: occurrences",
 ) -> list[dict[str, Any]]:
-    """
-    Collect all occurrences from all docs based on seeds_set and token_window.
-    """
-    try:
-        from tqdm.auto import tqdm as _tqdm
-    except Exception:
-        _tqdm = None
-    iterator = doc_arrays
-    if progress and _tqdm is not None and sys.stderr is not None:
-        iterator = _tqdm(iterator, total=len(doc_arrays), desc=desc)
-
-    out: list[dict[str, Any]] = []
-    # Threading again (occ computations are mostly BLAS on arrays)
-    with ThreadPoolExecutor(
-        max_workers=(None if n_jobs in (-1, 0, None) else int(n_jobs))
-    ) as ex:
-        futs = [
-            ex.submit(_collect_occurrences_for_doc, DA, seeds_set, token_window)
-            for DA in iterator
-        ]
-        for f in as_completed(futs):
-            res = f.result()
-            if res is not None:
-                out.append(res)
-    return out
+    """Collect all occurrences from all docs based on seeds_set and token_window."""
+    return _parallel_collect(
+        lambda DA: _collect_occurrences_for_doc(DA, seeds_set, token_window),
+        doc_arrays, n_jobs, progress, desc,
+    )
 
 
 def _collect_sentence_occurrences_for_doc(
@@ -390,32 +394,11 @@ def _collect_sentence_occurrences(
     progress: bool = False,
     desc: str = "Snippets: sentences",
 ) -> list[dict[str, Any]]:
-    """
-    Fallback collector when seeds_set is empty:
-    one occurrence per sentence per doc.
-    """
-    try:
-        from tqdm.auto import tqdm as _tqdm
-    except Exception:
-        _tqdm = None
-
-    iterator = doc_arrays
-    if progress and _tqdm is not None and sys.stderr is not None:
-        iterator = _tqdm(iterator, total=len(doc_arrays), desc=desc)
-
-    out: list[dict[str, Any]] = []
-    with ThreadPoolExecutor(
-        max_workers=(None if n_jobs in (-1, 0, None) else int(n_jobs))
-    ) as ex:
-        futs = [
-            ex.submit(_collect_sentence_occurrences_for_doc, DA, token_window)
-            for DA in iterator
-        ]
-        for f in as_completed(futs):
-            res = f.result()
-            if res is not None:
-                out.append(res)
-    return out
+    """Fallback collector when seeds_set is empty: one occurrence per sentence."""
+    return _parallel_collect(
+        lambda DA: _collect_sentence_occurrences_for_doc(DA, token_window),
+        doc_arrays, n_jobs, progress, desc,
+    )
 
 
 #####################
@@ -482,28 +465,11 @@ def _collect_doc_occurrences(
     progress: bool = False,
     desc: str = "Snippets: docs",
 ) -> list[dict[str, Any]]:
-    """
-    One occurrence per doc/post, based on *whole text*.
-    """
-    try:
-        from tqdm.auto import tqdm as _tqdm
-    except Exception:
-        _tqdm = None
-
-    iterator = doc_arrays
-    if progress and _tqdm is not None and sys.stderr is not None:
-        iterator = _tqdm(iterator, total=len(doc_arrays), desc=desc)
-
-    out: list[dict[str, Any]] = []
-    with ThreadPoolExecutor(
-        max_workers=(None if n_jobs in (-1, 0, None) else int(n_jobs))
-    ) as ex:
-        futs = [ex.submit(_collect_doc_occurrences_for_doc, DA) for DA in iterator]
-        for f in as_completed(futs):
-            res = f.result()
-            if res is not None:
-                out.append(res)
-    return out
+    """One occurrence per doc/post, based on *whole text*."""
+    return _parallel_collect(
+        _collect_doc_occurrences_for_doc,
+        doc_arrays, n_jobs, progress, desc,
+    )
 
 
 ############################

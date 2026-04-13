@@ -5,6 +5,20 @@ from __future__ import annotations
 import numpy as np
 
 
+def _categorical_mask(y) -> np.ndarray:
+    """Boolean mask: True for valid categorical entries (not None/NaN/empty)."""
+    arr = np.asarray(y, dtype=object)
+    return np.array(
+        [
+            g is not None
+            and g != ""
+            and (not isinstance(g, float) or np.isfinite(g))
+            for g in arr
+        ],
+        dtype=bool,
+    )
+
+
 def unit_vector(v: np.ndarray, eps: float = 1e-12) -> np.ndarray:
     """Return unit vector in direction of v, or zero vector if ||v|| < eps."""
     n = float(np.linalg.norm(v))

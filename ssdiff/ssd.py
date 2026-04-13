@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Literal
 
 import numpy as np
 
 from ssdiff.corpus import Corpus
 from ssdiff.embeddings import Embeddings
-from ssdiff.utils.math import f_sf, pca_fit_transform, standardize
+from ssdiff.utils.math import _categorical_mask, f_sf, pca_fit_transform, standardize
 from ssdiff.utils.vectors import build_and_normalize_doc_vectors
 
 
@@ -107,11 +108,7 @@ class SSD:
             y_clean = y_num
         else:
             # For categorical: drop None, "", NaN
-            valid = np.array([
-                v is not None and v != ""
-                and (not isinstance(v, float) or np.isfinite(v))
-                for v in y_raw
-            ], dtype=bool)
+            valid = _categorical_mask(y_raw)
             if not valid.all():
                 docs = [d for d, v in zip(docs, valid) if v]
                 y_raw = y_raw[valid]
@@ -208,7 +205,7 @@ class SSD:
         cv_folds: int = 10,
         use_1se: bool = True,
         pca_preprocess: int | str | None = None,
-        p_method: str | None = "auto",
+        p_method: Literal["auto", "split", "perm", "split_cal"] | None = "auto",
         n_perm: int = 1000,
         n_splits: int = 50,
         split_ratio: float = 0.5,
@@ -315,6 +312,11 @@ class SSD:
         # Fit PLS
         n = X_for_pls.shape[0]
         max_comp = min(n_comp, n - 1, X_for_pls.shape[1])
+        if max_comp < 1:
+            raise ValueError(
+                f"Cannot fit PLS: need at least 2 samples and 1 feature, "
+                f"got n={n}, features={X_for_pls.shape[1]}, requested components={n_comp}"
+            )
         T, P, W, Q, coef = pls1_fit(X_for_pls, ys, max_comp)
         actual_comp = W.shape[1]
 
@@ -495,7 +497,7 @@ class SSD:
         *,
         median_split: bool = False,
         n_perm: int = 5000,
-        correction: str = "holm",
+        correction: Literal["holm", "bonferroni", "fdr_bh", "none"] = "holm",
         random_state: int = 2137,
     ):
         """Fit group comparison using y_kept as group labels.
