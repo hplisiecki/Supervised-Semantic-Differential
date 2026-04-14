@@ -42,9 +42,34 @@ class Embeddings:
         self._norms: np.ndarray | None = None
         self._normed_vectors: np.ndarray | None = None
         self._is_unit_normed: bool = False
-        self._l2_normalized: bool = False
-        self._abtt_m: int = 0
+        self.l2_normalized: bool = False
+        self.abtt_m: int = 0
         self._source_path: str | None = None
+
+    def __getstate__(self) -> dict:
+        state = self.__dict__.copy()
+        # key_to_index is rebuilt from index_to_key on load — skip it to
+        # avoid pickling a ~200 MB dict for large vocabularies.
+        state.pop("key_to_index", None)
+        state.pop("_normed_vectors", None)
+        state.pop("_norms", None)
+        return state
+
+    def __setstate__(self, state: dict) -> None:
+        self.__dict__.update(state)
+        # Migrate old private attribute names from pre-1.0 pickles
+        if hasattr(self, "_l2_normalized") and not hasattr(self, "l2_normalized"):
+            self.l2_normalized = self._l2_normalized
+            del self._l2_normalized
+        if hasattr(self, "_abtt_m") and not hasattr(self, "abtt_m"):
+            self.abtt_m = self._abtt_m
+            del self._abtt_m
+        if not hasattr(self, "key_to_index"):
+            self.key_to_index = {w: i for i, w in enumerate(self.index_to_key)}
+        if not hasattr(self, "_normed_vectors"):
+            self._normed_vectors = None
+        if not hasattr(self, "_norms"):
+            self._norms = None
 
     # ---- construction ----
 
@@ -94,26 +119,26 @@ class Embeddings:
 
         # --- L2 normalization ---
         did_l2 = False
-        if l2 and not self._l2_normalized:
+        if l2 and not self.l2_normalized:
             l2_normalize_rows_inplace(V)
-            self._l2_normalized = True
+            self.l2_normalized = True
             did_l2 = True
 
         # --- ABTT ---
         did_abtt = False
         if abtt_m > 0:
-            if abtt_m < self._abtt_m:
+            if abtt_m < self.abtt_m:
                 raise ValueError(
-                    f"Cannot reduce ABTT from {self._abtt_m} to {abtt_m}. "
+                    f"Cannot reduce ABTT from {self.abtt_m} to {abtt_m}. "
                     "ABTT is irreversible — reload the original embeddings."
                 )
-            if abtt_m == self._abtt_m:
+            if abtt_m == self.abtt_m:
                 warnings.warn(
                     f"ABTT with m={abtt_m} already applied. Skipping.",
                     stacklevel=2,
                 )
             else:
-                delta = abtt_m - self._abtt_m
+                delta = abtt_m - self.abtt_m
                 V -= V.mean(axis=0)
                 gram = V.T @ V
                 eigvals, eigvecs = np.linalg.eigh(gram)
@@ -127,7 +152,7 @@ class Embeddings:
                     for s in range(0, len(V), _CHUNK):
                         e = min(s + _CHUNK, len(V))
                         V[s:e] -= c[s:e, None] * top[j]
-                self._abtt_m = abtt_m
+                self.abtt_m = abtt_m
                 did_abtt = True
 
         # --- Re-normalize after ABTT ---
@@ -149,6 +174,16 @@ class Embeddings:
         """Precompute L2 norms."""
         self._norms = np.sqrt(np.einsum("ij,ij->i", self.vectors, self.vectors))
         self._normed_vectors = None
+
+    @property
+    def vocab_size(self) -> int:
+        """Number of words in the vocabulary."""
+        return len(self.index_to_key)
+
+    @property
+    def dim(self) -> int:
+        """Embedding dimensionality (alias for vector_size)."""
+        return self.vector_size
 
     @property
     def norms(self) -> np.ndarray:
@@ -248,7 +283,7 @@ class Embeddings:
         """
         if fmt not in self._FORMATS:
             raise ValueError(f"Unknown format {fmt!r}; choose from {sorted(self._FORMATS)}")
-        if fmt != "ssdembed" and (self._l2_normalized or self._abtt_m > 0):
+        if fmt != "ssdembed" and (self.l2_normalized or self.abtt_m > 0):
             warnings.warn(
                 f"Saving as .{fmt} — normalization and ABTT metadata will be lost. "
                 "Use .ssdembed format to preserve processing history.",
@@ -618,6 +653,13 @@ def _load_pickle(path: str) -> Embeddings:
             shim.vector_size = shim.vectors.shape[1]
             shim._norms = None
             shim._normed_vectors = None
+        # Migrate old private attribute name from pre-1.0 pickles
+        if hasattr(shim, "_l2_normalized") and not hasattr(shim, "l2_normalized"):
+            shim.l2_normalized = shim._l2_normalized
+            del shim._l2_normalized
+        if not hasattr(shim, "abtt_m") and hasattr(shim, "_abtt_m"):
+            shim.abtt_m = shim._abtt_m
+            del shim._abtt_m
         return shim
 
     # Duck-type: object from another package (e.g. ssdiff.embeddings.Embeddings)

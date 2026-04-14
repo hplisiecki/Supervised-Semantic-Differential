@@ -75,7 +75,7 @@ class SSD:
         if sif_a <= 0:
             raise ValueError(f"sif_a must be > 0, got {sif_a}")
 
-        self.kv = embeddings
+        self.embeddings = embeddings
         self.lexicon = set(lexicon)
         self.window = window
         self.sif_a = sif_a
@@ -182,7 +182,7 @@ class SSD:
         after computing standardization in their fit method.
         """
         return {
-            "kv": self.kv,
+            "embeddings": self.embeddings,
             "lexicon": self.lexicon,
             "window": self.window,
             "sif_a": self.sif_a,
@@ -445,7 +445,7 @@ class SSD:
                 X_scale=X_scale,
                 x=self.x,
                 ys=ys,
-                kv=self.kv,
+                kv=self.embeddings,
                 pca_k_values=list(range(k_min, k_max + 1, k_step)),
                 verbose=verbose,
                 lang=self.lang,
@@ -564,7 +564,7 @@ class SSD:
         )
 
         return GroupResult(
-            kv=self.kv,
+            embeddings=self.embeddings,
             lexicon=self.lexicon,
             window=self.window,
             sif_a=self.sif_a,

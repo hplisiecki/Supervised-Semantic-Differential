@@ -3,7 +3,7 @@
 [![Tests](https://github.com/hplisiecki/Supervised-Semantic-Differential/workflows/Tests/badge.svg)](https://github.com/hplisiecki/Supervised-Semantic-Differential/actions)
 [![PyPI](https://img.shields.io/pypi/v/ssdiff)](https://pypi.org/project/ssdiff/)
 [![Python](https://img.shields.io/pypi/pyversions/ssdiff)](https://pypi.org/project/ssdiff/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![DOI](https://img.shields.io/badge/DOI-10.31234%2Fosf.io%2Fgvrsb__v1-blue)](https://doi.org/10.31234/osf.io/gvrsb_v1)
 
 **SSD** lets you recover **interpretable semantic directions** related to specific concepts directly from open-ended text and relate them to **numeric outcomes**
@@ -610,7 +610,7 @@ All return plain Python types (`list[dict]`, `dict`). No pandas dependency — c
 
 ## Citing & License
 
-- License: MIT (see LICENSE).
+- License: GPL v3 (see LICENSE).
 - If you use SSD in published work, please cite the associated paper.
 - A suggested citation:
 

@@ -59,11 +59,15 @@ class TestResultInterpretation:
 
     def test_doc_scores(self, pls_result):
         scores = pls_result.doc_scores()
-        assert "keep_mask" in scores
+        assert "idx" in scores
         assert "cos_align" in scores
         assert "score_std" in scores
         assert "yhat_raw" in scores
-        assert scores["cos_align"].shape[0] == pls_result.n_kept
+        n = pls_result.n_kept
+        assert scores["idx"].shape[0] == n
+        assert scores["cos_align"].shape[0] == n
+        assert scores["score_std"].shape[0] == n
+        assert scores["yhat_raw"].shape[0] == n
 
 
 class TestResultRepr:
@@ -558,9 +562,11 @@ class TestClusterSnippetsOnResult:
         for row in result["pos"]:
             assert "centroid_label" in row
 
-    def test_group_result_no_cache(self, group_result_2g, sample_preprocessed_docs):
-        # GroupResult.cluster_neighbors() doesn't cache, so fallback gives empty
+    def test_group_result_uses_cached_clusters(self, group_result_2g, sample_preprocessed_docs):
+        # GroupResult.cluster_neighbors() now caches — cluster_snippets() uses cached clusters
+        group_result_2g.cluster_neighbors("pos", topn=10)
+        group_result_2g.cluster_neighbors("neg", topn=10)
         result = group_result_2g.cluster_snippets(
             sample_preprocessed_docs, top_per_cluster=10,
         )
-        assert result == {"pos": [], "neg": []}
+        assert "pos" in result and "neg" in result

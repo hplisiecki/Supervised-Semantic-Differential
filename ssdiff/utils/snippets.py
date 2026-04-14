@@ -560,7 +560,7 @@ def cluster_snippets_by_centroids(
     if global_wc is None or total_tokens is None:
         global_wc, total_tokens = _build_global_sif(pre_docs)
 
-    kv = ssd.kv
+    kv = ssd.embeddings
     seeds_set = set(seeds or getattr(ssd, "lexicon", []))
 
     # targets (cluster centroids)
@@ -702,7 +702,7 @@ def snippets_along_beta(
     if global_wc is None or total_tokens is None:
         global_wc, total_tokens = _build_global_sif(pre_docs)
 
-    kv = ssd.kv
+    kv = ssd.embeddings
     b_unit = unit_vector(getattr(ssd, "beta_unit", ssd.beta))
     seeds_set = set(seeds or getattr(ssd, "lexicon", []))
 

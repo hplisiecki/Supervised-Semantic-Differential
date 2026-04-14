@@ -205,7 +205,7 @@ class TestTopPerGroup:
 class _MockFittedSSD:
     """Minimal duck-typed stand-in for a fitted SSD result."""
     def __init__(self, kv, beta, lexicon):
-        self.kv = kv
+        self.embeddings = kv
         self.beta = beta
         self.beta_unit = beta / np.linalg.norm(beta)
         self.lexicon = lexicon

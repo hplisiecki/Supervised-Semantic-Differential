@@ -8,7 +8,7 @@ version = "1.0.0"
 description = "Supervised Semantic Differential (SSD): interpretable, embedding-based analysis of concept meaning in text."
 readme = "README.md"
 requires-python = ">=3.10,<3.14"
-license = "MIT"
+license = "GPL-3.0-or-later"
 license-files = ["LICENSE"]
 authors = [
   {name = "Hubert Plisiecki", email = "hplisiecki@gmail.com"},
