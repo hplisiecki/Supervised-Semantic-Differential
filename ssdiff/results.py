@@ -11,6 +11,17 @@ from ssdiff.utils.math import unit_vector
 from ssdiff.utils.neighbors import cluster_top_neighbors, filtered_neighbors
 
 # ---------------------------------------------------------------------------
+# Citation
+# ---------------------------------------------------------------------------
+
+CITATION = (
+    "Please cite as: Plisiecki, H., Lenartowicz, P., Pokropek, A., "
+    "Małyska, K., & Flakus, M. (2025). Supervised Semantic Differential: "
+    "Extracting Dimensions of Meaning from Word Embeddings. "
+    "PsyArXiv. https://doi.org/10.31234/osf.io/gvrsb_v1"
+)
+
+# ---------------------------------------------------------------------------
 # Report formatting helpers
 # ---------------------------------------------------------------------------
 
@@ -113,14 +124,22 @@ def _rolling_median(x: np.ndarray, window: int = 7) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 class _Interpretable:
-    """Anything with kv + beta_unit + lang can interpret.
+    """Anything with embeddings + beta_unit + lang can interpret.
 
-    Subclasses must set: kv, beta_unit, lexicon, window, sif_a, lang.
+    Subclasses must set: embeddings, beta_unit, lexicon, window, sif_a, lang.
     """
 
     result_type: str
 
-    def top_words(self, n: int = 20) -> list[dict]:
+    def _require_embeddings(self, method_name: str) -> None:
+        """Raise if embeddings are not attached (needed for fresh computation)."""
+        if self.embeddings is None:
+            raise RuntimeError(
+                f"{method_name}() requires embeddings but none are attached. "
+                f"Re-attach with: result.embeddings = Embeddings.load('path/to/model')"
+            )
+
+    def top_words(self, n: int = 20, *, recompute: bool = False) -> list[dict]:
         """Top neighbor words on both poles of beta.
 
         Returns
@@ -128,24 +147,32 @@ class _Interpretable:
         list[dict]
             Each dict has keys: ``side``, ``rank``, ``word``, ``cos``.
         """
+        if not recompute and self._cached_top_words is not None:
+            if n <= self._cached_top_words_n:
+                return [w for w in self._cached_top_words if w["rank"] <= n]
+            # Requested more than cached — fall through to recompute
+        self._require_embeddings("top_words")
         b = self.beta_unit
         out = []
         for side, vec in [("pos", b), ("neg", -b)]:
-            pairs = filtered_neighbors(self.kv, vec, topn=n, lang=self.lang)
+            pairs = filtered_neighbors(self.embeddings, vec, topn=n, lang=self.lang)
             for rank, (word, cos) in enumerate(pairs, 1):
                 out.append({"side": side, "rank": rank, "word": word, "cos": float(cos)})
+        self._cached_top_words = out
+        self._cached_top_words_n = n
         return out
 
-    def neighbors(self, side: Literal["pos", "neg"] = "pos", n: int = 20) -> list[tuple[str, float]]:
+    def neighbors(self, side: Literal["pos", "neg"] = "pos", n: int = 20,
+                  *, recompute: bool = False) -> list[tuple[str, float]]:
         """Top cosine neighbors to +beta (pos) or -beta (neg)."""
-        b = self.beta_unit
-        vec = b if side == "pos" else -b
-        return filtered_neighbors(self.kv, vec, topn=n, lang=self.lang)
+        words = self.top_words(n=n, recompute=recompute)
+        return [(w["word"], w["cos"]) for w in words if w["side"] == side]
 
     def cluster_neighbors(
         self,
         side: Literal["pos", "neg"] = "pos",
         *,
+        recompute: bool = False,
         topn: int = 100,
         k: int | None = None,
         k_min: int = 2,
@@ -154,33 +181,49 @@ class _Interpretable:
         min_cluster_size: int = 2,
     ) -> list[dict]:
         """Cluster top neighbors into interpretable themes."""
+        attr = "_cached_clusters_pos" if side == "pos" else "_cached_clusters_neg"
+        cached = getattr(self, attr, None)
+        if not recompute and cached is not None:
+            return cached
+        self._require_embeddings("cluster_neighbors")
         b = self.beta_unit
         clusters = cluster_top_neighbors(
-            self.kv, b,
+            self.embeddings, b,
             topn=topn, k=k, k_min=k_min, k_max=k_max,
             random_state=random_state, min_cluster_size=min_cluster_size,
             side=side, lang=self.lang,
         )
-        if side == "pos":
-            self.pos_clusters_raw = clusters
-        else:
-            self.neg_clusters_raw = clusters
+        setattr(self, attr, clusters)
         return clusters
 
-    def snippets(self, pre_docs, *, top_per_side: int = 200, **kwargs) -> dict:
+    def snippets(self, pre_docs=None, *, recompute: bool = False,
+                 top_per_side: int = 200, **kwargs) -> dict:
         """Extract text snippets aligned with beta."""
+        if not recompute and self._cached_snippets is not None:
+            if top_per_side <= self._cached_snippets_top:
+                return self._cached_snippets
+            # Requested more than cached — fall through to recompute
+        if pre_docs is None:
+            if self._cached_snippets is not None:
+                return self._cached_snippets
+            raise ValueError("No cached snippets and no pre_docs provided")
+        self._require_embeddings("snippets")
         from ssdiff.utils.snippets import snippets_along_beta
-        return snippets_along_beta(
+        result = snippets_along_beta(
             pre_docs=pre_docs, ssd=self,
             top_per_side=top_per_side, **kwargs,
         )
+        self._cached_snippets = result
+        self._cached_snippets_top = top_per_side
+        return result
 
     def cluster_snippets(
         self,
-        pre_docs,
+        pre_docs=None,
         pos_clusters=None,
         neg_clusters=None,
         *,
+        recompute: bool = False,
         top_per_cluster: int = 100,
         **kwargs,
     ) -> dict:
@@ -188,12 +231,13 @@ class _Interpretable:
 
         Parameters
         ----------
-        pre_docs : list[PreprocessedDoc]
-            Preprocessed documents.
+        pre_docs : list[PreprocessedDoc] | None
+            Preprocessed documents. If None, returns cached results.
         pos_clusters, neg_clusters : list[dict] | None
             Cluster dicts from ``cluster_neighbors()``.  If None, falls back
-            to ``self.pos_clusters_raw`` / ``self.neg_clusters_raw`` (set
-            automatically by ``cluster_neighbors()``).
+            to cached clusters from prior ``cluster_neighbors()`` calls.
+        recompute : bool
+            If True, force recomputation even when cached.
         top_per_cluster : int
             Max snippets per cluster (default 100).
 
@@ -202,14 +246,26 @@ class _Interpretable:
         dict with 'pos' and 'neg' lists of snippet dicts, each containing
         a ``centroid_label`` field (e.g. ``"pos_cluster_1"``).
         """
+        explicit_clusters = pos_clusters is not None or neg_clusters is not None
+        if not recompute and not explicit_clusters and self._cached_cluster_snippets is not None:
+            if top_per_cluster <= self._cached_cluster_snippets_top:
+                return self._cached_cluster_snippets
+        if pre_docs is None:
+            if not explicit_clusters and self._cached_cluster_snippets is not None:
+                return self._cached_cluster_snippets
+            raise ValueError("No cached cluster_snippets and no pre_docs provided")
+        self._require_embeddings("cluster_snippets")
         from ssdiff.utils.snippets import cluster_snippets_by_centroids
-        pos = pos_clusters if pos_clusters is not None else getattr(self, "pos_clusters_raw", None)
-        neg = neg_clusters if neg_clusters is not None else getattr(self, "neg_clusters_raw", None)
-        return cluster_snippets_by_centroids(
+        pos = pos_clusters if pos_clusters is not None else self._cached_clusters_pos
+        neg = neg_clusters if neg_clusters is not None else self._cached_clusters_neg
+        result = cluster_snippets_by_centroids(
             pre_docs=pre_docs, ssd=self,
             pos_clusters=pos, neg_clusters=neg,
             top_per_cluster=top_per_cluster, **kwargs,
         )
+        self._cached_cluster_snippets = result
+        self._cached_cluster_snippets_top = top_per_cluster
+        return result
 
 
 # ---------------------------------------------------------------------------
@@ -220,13 +276,13 @@ class _SSDResultBase(_Interpretable):
     """Shared base for regression-type SSD results.
 
     Duck-types with what snippets_along_beta expects:
-    .kv, .beta_unit, .beta, .lexicon, .window, .sif_a
+    .embeddings, .beta_unit, .beta, .lexicon, .window, .sif_a
     """
 
     def __init__(
         self,
         *,
-        kv,
+        embeddings,
         lexicon: set,
         window: int,
         sif_a: float,
@@ -244,7 +300,7 @@ class _SSDResultBase(_Interpretable):
         pvalue: float,
         r2_adj: float | None = None,
     ):
-        self.kv = kv
+        self.embeddings = embeddings
         self.lexicon = lexicon
         self.window = window
         self.sif_a = sif_a
@@ -269,9 +325,15 @@ class _SSDResultBase(_Interpretable):
         self.beta_unit = unit_vector(beta)
         self.beta_norm = float(np.linalg.norm(beta))
 
-        # Cluster placeholders
-        self.pos_clusters_raw = None
-        self.neg_clusters_raw = None
+        # Cache slots (set by interpretation methods, included in pickle)
+        self._cached_top_words: list[dict] | None = None
+        self._cached_top_words_n: int = 0
+        self._cached_clusters_pos: list[dict] | None = None
+        self._cached_clusters_neg: list[dict] | None = None
+        self._cached_snippets: dict | None = None
+        self._cached_snippets_top: int = 0
+        self._cached_cluster_snippets: dict | None = None
+        self._cached_cluster_snippets_top: int = 0
 
         # Effect sizes
         self._compute_effect_sizes()
@@ -365,6 +427,9 @@ class _SSDResultBase(_Interpretable):
             if docs:
                 parts.append(_fmt_misdiagnosed(docs, misdiagnosed))
 
+        parts.append("─" * 50)
+        parts.append(CITATION)
+
         text = "\n".join(parts)
         print(text)
         return text
@@ -375,7 +440,7 @@ class _SSDResultBase(_Interpretable):
         yhat_raw = self.y_mean + self.y_std * score_std
 
         return {
-            "keep_mask": self.keep_mask.copy(),
+            "idx": np.where(self.keep_mask)[0],
             "cos_align": self.cos_align.copy(),
             "score_std": score_std,
             "yhat_raw": yhat_raw,
@@ -484,6 +549,26 @@ class _SSDResultBase(_Interpretable):
             under_idx = _top_k_by(-residual, k)
             out.extend(_build(under_idx, "under"))
         return out
+
+    def save(self, path) -> None:
+        """Save result to pickle, stripping large recomputable objects.
+
+        Keeps: beta, statistics, cached interpretation data, x.
+        Strips: embeddings (reload from file), perm_null, sweep_result, cv_result.
+
+        Cached interpretation (top_words, clusters, snippets) is included —
+        the loaded result can serve these from cache without embeddings.
+        To recompute, re-attach embeddings and call with recompute=True.
+        """
+        import copy
+        import pickle
+        stripped = copy.copy(self)
+        stripped.embeddings = None
+        for attr in ("perm_null", "sweep_result", "cv_result"):
+            if hasattr(stripped, attr):
+                setattr(stripped, attr, None)
+        with open(path, "wb") as f:
+            pickle.dump(stripped, f, protocol=pickle.HIGHEST_PROTOCOL)
 
 
 # ---------------------------------------------------------------------------
@@ -699,7 +784,7 @@ class PCAOLSResult(_SSDResultBase):
 # ---------------------------------------------------------------------------
 
 _ContrastProxy = namedtuple(
-    "_ContrastProxy", "kv beta_unit beta lexicon window sif_a lang x",
+    "_ContrastProxy", "embeddings beta_unit beta lexicon window sif_a lang x",
 )
 
 
@@ -715,7 +800,7 @@ class GroupResult(_Interpretable):
     def __init__(
         self,
         *,
-        kv,
+        embeddings,
         lexicon: set,
         window: int,
         sif_a: float,
@@ -738,7 +823,7 @@ class GroupResult(_Interpretable):
         _original_omnibus: dict | None = None,
         _original_group_labels: list | None = None,
     ):
-        self.kv = kv
+        self.embeddings = embeddings
         self.lexicon = lexicon
         self.window = window
         self.sif_a = sif_a
@@ -765,9 +850,15 @@ class GroupResult(_Interpretable):
         self._original_omnibus = _original_omnibus
         self._original_group_labels = _original_group_labels
 
-        # No cluster caching for GroupResult
-        self.pos_clusters_raw = None
-        self.neg_clusters_raw = None
+        # Cache slots (set by interpretation methods, included in pickle)
+        self._cached_top_words: list[dict] | None = None
+        self._cached_top_words_n: int = 0
+        self._cached_clusters_pos: list[dict] | None = None
+        self._cached_clusters_neg: list[dict] | None = None
+        self._cached_snippets: dict | None = None
+        self._cached_snippets_top: int = 0
+        self._cached_cluster_snippets: dict | None = None
+        self._cached_cluster_snippets_top: int = 0
 
         # beta_unit not meaningful for multi-contrast — set to None
         # Interpretation methods override to loop over pairs
@@ -779,7 +870,7 @@ class GroupResult(_Interpretable):
         """Build a lightweight proxy for a single contrast."""
         pair = self.pairwise[pair_key]
         return _ContrastProxy(
-            kv=self.kv,
+            embeddings=self.embeddings,
             beta_unit=pair["beta_unit"],
             beta=pair["beta_unit"],
             lexicon=self.lexicon,
@@ -792,18 +883,22 @@ class GroupResult(_Interpretable):
     def _contrast_label(self, pair_key) -> str:
         return f"{pair_key[0]} vs {pair_key[1]}"
 
-    def top_words(self, n: int = 20) -> list[dict]:
+    def top_words(self, n: int = 20, *, recompute: bool = False) -> list[dict]:
         """Top neighbor words for all contrasts.
 
         Returns list[dict] with added ``contrast`` key.
         """
+        if not recompute and self._cached_top_words is not None:
+            if n <= self._cached_top_words_n:
+                return [w for w in self._cached_top_words if w["rank"] <= n]
+        self._require_embeddings("top_words")
         out = []
         for pair_key in self.pairwise:
             proxy = self._make_proxy(pair_key)
             label = self._contrast_label(pair_key)
             b = proxy.beta_unit
             for side, vec in [("pos", b), ("neg", -b)]:
-                pairs = filtered_neighbors(proxy.kv, vec, topn=n, lang=proxy.lang)
+                pairs = filtered_neighbors(proxy.embeddings, vec, topn=n, lang=proxy.lang)
                 for rank, (word, cos) in enumerate(pairs, 1):
                     out.append({
                         "contrast": label,
@@ -812,51 +907,63 @@ class GroupResult(_Interpretable):
                         "word": word,
                         "cos": float(cos),
                     })
+        self._cached_top_words = out
+        self._cached_top_words_n = n
         return out
 
-    def neighbors(self, side: Literal["pos", "neg"] = "pos", n: int = 20) -> list[tuple[str, str, float]]:
+    def neighbors(self, side: Literal["pos", "neg"] = "pos", n: int = 20,
+                  *, recompute: bool = False) -> list[tuple[str, str, float]]:
         """Neighbors for all contrasts.
 
         Returns list of (contrast_label, word, cosine) tuples for all pairs.
         """
-        out: list[tuple[str, str, float]] = []
-        for pair_key in self.pairwise:
-            proxy = self._make_proxy(pair_key)
-            b = proxy.beta_unit
-            vec = b if side == "pos" else -b
-            nbrs = filtered_neighbors(proxy.kv, vec, topn=n, lang=proxy.lang)
-            label = self._contrast_label(pair_key)
-            for word, cos in nbrs:
-                out.append((label, word, cos))
-        return out
+        words = self.top_words(n=n, recompute=recompute)
+        return [(w["contrast"], w["word"], w["cos"]) for w in words if w["side"] == side]
 
     def cluster_neighbors(
         self,
         side: Literal["pos", "neg"] = "pos",
+        *,
+        recompute: bool = False,
         **kwargs,
     ) -> list[dict]:
         """Cluster neighbors for all contrasts.
 
-        Returns list[dict] with added ``contrast`` key. No caching.
+        Returns list[dict] with added ``contrast`` key.
         """
+        attr = "_cached_clusters_pos" if side == "pos" else "_cached_clusters_neg"
+        cached = getattr(self, attr, None)
+        if not recompute and cached is not None:
+            return cached
+        self._require_embeddings("cluster_neighbors")
         out = []
         for pair_key in self.pairwise:
             proxy = self._make_proxy(pair_key)
             label = self._contrast_label(pair_key)
             clusters = cluster_top_neighbors(
-                proxy.kv, proxy.beta_unit,
+                proxy.embeddings, proxy.beta_unit,
                 side=side, lang=proxy.lang, **kwargs,
             )
             for c in clusters:
                 c["contrast"] = label
                 out.append(c)
+        setattr(self, attr, out)
         return out
 
-    def snippets(self, pre_docs, *, top_per_side: int = 200, **kwargs) -> dict:
+    def snippets(self, pre_docs=None, *, recompute: bool = False,
+                 top_per_side: int = 200, **kwargs) -> dict:
         """Snippets for all contrasts.
 
         Returns dict with ``contrast`` key added to each snippet dict.
         """
+        if not recompute and self._cached_snippets is not None:
+            if top_per_side <= self._cached_snippets_top:
+                return self._cached_snippets
+        if pre_docs is None:
+            if self._cached_snippets is not None:
+                return self._cached_snippets
+            raise ValueError("No cached snippets and no pre_docs provided")
+        self._require_embeddings("snippets")
         from ssdiff.utils.snippets import snippets_along_beta
 
         all_pos, all_neg = [], []
@@ -873,7 +980,78 @@ class GroupResult(_Interpretable):
             for s in result.get("neg", []):
                 s["contrast"] = label
                 all_neg.append(s)
-        return {"pos": all_pos, "neg": all_neg}
+        out = {"pos": all_pos, "neg": all_neg}
+        self._cached_snippets = out
+        self._cached_snippets_top = top_per_side
+        return out
+
+    def cluster_snippets(
+        self,
+        pre_docs=None,
+        pos_clusters=None,
+        neg_clusters=None,
+        *,
+        recompute: bool = False,
+        top_per_cluster: int = 100,
+        **kwargs,
+    ) -> dict:
+        """Cluster snippets for all contrasts.
+
+        Returns dict with ``contrast`` key added to each snippet dict.
+        """
+        explicit_clusters = pos_clusters is not None or neg_clusters is not None
+        if not recompute and not explicit_clusters and self._cached_cluster_snippets is not None:
+            if top_per_cluster <= self._cached_cluster_snippets_top:
+                return self._cached_cluster_snippets
+        if pre_docs is None:
+            if not explicit_clusters and self._cached_cluster_snippets is not None:
+                return self._cached_cluster_snippets
+            raise ValueError("No cached cluster_snippets and no pre_docs provided")
+        self._require_embeddings("cluster_snippets")
+        from ssdiff.utils.snippets import cluster_snippets_by_centroids
+
+        all_pos, all_neg = [], []
+        for pair_key in self.pairwise:
+            proxy = self._make_proxy(pair_key)
+            label = self._contrast_label(pair_key)
+            # Filter cached clusters belonging to this contrast
+            pos_c = pos_clusters or [
+                c for c in (self._cached_clusters_pos or [])
+                if c.get("contrast") == label
+            ]
+            neg_c = neg_clusters or [
+                c for c in (self._cached_clusters_neg or [])
+                if c.get("contrast") == label
+            ]
+            if not pos_c and not neg_c:
+                continue
+            result = cluster_snippets_by_centroids(
+                pre_docs=pre_docs, ssd=proxy,
+                pos_clusters=pos_c, neg_clusters=neg_c,
+                top_per_cluster=top_per_cluster, **kwargs,
+            )
+            for s in result.get("pos", []):
+                s["contrast"] = label
+                all_pos.append(s)
+            for s in result.get("neg", []):
+                s["contrast"] = label
+                all_neg.append(s)
+        out = {"pos": all_pos, "neg": all_neg}
+        self._cached_cluster_snippets = out
+        self._cached_cluster_snippets_top = top_per_cluster
+        return out
+
+    def save(self, path) -> None:
+        """Save result to pickle, stripping embeddings.
+
+        Cached interpretation (top_words, clusters, snippets) is included.
+        """
+        import copy
+        import pickle
+        stripped = copy.copy(self)
+        stripped.embeddings = None
+        with open(path, "wb") as f:
+            pickle.dump(stripped, f, protocol=pickle.HIGHEST_PROTOCOL)
 
     # ── Results access ────────────────────────────────────────
 
@@ -933,7 +1111,7 @@ class GroupResult(_Interpretable):
         groups_filtered = self.groups_kept[mask]
 
         return GroupResult(
-            kv=self.kv,
+            embeddings=self.embeddings,
             lexicon=self.lexicon,
             window=self.window,
             sif_a=self.sif_a,
@@ -1048,7 +1226,7 @@ class GroupResult(_Interpretable):
                 words = []
                 b = proxy.beta_unit
                 for side, vec in [("pos", b), ("neg", -b)]:
-                    pairs = filtered_neighbors(proxy.kv, vec, topn=top_words, lang=proxy.lang)
+                    pairs = filtered_neighbors(proxy.embeddings, vec, topn=top_words, lang=proxy.lang)
                     for rank, (word, cos) in enumerate(pairs, 1):
                         words.append({"side": side, "rank": rank, "word": word, "cos": float(cos)})
                 parts.append(_fmt_top_words(words, top_words).replace(
@@ -1059,7 +1237,7 @@ class GroupResult(_Interpretable):
             if clusters is not None:
                 for side in ("pos", "neg"):
                     cl = cluster_top_neighbors(
-                        proxy.kv, proxy.beta_unit,
+                        proxy.embeddings, proxy.beta_unit,
                         topn=clusters, side=side, lang=proxy.lang,
                     )
                     if cl:
@@ -1069,6 +1247,9 @@ class GroupResult(_Interpretable):
                             f"Clusters: {label} ({'+'  if side == 'pos' else '−'}β",
                         )
                         parts.append(header)
+
+        parts.append("─" * 50)
+        parts.append(CITATION)
 
         text = "\n".join(parts)
         print(text)
