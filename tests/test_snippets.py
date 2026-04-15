@@ -231,7 +231,7 @@ class TestSnippetsAlongBeta:
             token_window=3,
             top_per_side=10,
             n_jobs=1,
-            progress=False,
+            verbose=False,
         )
         assert isinstance(result, dict)
         assert "pos" in result
@@ -244,7 +244,7 @@ class TestSnippetsAlongBeta:
             token_window=3,
             top_per_side=10,
             n_jobs=1,
-            progress=False,
+            verbose=False,
         )
         expected_keys = {
             "side_label", "profile_id", "post_id", "cosine", "seed",
@@ -262,7 +262,7 @@ class TestSnippetsAlongBeta:
             token_window=3,
             top_per_side=10,
             n_jobs=1,
-            progress=False,
+            verbose=False,
         )
         cosines = [r["cosine"] for r in result["pos"]]
         assert cosines == sorted(cosines, reverse=True)
@@ -276,7 +276,7 @@ class TestSnippetsAlongBeta:
             top_per_side=10,
             min_cosine=0.999,
             n_jobs=1,
-            progress=False,
+            verbose=False,
         )
         # All returned cosines should be >= threshold
         for row in result["pos"]:
@@ -288,7 +288,7 @@ class TestSnippetsAlongBeta:
             ssd=mock_ssd,
             token_window=3,
             n_jobs=1,
-            progress=False,
+            verbose=False,
         )
         assert result == {"pos": [], "neg": []}
 
@@ -303,7 +303,7 @@ class TestSnippetsAlongBeta:
             token_window=3,
             top_per_side=10,
             n_jobs=1,
-            progress=False,
+            verbose=False,
         )
         assert isinstance(result, dict)
         # Should still produce results from sentence fallback
@@ -337,7 +337,7 @@ class TestClusterSnippetsByCentroids:
             token_window=3,
             top_per_cluster=10,
             n_jobs=1,
-            progress=False,
+            verbose=False,
         )
         assert isinstance(result, dict)
         assert "pos" in result
@@ -352,7 +352,7 @@ class TestClusterSnippetsByCentroids:
             token_window=3,
             top_per_cluster=10,
             n_jobs=1,
-            progress=False,
+            verbose=False,
         )
         expected_keys = {
             "centroid_label", "profile_id", "post_id", "cosine", "seed",
@@ -370,7 +370,7 @@ class TestClusterSnippetsByCentroids:
             neg_clusters=None,
             token_window=3,
             n_jobs=1,
-            progress=False,
+            verbose=False,
         )
         assert result == {"pos": [], "neg": []}
 
@@ -382,6 +382,6 @@ class TestClusterSnippetsByCentroids:
             neg_clusters=None,
             token_window=3,
             n_jobs=1,
-            progress=False,
+            verbose=False,
         )
         assert result == {"pos": [], "neg": []}

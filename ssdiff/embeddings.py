@@ -84,7 +84,11 @@ class Embeddings:
         path : str
             Path to the embedding file.
         verbose : bool, default False
-            If True, print progress information while loading.
+            If True, show a tqdm progress bar while loading (requires
+            ``tqdm``; silently ignored if not installed).  Effective for
+            serial text (.txt/.vec) and binary (.bin) formats where the
+            vocabulary size is known.  Ignored for pickle-based formats
+            (.ssdembed, .kv) and parallel text loading.
         parallel : bool, default False
             If True, use multiprocess loading for .txt/.vec files.
             Ignored for other formats.
@@ -532,6 +536,8 @@ def _load_text(path: str, binary: bool = False, verbose: bool = False, parallel:
         return Embeddings(all_words, mat)
 
     # Serial path
+    from ssdiff.utils import _progress
+
     words: list[str] = []
     capacity = total if has_header else 100_000
     mat = np.empty((capacity, dim), dtype=np.float32)
@@ -547,7 +553,8 @@ def _load_text(path: str, binary: bool = False, verbose: bool = False, parallel:
             row = 1
             f.readline()  # skip first line (already processed above)
 
-        for line in f:
+        lines = _progress(f, verbose=verbose, total=total, desc="Loading embeddings")
+        for line in lines:
             sp = line.find(" ")
             if sp < 0:
                 continue
@@ -564,6 +571,8 @@ def _load_text(path: str, binary: bool = False, verbose: bool = False, parallel:
 
 def _load_word2vec_binary(path: str, is_gz: bool = False, verbose: bool = False) -> Embeddings:
     """Load word2vec binary format (.bin)."""
+    from ssdiff.utils import _progress
+
     opener = gzip.open if is_gz else open
     words: list[str] = []
 
@@ -572,7 +581,8 @@ def _load_word2vec_binary(path: str, is_gz: bool = False, verbose: bool = False)
         vocab_size, dim = (int(x) for x in header.split())
 
         mat = np.empty((vocab_size, dim), dtype=np.float32)
-        for i in range(vocab_size):
+        for i in _progress(range(vocab_size), verbose=verbose,
+                           total=vocab_size, desc="Loading embeddings"):
             word_bytes = bytearray()
             while True:
                 ch = f.read(1)

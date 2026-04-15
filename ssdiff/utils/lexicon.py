@@ -518,12 +518,12 @@ def token_presence_stats(
         effect_direction=direction,
     )
 
-    if verbose:
-        print(
-            f"[token] '{token}': "
-            f"freq={frequency} | assoc={association:.3f} | "
-            f"p={pvalue:.4g} | dir={direction}"
-        )
+    from ssdiff.utils import _diagnostic
+    _diagnostic(verbose,
+        f"[token] '{token}': "
+        f"freq={frequency} | assoc={association:.3f} | "
+        f"p={pvalue:.4g} | dir={direction}"
+    )
 
     return [out]
 
@@ -740,30 +740,15 @@ def coverage_by_lexicon(
     if is_categorical:
         summary["group_cov"] = group_cov_any
 
-    if verbose:
-        print("[lexicon] summary:")
-        print(
-            f"  texts={len(texts)} | lexicon_size={len(lex)} | "
-            f"docs_any={docs_any} | cov_all={overall:.3f} | "
-            f"q1={q1:.3f} | q4={q4:.3f} | corr_any={corr_any:.3f}"
-        )
-        if is_categorical:
-            parts = " | ".join(
-                f"{g}={v:.3f}" for g, v in group_cov_any.items()
-            )
-            print(f"  group_cov: {parts}")
-        print(
-            f"  hits_mean={hits_mean:.2f} | hits_median={hits_median:.2f} | "
-            f"types_mean={types_mean:.2f} | types_median={types_median:.2f}"
-        )
-        if rows:
-            print("\n  per-token:")
-            for r in rows[:10]:
-                print(
-                    f"    {r['token']:>20s}  freq={r['frequency']:>5d}  "
-                    f"assoc={r['association']:.3f}  p={r['pvalue']:.4g}  "
-                    f"dir={r['effect_direction']}"
-                )
-        print("-" * 72)
+    from ssdiff.utils import _diagnostic
+    msg = (
+        f"[lexicon] texts={len(texts)} | lexicon_size={len(lex)} | "
+        f"docs_any={docs_any} | cov_all={overall:.3f} | "
+        f"q1={q1:.3f} | q4={q4:.3f} | corr_any={corr_any:.3f}"
+    )
+    if is_categorical:
+        parts = " | ".join(f"{g}={v:.3f}" for g, v in group_cov_any.items())
+        msg += f" | group_cov: {parts}"
+    _diagnostic(verbose, msg)
 
     return summary, rows

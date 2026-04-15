@@ -28,6 +28,7 @@ from ssdiff.backends._sweep_math import (
 from ssdiff.backends._sweep_math import (
     zscore_ignore_nan as _zscore_ignore_nan,
 )
+from ssdiff.utils import _diagnostic
 from ssdiff.utils.math import unit_vector
 from ssdiff.utils.neighbors import cluster_top_neighbors
 
@@ -96,7 +97,7 @@ def pca_sweep(
     save_tables: bool = False,
     out_dir: str | None = None,
     prefix: str = "pca_k",
-    verbose: bool = True,
+    verbose: bool = False,
     lang: str = "pl",
 ) -> PCAKSelectionResult:
     """Single-pass sweep over PCA_K on pre-standardized doc vectors.
@@ -135,7 +136,8 @@ def pca_sweep(
     prefix : str
         File name prefix for output files.
     verbose : bool
-        Print progress.
+        If True, show a tqdm progress bar over K values and print
+        diagnostic messages (skipped K, best-K summary, saved files).
 
     Returns
     -------
@@ -159,9 +161,10 @@ def pca_sweep(
     explained_var_full = (S_full ** 2) / (n - 1)
     total_var_full = float(explained_var_full.sum())
 
-    for K in pca_k_values:
-        if verbose:
-            print(f"  [pca_sweep] PCA_K={K}")
+    from ssdiff.utils import _progress
+
+    for K in _progress(pca_k_values, verbose=verbose,
+                       total=len(pca_k_values), desc="PCA sweep"):
 
         try:
             max_k = min(K, n - 1, D)
@@ -226,8 +229,7 @@ def pca_sweep(
             ))
 
         except (np.linalg.LinAlgError, ValueError) as e:
-            if verbose:
-                print(f"    [skip] PCA_K={K} failed: {type(e).__name__}: {e}")
+            _diagnostic(verbose, f"[sweep] PCA_K={K} skipped: {type(e).__name__}: {e}")
             rows.append(dict(
                 PCA_K=int(K),
                 var_explained=np.nan,
@@ -287,13 +289,7 @@ def pca_sweep(
     tied = ks[np.isclose(joint_vals, best_val, rtol=0, atol=1e-12)]
     best_k = int(np.min(tied))
 
-    if verbose:
-        print("\n=== BEST PCA_K (JOINT AUCK, single-pass) ===")
-        print(f"PCA_K        : {best_k}")
-        print(f"joint_score  : {best_val:.6f}")
-        best_row = next(r for r in rows if r["PCA_K"] == best_k)
-        print(f"interp_auck  : {best_row['interp_auck']:.6f}")
-        print(f"stab_auck_raw: {best_row['stab_auck_raw']:.6f}")
+    _diagnostic(verbose, f"[sweep] best PCA_K={best_k} (joint={best_val:.4f})")
 
     # --- Optional table output ---
     if save_tables and out_dir is not None:
@@ -309,7 +305,6 @@ def pca_sweep(
         os.makedirs(out_dir, exist_ok=True)
         out_xlsx = os.path.join(out_dir, f"{prefix}_pca_k_joint_auck_table.xlsx")
         pd.DataFrame(rows).to_excel(out_xlsx, index=False)
-        if verbose:
-            print(f"Saved table -> {out_xlsx}")
+        _diagnostic(verbose, f"[sweep] saved table -> {out_xlsx}")
 
     return PCAKSelectionResult(best_k=best_k, df_joined=rows)
