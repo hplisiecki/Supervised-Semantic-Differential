@@ -126,7 +126,7 @@ def pls1_cv_select(
         If True, select the smallest k within 1 SE of the best
         (parsimonious model selection).
     verbose : bool, default False
-        Print progress.
+        If True, print a diagnostic summary of the selected component.
     pca_k : int or None, default None
         If set, apply PCA dimensionality reduction (to *pca_k* components)
         inside each CV fold before fitting PLS.  This ensures the CV
@@ -203,6 +203,9 @@ def pls1_cv_select(
         best_k = max(valid, key=valid.get)
         best_r2 = valid[best_k]
 
+    from ssdiff.utils import _diagnostic
+    _diagnostic(verbose, f"[cv] n_components={best_k} (CV R²={best_r2:.4f})")
+
     return PLSCVResult(
         best_n_components=best_k,
         cv_scores=cv_scores,
@@ -275,7 +278,7 @@ def pls1_permutation_test(
     seed : int or None
         Random seed.
     verbose : bool, default False
-        Print progress.
+        If True, show a tqdm progress bar over permutations.
     pca_k : int or None
         Optional PCA preprocessing before PLS.
 
@@ -298,14 +301,19 @@ def pls1_permutation_test(
 
     cv_r2_obs = _pls1_cv_r2(X, y, n_components, n_folds, fold_indices, pca_k=pca_k)
 
+    from ssdiff.utils import _progress
+
     cv_r2_null = np.empty(n_perm, dtype=np.float64)
-    for i in range(n_perm):
+    for i in _progress(range(n_perm), verbose=verbose, total=n_perm,
+                       desc="Permutation test"):
         y_perm = rng.permutation(y)
         cv_r2_null[i] = _pls1_cv_r2(X, y_perm, n_components, n_folds, fold_indices, pca_k=pca_k)
-        if verbose and (i + 1) % 100 == 0:
-            print(f"  [perm] {i + 1}/{n_perm}")
 
     p_perm = float((np.sum(cv_r2_null >= cv_r2_obs) + 1) / (n_perm + 1))
+
+    from ssdiff.utils import _diagnostic
+    _diagnostic(verbose, f"[perm] p={p_perm:.4g} (observed CV R²={cv_r2_obs:.4f}, {n_perm} perms)")
+
     return p_perm, cv_r2_obs, cv_r2_null
 
 
@@ -375,6 +383,7 @@ def pls1_split_test(
     split_ratio: float = 0.5,
     seed: int | None = None,
     pca_k: int | None = None,
+    verbose: bool = False,
 ) -> tuple[float, float]:
     """Split-half significance test for PLS1 with overlap-corrected t-test.
 
@@ -424,6 +433,10 @@ def pls1_split_test(
         p_split = t_sf(t_stat, float(n_splits - 1))
 
     mean_r = float(np.tanh(z_mean))
+
+    from ssdiff.utils import _diagnostic
+    _diagnostic(verbose, f"[split] p={p_split:.4g}, mean r={mean_r:.4f} ({n_splits} splits)")
+
     return p_split, mean_r
 
 
@@ -473,10 +486,14 @@ def pls1_split_test_calibrated(
     _CHECK_EVERY = 25
     _Z99 = 2.576  # z for 99 % two-sided CI
 
+    from ssdiff.utils import _progress
+
     exceedances = 0
     m = 0  # permutations completed
 
-    for m in range(1, n_perm + 1):
+    perm_iter = _progress(range(1, n_perm + 1), verbose=verbose,
+                          total=n_perm, desc="Calibrated permutation")
+    for m in perm_iter:
         y_perm = rng.permutation(y)
         r_null = _split_half_correlations(
             X, y_perm, n_components, n_splits, split_ratio, rng, pca_k,
@@ -492,9 +509,10 @@ def pls1_split_test_calibrated(
                            or p_est + _Z99 * se < early_stop_alpha):
                 break
 
-        if verbose and m % 50 == 0:
-            print(f"  [cal-perm] {m}/{n_perm}  (exc={exceedances})")
-
     # Phipson & Smyth (2010)
     p_cal = float((exceedances + 1) / (m + 1))
+
+    from ssdiff.utils import _diagnostic
+    _diagnostic(verbose, f"[split_cal] p={p_cal:.4g}, mean r={mean_r_obs:.4f} ({m}/{n_perm} perms)")
+
     return p_cal, mean_r_obs

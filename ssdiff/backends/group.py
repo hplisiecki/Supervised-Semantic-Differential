@@ -181,6 +181,7 @@ def unified_permutation_test(
     n_perm: int = 5000,
     correction: str = "holm",
     random_state: int = 2137,
+    verbose: bool = False,
 ) -> dict:
     """Run omnibus + all pairwise permutation tests in a single pass.
 
@@ -220,12 +221,15 @@ def unified_permutation_test(
     T_omnibus_obs = float(T_pairwise_obs.mean()) if n_pairs > 0 else 0.0
 
     # --- Permutation loop (single pass) ---
+    from ssdiff.utils import _progress
+
     rng = np.random.default_rng(random_state)
     null_omnibus = np.empty(n_perm, dtype=np.float64)
     null_pairwise = np.empty((n_perm, n_pairs), dtype=np.float64)
 
     perm_group_idx = group_idx.copy()
-    for p in range(n_perm):
+    for p in _progress(range(n_perm), verbose=verbose, total=n_perm,
+                       desc="Group permutation test"):
         rng.shuffle(perm_group_idx)
         centroids_perm = _compute_centroids_matrix(x, perm_group_idx, G)
         for k, (ia, ib) in enumerate(pair_int):
@@ -236,7 +240,10 @@ def unified_permutation_test(
         null_omnibus[p] = float(null_pairwise[p].mean()) if n_pairs > 0 else 0.0
 
     # --- P-values ---
+    from ssdiff.utils import _diagnostic
+
     omnibus_p = float((np.sum(null_omnibus >= T_omnibus_obs) + 1) / (n_perm + 1))
+    _diagnostic(verbose, f"[groups] omnibus p={omnibus_p:.4g} ({G} groups, {n_perm} perms)")
 
     p_raw_arr = np.empty(n_pairs, dtype=np.float64)
     for k in range(n_pairs):

@@ -7,7 +7,6 @@ Mathematical logic is identical.
 """
 from __future__ import annotations
 
-import sys
 from collections.abc import Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
@@ -279,18 +278,13 @@ def _parallel_collect(
     worker,
     items: list,
     n_jobs: int,
-    progress: bool = False,
+    verbose: bool = False,
     desc: str = "",
 ) -> list[dict[str, Any]]:
     """Submit *worker(item)* to a thread pool, collect non-None results."""
-    try:
-        from tqdm.auto import tqdm as _tqdm
-    except Exception:
-        _tqdm = None
+    from ssdiff.utils import _progress
 
-    iterator = items
-    if progress and _tqdm is not None and sys.stderr is not None:
-        iterator = _tqdm(iterator, total=len(items), desc=desc)
+    iterator = _progress(items, verbose=verbose, total=len(items), desc=desc)
 
     with ThreadPoolExecutor(
         max_workers=(None if n_jobs in (-1, 0, None) else int(n_jobs))
@@ -304,13 +298,13 @@ def _collect_all_occurrences(
     seeds_set: set[str],
     token_window: int,
     n_jobs: int,
-    progress: bool = False,
+    verbose: bool = False,
     desc: str = "Snippets: occurrences",
 ) -> list[dict[str, Any]]:
     """Collect all occurrences from all docs based on seeds_set and token_window."""
     return _parallel_collect(
         lambda DA: _collect_occurrences_for_doc(DA, seeds_set, token_window),
-        doc_arrays, n_jobs, progress, desc,
+        doc_arrays, n_jobs, verbose, desc,
     )
 
 
@@ -391,13 +385,13 @@ def _collect_sentence_occurrences(
     doc_arrays: list[dict[str, Any]],
     token_window: int,
     n_jobs: int,
-    progress: bool = False,
+    verbose: bool = False,
     desc: str = "Snippets: sentences",
 ) -> list[dict[str, Any]]:
     """Fallback collector when seeds_set is empty: one occurrence per sentence."""
     return _parallel_collect(
         lambda DA: _collect_sentence_occurrences_for_doc(DA, token_window),
-        doc_arrays, n_jobs, progress, desc,
+        doc_arrays, n_jobs, verbose, desc,
     )
 
 
@@ -462,13 +456,13 @@ def _collect_doc_occurrences_for_doc(
 def _collect_doc_occurrences(
     doc_arrays: list[dict[str, Any]],
     n_jobs: int,
-    progress: bool = False,
+    verbose: bool = False,
     desc: str = "Snippets: docs",
 ) -> list[dict[str, Any]]:
     """One occurrence per doc/post, based on *whole text*."""
     return _parallel_collect(
         _collect_doc_occurrences_for_doc,
-        doc_arrays, n_jobs, progress, desc,
+        doc_arrays, n_jobs, verbose, desc,
     )
 
 
@@ -512,7 +506,7 @@ def cluster_snippets_by_centroids(
     total_tokens: int | None = None,
     top_per_cluster: int = 100,
     n_jobs: int = -1,
-    progress: bool = True,
+    verbose: bool = False,
 ) -> dict[str, list[dict]]:
     """
     Extract snippets scored against cluster centroids from fitted SSD model.
@@ -548,8 +542,8 @@ def cluster_snippets_by_centroids(
         Number of top snippets to return per cluster (default is 100).
     n_jobs : int, optional
         Number of parallel jobs to use (default is -1, meaning all available cores).
-    progress : bool, optional
-        Whether to display a progress bar (default is True).
+    verbose : bool, optional
+        Print progress (default is True).
 
     Returns
     -------
@@ -597,13 +591,13 @@ def cluster_snippets_by_centroids(
             seeds_set,
             token_window,
             n_jobs,
-            progress,
+            verbose,
         )
     else:
         occs = _collect_doc_occurrences(
             doc_arrays,
             n_jobs,
-            progress,
+            verbose,
             desc="Snippets: docs",
         )
 
@@ -656,7 +650,7 @@ def snippets_along_beta(
     top_per_side: int = 200,
     min_cosine: float | None = None,
     n_jobs: int = -1,
-    progress: bool = True,
+    verbose: bool = False,
 ) -> dict[str, list[dict]]:
     """
     Extract snippets scored along +/-beta from fitted SSD model.
@@ -690,8 +684,8 @@ def snippets_along_beta(
         Minimum cosine threshold to include a snippet. If None, no thresholding.
     n_jobs : int, optional
         Number of parallel jobs, by default -1 (all available).
-    progress : bool, optional
-        Whether to show progress bars, by default True.
+    verbose : bool, optional
+        Print progress, by default True.
 
     Returns
     -------
@@ -716,10 +710,10 @@ def snippets_along_beta(
     #    - sentence-based fallback if no seeds
     if seeds_set:
         occs = _collect_all_occurrences(
-            doc_arrays, seeds_set, token_window, n_jobs, progress
+            doc_arrays, seeds_set, token_window, n_jobs, verbose
         )
     else:
-        occs = _collect_sentence_occurrences(doc_arrays, token_window, n_jobs, progress)
+        occs = _collect_sentence_occurrences(doc_arrays, token_window, n_jobs, verbose)
 
     # 3) score against +/-beta in one go
     rows_pos: list[dict] = []

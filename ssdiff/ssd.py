@@ -358,6 +358,7 @@ class SSD:
                 self.x, self.y_kept, n_comp,
                 n_splits=n_splits, split_ratio=split_ratio,
                 seed=random_state, pca_k=pca_k,
+                verbose=verbose,
             )
         elif resolved == "split_cal":
             from ssdiff.backends.pls import pls1_split_test_calibrated
@@ -499,6 +500,7 @@ class SSD:
         n_perm: int = 5000,
         correction: Literal["holm", "bonferroni", "fdr_bh", "none"] = "holm",
         random_state: int = 2137,
+        verbose: bool = False,
     ):
         """Fit group comparison using y_kept as group labels.
 
@@ -514,6 +516,8 @@ class SSD:
             or "none".
         random_state : int, default 2137
             Random seed for reproducibility.
+        verbose : bool
+            Print progress and diagnostics.
 
         Returns
         -------
@@ -561,6 +565,7 @@ class SSD:
             n_perm=n_perm,
             correction=correction,
             random_state=random_state,
+            verbose=verbose,
         )
 
         return GroupResult(

@@ -38,7 +38,7 @@ ssd = SSD(emb, corpus, scores, lexicon)
 print(ssd)
 
 # PLS
-pls = ssd.fit_pls()
+pls = ssd.fit_pls(verbose=True)
 print(pls)
 print()
 print(pls.summary())
@@ -48,7 +48,7 @@ print()
 print(pls.split_test(n_splits=30))
 
 # ── Group (median split) ────────────────────────────────────────
-gr = ssd.fit_groups(median_split=True)
+gr = ssd.fit_groups(median_split=True, verbose=True)
 print(gr)
 print()
 print(gr.summary())
@@ -56,7 +56,7 @@ print()
 gr.report(top_words=10, clusters=50)
 
 # ── PCA+OLS sweep ───────────────────────────────────────────────
-ols = ssd.fit_ols()
+ols = ssd.fit_ols(verbose=True)
 print(ols)
 print()
 print(ols.summary())
