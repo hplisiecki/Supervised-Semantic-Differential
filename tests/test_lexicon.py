@@ -1,10 +1,12 @@
-"""Tests for ssdiff/utils/lexicon.py — lexicon suggestion and coverage."""
+"""Tests for lexicon utilities — private helpers and Corpus lexicon methods."""
 
 from __future__ import annotations
 
 import numpy as np
 import pytest
 
+from ssdiff.corpus import Corpus
+from ssdiff.lexicon_result import LexiconResult
 from ssdiff.utils.lexicon import (
     _as_float_array,
     _cramers_v,
@@ -13,9 +15,6 @@ from ssdiff.utils.lexicon import (
     _quantile_bins,
     _texts_to_token_lists,
     _validate_var_type,
-    coverage_by_lexicon,
-    suggest_lexicon,
-    token_presence_stats,
 )
 
 # ---------------------------------------------------------------------------
@@ -139,13 +138,28 @@ class TestValidateVarType:
 
 
 # ---------------------------------------------------------------------------
-# Public API
+# Unified dict keys used by all Corpus methods
+# ---------------------------------------------------------------------------
+
+EXPECTED_KEYS = {"token", "freq", "cov_all", "cov_bal", "corr", "rank", "pvalue", "direction"}
+
+
+# ---------------------------------------------------------------------------
+# Corpus.suggest_lexicon
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
-def simple_texts():
-    return ["alpha beta gamma", "alpha delta", "beta gamma epsilon",
-            "alpha beta", "gamma delta epsilon", "alpha gamma"]
+def simple_corpus():
+    """Corpus built from pre-tokenized docs."""
+    docs = [
+        ["alpha", "beta", "gamma"],
+        ["alpha", "delta"],
+        ["beta", "gamma", "epsilon"],
+        ["alpha", "beta"],
+        ["gamma", "delta", "epsilon"],
+        ["alpha", "gamma"],
+    ]
+    return Corpus(docs, pretokenized=True)
 
 
 @pytest.fixture
@@ -153,131 +167,121 @@ def simple_y():
     return np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
 
 
-class TestSuggestLexicon:
-    def test_returns_list(self, simple_texts, simple_y):
-        result = suggest_lexicon(
-            (simple_texts, simple_y), top_k=10, min_docs=1
-        )
-        assert isinstance(result, list)
+class TestCorpusSuggestLexicon:
+    def test_returns_lexicon_result(self, simple_corpus, simple_y):
+        result = simple_corpus.suggest_lexicon(simple_y, top_k=10, min_docs=1)
+        assert isinstance(result, LexiconResult)
         assert len(result) > 0
-        assert all(isinstance(t, str) for t in result)
+        assert all(isinstance(r, dict) for r in result)
+        assert all(set(r.keys()) == EXPECTED_KEYS for r in result)
 
-    def test_top_k_limit(self, simple_texts, simple_y):
-        result = suggest_lexicon(
-            (simple_texts, simple_y), top_k=2, min_docs=1
-        )
+    def test_tokens_property(self, simple_corpus, simple_y):
+        result = simple_corpus.suggest_lexicon(simple_y, top_k=10, min_docs=1)
+        assert isinstance(result.tokens, list)
+        assert all(isinstance(t, str) for t in result.tokens)
+        assert len(result.tokens) == len(result)
+
+    def test_top_k_limit(self, simple_corpus, simple_y):
+        result = simple_corpus.suggest_lexicon(simple_y, top_k=2, min_docs=1)
         assert len(result) <= 2
 
-    def test_min_docs_filter(self, simple_texts, simple_y):
-        result = suggest_lexicon(
-            (simple_texts, simple_y), top_k=100, min_docs=100
-        )
-        assert result == []
+    def test_min_docs_filter(self, simple_corpus, simple_y):
+        result = simple_corpus.suggest_lexicon(simple_y, top_k=100, min_docs=100)
+        assert len(result) == 0
 
     def test_categorical(self):
-        texts = ["alpha beta", "alpha gamma", "beta delta", "gamma delta"]
-        groups = ["A", "A", "B", "B"]
-        result = suggest_lexicon(
-            (texts, groups), top_k=10, min_docs=1, var_type="categorical"
-        )
-        assert isinstance(result, list)
+        docs = [["alpha", "beta"], ["alpha", "gamma"],
+                ["beta", "delta"], ["gamma", "delta"]]
+        corpus = Corpus(docs, pretokenized=True)
+        groups = np.array(["A", "A", "B", "B"], dtype=object)
+        result = corpus.suggest_lexicon(groups, top_k=10, min_docs=1, var_type="categorical")
+        assert isinstance(result, LexiconResult)
+        assert all(set(r.keys()) == EXPECTED_KEYS for r in result)
 
-    def test_invalid_input_raises(self):
-        with pytest.raises(ValueError):
-            suggest_lexicon("not a valid input")
-
-    def test_nan_y_filtered(self, simple_texts):
+    def test_nan_y_filtered(self, simple_corpus):
         y = np.array([1.0, np.nan, 3.0, 4.0, np.nan, 6.0])
-        result = suggest_lexicon(
-            (simple_texts, y), top_k=10, min_docs=1
-        )
+        result = simple_corpus.suggest_lexicon(y, top_k=10, min_docs=1)
+        assert isinstance(result, LexiconResult)
+
+    def test_sorted_by_rank_descending(self, simple_corpus, simple_y):
+        result = simple_corpus.suggest_lexicon(simple_y, top_k=10, min_docs=1)
+        if len(result) > 1:
+            ranks = [r["rank"] for r in result]
+            assert ranks == sorted(ranks, reverse=True)
+
+    def test_report(self, simple_corpus, simple_y):
+        result = simple_corpus.suggest_lexicon(simple_y, top_k=5, min_docs=1)
+        text = result._build_report()
+        assert isinstance(text, str)
+        assert "Token" in text
+
+
+# ---------------------------------------------------------------------------
+# Corpus.token_stats
+# ---------------------------------------------------------------------------
+
+class TestCorpusTokenStats:
+    def test_basic_continuous(self, simple_corpus, simple_y):
+        result = simple_corpus.token_stats(simple_y, ["alpha", "beta"])
         assert isinstance(result, list)
+        assert len(result) == 2
+        assert all(set(r.keys()) == EXPECTED_KEYS for r in result)
 
-
-class TestTokenPresenceStats:
-    def test_basic_continuous(self, simple_texts, simple_y):
-        result = token_presence_stats(simple_texts, simple_y, "alpha")
+    def test_single_token(self, simple_corpus, simple_y):
+        result = simple_corpus.token_stats(simple_y, ["alpha"])
         assert len(result) == 1
         d = result[0]
         assert d["token"] == "alpha"
-        assert isinstance(d["frequency"], int)
-        assert d["frequency"] > 0
-        assert "association" in d
-        assert "pvalue" in d
-        assert d["effect_direction"] in ("positive", "negative", "none")
+        assert isinstance(d["freq"], int)
+        assert d["freq"] > 0
+        assert d["direction"] in ("positive", "negative", "none")
 
-    def test_missing_token(self, simple_texts, simple_y):
-        result = token_presence_stats(simple_texts, simple_y, "zzzznotfound")
-        assert result[0]["frequency"] == 0
+    def test_missing_token(self, simple_corpus, simple_y):
+        result = simple_corpus.token_stats(simple_y, ["zzzznotfound"])
+        assert result[0]["freq"] == 0
 
     def test_categorical(self):
-        texts = ["alpha beta", "alpha", "beta gamma", "gamma"]
+        docs = [["alpha", "beta"], ["alpha"], ["beta", "gamma"], ["gamma"]]
+        corpus = Corpus(docs, pretokenized=True)
         groups = np.array(["A", "A", "B", "B"], dtype=object)
-        result = token_presence_stats(
-            texts, groups, "alpha", var_type="categorical"
-        )
+        result = corpus.token_stats(groups, ["alpha"], var_type="categorical")
         assert result[0]["token"] == "alpha"
-        assert result[0]["frequency"] == 2
+        assert result[0]["freq"] == 2
 
-    def test_nan_y_filtered(self, simple_texts):
+    def test_nan_y_filtered(self, simple_corpus):
         y = np.array([1.0, np.nan, 3.0, 4.0, np.nan, 6.0])
-        result = token_presence_stats(simple_texts, y, "alpha")
-        assert result[0]["frequency"] >= 0
+        result = simple_corpus.token_stats(y, ["alpha"])
+        assert result[0]["freq"] >= 0
 
 
-class TestCoverageByLexicon:
-    def test_basic(self, simple_texts, simple_y):
-        summary, per_token = coverage_by_lexicon(
-            (simple_texts, simple_y), lexicon=["alpha", "beta"]
-        )
+# ---------------------------------------------------------------------------
+# Corpus.coverage_summary
+# ---------------------------------------------------------------------------
+
+class TestCorpusCoverageSummary:
+    def test_basic(self, simple_corpus, simple_y):
+        summary = simple_corpus.coverage_summary(simple_y, ["alpha", "beta"])
         assert isinstance(summary, dict)
         assert "docs_any" in summary
         assert "cov_all" in summary
         assert summary["docs_any"] > 0
         assert 0.0 <= summary["cov_all"] <= 1.0
-        assert isinstance(per_token, list)
-        assert len(per_token) == 2
 
-    def test_per_token_keys(self, simple_texts, simple_y):
-        _, per_token = coverage_by_lexicon(
-            (simple_texts, simple_y), lexicon=["alpha"]
-        )
-        d = per_token[0]
-        assert d["token"] == "alpha"
-        assert "frequency" in d
-        assert "association" in d
-        assert "pvalue" in d
-        assert "effect_direction" in d
-
-    def test_empty_lexicon(self, simple_texts, simple_y):
-        summary, per_token = coverage_by_lexicon(
-            (simple_texts, simple_y), lexicon=[]
-        )
+    def test_empty_lexicon(self, simple_corpus, simple_y):
+        summary = simple_corpus.coverage_summary(simple_y, [])
         assert summary["docs_any"] == 0
-        assert per_token == []
-
-    def test_dict_input(self, simple_texts, simple_y):
-        data = {"text": simple_texts, "score": simple_y.tolist()}
-        summary, _ = coverage_by_lexicon(
-            data, text_col="text", score_col="score", lexicon=["alpha"]
-        )
-        assert summary["docs_any"] > 0
 
     def test_categorical(self):
-        texts = ["alpha beta", "alpha gamma", "beta delta", "gamma delta"]
-        groups = ["A", "A", "B", "B"]
-        summary, per_token = coverage_by_lexicon(
-            (texts, groups),
-            lexicon=["alpha", "beta"],
-            var_type="categorical",
-        )
+        docs = [["alpha", "beta"], ["alpha", "gamma"],
+                ["beta", "delta"], ["gamma", "delta"]]
+        corpus = Corpus(docs, pretokenized=True)
+        groups = np.array(["A", "A", "B", "B"], dtype=object)
+        summary = corpus.coverage_summary(groups, ["alpha", "beta"], var_type="categorical")
         assert "group_cov" in summary
         assert isinstance(summary["group_cov"], dict)
 
-    def test_hits_and_types_stats(self, simple_texts, simple_y):
-        summary, _ = coverage_by_lexicon(
-            (simple_texts, simple_y), lexicon=["alpha", "beta"]
-        )
+    def test_hits_and_types_stats(self, simple_corpus, simple_y):
+        summary = simple_corpus.coverage_summary(simple_y, ["alpha", "beta"])
         assert "hits_mean" in summary
         assert "hits_median" in summary
         assert "types_mean" in summary
@@ -285,9 +289,40 @@ class TestCoverageByLexicon:
         assert summary["hits_mean"] >= 0
 
     def test_all_nan_y(self):
-        texts = ["alpha beta", "gamma delta"]
+        docs = [["alpha", "beta"], ["gamma", "delta"]]
+        corpus = Corpus(docs, pretokenized=True)
         y = np.array([np.nan, np.nan])
-        summary, per_token = coverage_by_lexicon(
-            (texts, y), lexicon=["alpha"]
-        )
+        summary = corpus.coverage_summary(y, ["alpha"])
         assert summary["docs_any"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Corpus.evaluate_lexicon
+# ---------------------------------------------------------------------------
+
+class TestCorpusEvaluateLexicon:
+    def test_returns_lexicon_result_with_summary(self, simple_corpus, simple_y):
+        result = simple_corpus.evaluate_lexicon(simple_y, ["alpha", "beta"])
+        assert isinstance(result, LexiconResult)
+        assert result.summary is not None
+        assert "docs_any" in result.summary
+        assert len(result) == 2
+
+    def test_tokens_property(self, simple_corpus, simple_y):
+        result = simple_corpus.evaluate_lexicon(simple_y, ["alpha", "beta"])
+        assert set(result.tokens) == {"alpha", "beta"}
+
+    def test_report_includes_summary(self, simple_corpus, simple_y):
+        result = simple_corpus.evaluate_lexicon(simple_y, ["alpha", "beta"])
+        text = result._build_report()
+        assert "Docs with any hit" in text
+        assert "Hits/doc" in text
+
+    def test_categorical(self):
+        docs = [["alpha", "beta"], ["alpha", "gamma"],
+                ["beta", "delta"], ["gamma", "delta"]]
+        corpus = Corpus(docs, pretokenized=True)
+        groups = np.array(["A", "A", "B", "B"], dtype=object)
+        result = corpus.evaluate_lexicon(groups, ["alpha"], var_type="categorical")
+        assert result.summary is not None
+        assert "group_cov" in result.summary
