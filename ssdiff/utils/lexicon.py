@@ -9,11 +9,7 @@ import numpy as np
 
 from .math import _categorical_mask
 
-__all__ = [
-    "coverage_by_lexicon",
-    "suggest_lexicon",
-    "token_presence_stats",
-]
+__all__: list[str] = []
 
 # -------------------------
 # Helpers: inputs & metrics
@@ -274,7 +270,7 @@ def _rank_for_token_stats(
 
 
 # -------------------------
-# Shared helpers (used by Corpus.suggest_lexicon and standalone API)
+# Shared helpers (used by Corpus methods)
 # -------------------------
 
 
@@ -308,7 +304,7 @@ def _rank_tokens(
     n_bins: int = 4,
     corr_cap: float = 0.30,
     var_type: str = "continuous",
-) -> list[str]:
+) -> list[dict]:
     """Rank tokens by balanced coverage with association penalty.
 
     Parameters
@@ -318,12 +314,14 @@ def _rank_tokens(
     y : ndarray
         Outcome variable (already cleaned).
     top_k, min_docs, n_bins, corr_cap, var_type :
-        Same as ``suggest_lexicon``.
+        Same as ``Corpus.suggest_lexicon``.
 
     Returns
     -------
-    list[str]
-        Token strings sorted by descending rank, at most *top_k*.
+    list[dict]
+        Dicts with keys ``token``, ``freq``, ``cov_all``, ``cov_bal``,
+        ``corr``, ``rank``, ``pvalue``, ``direction``, sorted by
+        descending rank, at most *top_k*.
     """
     is_categorical = var_type == "categorical"
 
@@ -334,421 +332,37 @@ def _rank_tokens(
     if not vocab:
         return []
 
-    rows: list[tuple[str, float, float, int]] = []
+    rows: list[dict] = []
     for t in vocab:
         pres = np.fromiter(
             (1 if t in ts else 0 for ts in token_sets),
             dtype=np.int8,
             count=len(token_sets),
         )
-        _cov_all, cov_bal, _corr, rank = _rank_for_token_stats(
+        cov_all, cov_bal, corr, rank = _rank_for_token_stats(
             pres,
             y,
             n_bins=n_bins,
             corr_cap=corr_cap,
             categorical=is_categorical,
         )
-        docs = int(pres.sum())
-        rows.append((t, rank, cov_bal, docs))
-
-    rows.sort(key=lambda r: (-r[1], -r[2], -r[3]))
-    return [r[0] for r in rows[:top_k]]
-
-
-# -------------------------
-# Public API
-# -------------------------
-
-
-def suggest_lexicon(
-    texts_and_y: tuple,
-    *,
-    top_k: int = 150,
-    min_docs: int = 5,
-    n_bins: int = 4,
-    corr_cap: float = 0.30,
-    var_type: str = "continuous",
-) -> list[str]:
-    """
-    Suggest candidate tokens ranked by coverage with a mild penalty for strong
-    association with *y*.
-
-    Parameters
-    ----------
-    texts_and_y : tuple (token_lists, y)
-        ``token_lists`` is ``list[list[str]]`` (already tokenized).
-        ``y`` is the outcome variable (numeric or categorical labels).
-    var_type : str
-        ``'continuous'`` (default) for numeric outcomes or ``'categorical'``
-        for group labels.
-
-    Returns
-    -------
-    list[str]
-        Token strings sorted by descending rank, at most *top_k*.
-    """
-    _validate_var_type(var_type)
-
-    if not isinstance(texts_and_y, tuple) or len(texts_and_y) != 2:
-        raise ValueError(
-            "Pass a (token_lists, y) tuple."
-        )
-
-    texts, y = texts_and_y
-    docs, y_clean = _filter_y(list(texts), y, var_type=var_type)
-    token_sets = _token_sets(docs)
-    return _rank_tokens(
-        token_sets, y_clean,
-        top_k=top_k, min_docs=min_docs, n_bins=n_bins,
-        corr_cap=corr_cap, var_type=var_type,
-    )
-
-
-def token_presence_stats(
-    texts: Iterable[object],
-    y: np.ndarray,
-    token: str,
-    *,
-    n_bins: int = 4,
-    corr_cap: float = 0.30,
-    verbose: bool = False,
-    var_type: str = "continuous",
-) -> list[dict]:
-    """
-    Compute presence statistics for a single token across documents.
-
-    Returns
-    -------
-    list[dict]
-        A single-element list.  Each dict has keys:
-        ``token``, ``frequency``, ``association``, ``pvalue``,
-        ``effect_direction``.
-
-    Notes
-    -----
-    *pvalue* is computed with pure-numpy implementations of the
-    incomplete beta / gamma functions (no scipy required).
-
-    When *var_type='categorical'*, *association* is Cramér's V and *pvalue*
-    comes from χ² test of independence.
-    When *var_type='continuous'*, *association* is Pearson correlation
-    between presence and z-scored outcome, and *pvalue* comes from a
-    point-biserial correlation test.
-    """
-    _validate_var_type(var_type)
-    is_categorical = var_type == "categorical"
-
-    def _doc_token_set(doc) -> set[str]:
-        if isinstance(doc, str):
-            return set(doc.split())
-        toks: list[str] = []
-        stack = [doc]
-        while stack:
-            cur = stack.pop()
-            if cur is None:
-                continue
-            if isinstance(cur, (list, tuple)):
-                stack.extend(cur)
-            elif isinstance(cur, set):
-                stack.extend(list(cur))
-            elif isinstance(cur, (str, bytes)):
-                toks.append(cur.decode() if isinstance(cur, bytes) else cur)
-        return set(toks)
-
-    token = str(token)
-    texts_list = list(texts)
-
-    if is_categorical:
-        y_arr = np.asarray(y, dtype=object)
-        mask = _categorical_mask(y_arr)
-        if not mask.all():
-            texts_list = [texts_list[i] for i in range(len(texts_list)) if mask[i]]
-            y_arr = y_arr[mask]
-        if len(texts_list) != len(y_arr):
-            raise ValueError(
-                f"Length mismatch: texts={len(texts_list)} vs y={len(y_arr)}"
-            )
-
-        pres = np.fromiter(
-            (1 if token in _doc_token_set(doc) else 0 for doc in texts_list),
-            dtype=np.int8,
-            count=len(texts_list),
-        )
-
-        _cov_all, _cov_bal, corr, _rank = _rank_for_token_stats(
-            pres, y_arr, n_bins=n_bins, corr_cap=corr_cap, categorical=True,
-        )
-
-        frequency = int(pres.sum())
-        association = float(corr)
-        pvalue = _chi2_pvalue(pres.astype(int), y_arr)
-        direction = _effect_direction(pres, y_arr, categorical=True)
-
-    else:
-        y_arr = _as_float_array(y)
-        mask = np.isfinite(y_arr)
-        if not mask.all():
-            texts_list = [texts_list[i] for i in range(len(texts_list)) if mask[i]]
-            y_arr = y_arr[mask]
-        if len(texts_list) != len(y_arr):
-            raise ValueError(
-                f"Length mismatch: texts={len(texts_list)} vs y={len(y_arr)}"
-            )
-
-        pres = np.fromiter(
-            (1 if token in _doc_token_set(doc) else 0 for doc in texts_list),
-            dtype=np.int8,
-            count=len(texts_list),
-        )
-
-        _cov_all, _cov_bal, corr, _rank = _rank_for_token_stats(
-            pres, y_arr, n_bins=n_bins, corr_cap=corr_cap, categorical=False,
-        )
-
-        frequency = int(pres.sum())
-        association = float(corr)
-        pvalue = _pointbiserial_pvalue(pres.astype(float), y_arr)
-        direction = _effect_direction(pres, y_arr, categorical=False)
-
-    out = dict(
-        token=token,
-        frequency=frequency,
-        association=association,
-        pvalue=pvalue,
-        effect_direction=direction,
-    )
-
-    from ssdiff.utils import _diagnostic
-    _diagnostic(verbose,
-        f"[token] '{token}': "
-        f"freq={frequency} | assoc={association:.3f} | "
-        f"p={pvalue:.4g} | dir={direction}"
-    )
-
-    return [out]
-
-
-def coverage_by_lexicon(
-    df_or_texts,
-    text_col: str | None = None,
-    score_col: str | None = None,
-    lexicon: Iterable[str] = (),
-    *,
-    n_bins: int = 4,
-    verbose: bool = False,
-    var_type: str = "continuous",
-) -> tuple[dict, list[dict]]:
-    """
-    Summarize coverage for a given lexicon.
-
-    Accepts:
-      - dict table + (text_col, score_col) where text_col values may be:
-          * raw strings
-          * token lists: list[str]
-          * profiles: list[list[str]]  (multiple independent posts per unit)
-      - Tuple (texts, y), where texts is a Sequence of the same forms above.
-
-    Parameters
-    ----------
-    var_type : str
-        ``'continuous'`` (default) or ``'categorical'``.
-
-    Returns
-    -------
-    summary : dict
-        Keys: docs_any, cov_all, q1, q4, corr_any, hits_mean, hits_median,
-        types_mean, types_median [, group_cov].
-    per_token : list[dict]
-        Each dict has keys: ``token``, ``frequency``, ``association``,
-        ``pvalue``, ``effect_direction``.
-    """
-    _validate_var_type(var_type)
-    is_categorical = var_type == "categorical"
-
-    # --- coerce inputs --------------------------------------------------------
-    if isinstance(df_or_texts, dict):
-        if not text_col or not score_col:
-            raise ValueError(
-                "Provide text_col and score_col when using a dict table."
-            )
-        s = df_or_texts[text_col]
         if is_categorical:
-            y = np.asarray(df_or_texts[score_col], dtype=object)
-            mask = _categorical_mask(y)
-            s = [s[i] for i in range(len(s)) if mask[i]]
-            y = y[mask]
-            texts = _texts_to_token_lists(s)
+            pval = _chi2_pvalue(pres.astype(int), y)
+            direction = _effect_direction(pres, y, categorical=True)
         else:
-            y = _as_float_array(df_or_texts[score_col])
-            mask = np.isfinite(y)
-            s = [s[i] for i in range(len(s)) if mask[i]]
-            y = y[mask]
-            texts = _texts_to_token_lists(s)
-    elif isinstance(df_or_texts, tuple) and len(df_or_texts) == 2:
-        texts, y = df_or_texts
-        texts = _texts_to_token_lists(texts)
-        if is_categorical:
-            y = np.asarray(y, dtype=object)
-            mask = _categorical_mask(y)
-            if not mask.all():
-                texts = [texts[i] for i in range(len(texts)) if mask[i]]
-                y = y[mask]
-        else:
-            y = _as_float_array(y)
-            mask = np.isfinite(y)
-            if not mask.all():
-                texts = [texts[i] for i in range(len(texts)) if mask[i]]
-                y = y[mask]
-    else:
-        raise ValueError(
-            "Pass either a dict table with text_col/score_col, "
-            "or a (texts, y) tuple."
-        )
-
-    # guard: empty after filtering
-    if len(texts) == 0 or len(y) == 0:
-        summary = dict(
-            docs_any=0,
-            cov_all=0.0,
-            q1=0.0,
-            q4=0.0,
-            corr_any=0.0,
-            hits_mean=0.0,
-            hits_median=0.0,
-            types_mean=0.0,
-            types_median=0.0,
-        )
-        if is_categorical:
-            summary["group_cov"] = {}
-        return summary, []
-
-    # --- prep features --------------------------------------------------------
-    lex = [str(w) for w in lexicon]
-    token_sets = _token_sets(texts)
-
-    # presence of ANY lexicon word per unit
-    pres_any = np.fromiter(
-        (1 if any((w in ts) for w in lex) else 0 for ts in token_sets),
-        dtype=np.int8,
-        count=len(token_sets),
-    )
-
-    overall = float(pres_any.mean()) if len(pres_any) else 0.0
-    docs_any = int(pres_any.sum())
-
-    if is_categorical:
-        groups = y  # already np.ndarray of object dtype
-        group_labels = sorted(set(groups))
-
-        group_cov_any: dict = {}
-        for g in group_labels:
-            idx = np.where(groups == g)[0]
-            group_cov_any[g] = float(pres_any[idx].mean()) if len(idx) else 0.0
-        q1 = min(group_cov_any.values()) if group_cov_any else 0.0
-        q4 = max(group_cov_any.values()) if group_cov_any else 0.0
-
-        corr_any = _cramers_v(pres_any.astype(int), groups)
-
-        # per-token stats
-        rows: list[dict] = []
-        for w in lex:
-            pres = np.fromiter(
-                ((1 if w in ts else 0) for ts in token_sets),
-                dtype=np.int8,
-                count=len(token_sets),
-            )
-            assoc = _cramers_v(pres.astype(int), groups)
-            pval = _chi2_pvalue(pres.astype(int), groups)
-            direction = _effect_direction(pres, groups, categorical=True)
-            rows.append(
-                dict(
-                    token=w,
-                    frequency=int(pres.sum()),
-                    association=assoc,
-                    pvalue=pval,
-                    effect_direction=direction,
-                )
-            )
-    else:
-        bins = _quantile_bins(y, n_bins=n_bins)
-        low_idx = np.where(bins == bins.min())[0]
-        high_idx = np.where(bins == bins.max())[0]
-
-        y_std = _z(y)
-        if pres_any.std() < 1e-12:
-            corr_any = 0.0
-        else:
-            c = float(np.corrcoef(pres_any, y_std)[0, 1])
-            corr_any = c if np.isfinite(c) else 0.0
-
-        q1 = float(pres_any[low_idx].mean()) if len(low_idx) else 0.0
-        q4 = float(pres_any[high_idx].mean()) if len(high_idx) else 0.0
-
-        # per-token stats
-        rows = []
-        for w in lex:
-            pres = np.fromiter(
-                ((1 if w in ts else 0) for ts in token_sets),
-                dtype=np.int8,
-                count=len(token_sets),
-            )
-            assoc = (
-                float(np.corrcoef(pres, y_std)[0, 1])
-                if pres.std() > 0
-                else 0.0
-            )
             pval = _pointbiserial_pvalue(pres.astype(float), y)
             direction = _effect_direction(pres, y, categorical=False)
-            rows.append(
-                dict(
-                    token=w,
-                    frequency=int(pres.sum()),
-                    association=assoc,
-                    pvalue=pval,
-                    effect_direction=direction,
-                )
-            )
+        rows.append(dict(
+            token=t,
+            freq=int(pres.sum()),
+            cov_all=cov_all,
+            cov_bal=cov_bal,
+            corr=corr,
+            rank=rank,
+            pvalue=pval,
+            direction=direction,
+        ))
 
-    # Sort per-token by frequency descending
-    rows.sort(key=lambda r: (-r["frequency"],))
+    rows.sort(key=lambda r: (-r["rank"], -r["cov_bal"], -r["freq"]))
+    return rows[:top_k]
 
-    # --- whole-profile lexicon frequency stats (DV-agnostic) ------------------
-    lex_set = set(lex)
-    hits_per_unit = np.array(
-        [sum(1 for t in toks if t in lex_set) for toks in texts], dtype=np.int32
-    )
-    types_per_unit = np.array(
-        [len(set(toks) & lex_set) for toks in texts], dtype=np.int32
-    )
-
-    hits_mean = float(hits_per_unit.mean()) if len(hits_per_unit) else 0.0
-    hits_median = float(np.median(hits_per_unit)) if len(hits_per_unit) else 0.0
-    types_mean = float(types_per_unit.mean()) if len(types_per_unit) else 0.0
-    types_median = float(np.median(types_per_unit)) if len(types_per_unit) else 0.0
-
-    summary = dict(
-        docs_any=docs_any,
-        cov_all=overall,
-        q1=q1,
-        q4=q4,
-        corr_any=corr_any,
-        hits_mean=hits_mean,
-        hits_median=hits_median,
-        types_mean=types_mean,
-        types_median=types_median,
-    )
-    if is_categorical:
-        summary["group_cov"] = group_cov_any
-
-    from ssdiff.utils import _diagnostic
-    msg = (
-        f"[lexicon] texts={len(texts)} | lexicon_size={len(lex)} | "
-        f"docs_any={docs_any} | cov_all={overall:.3f} | "
-        f"q1={q1:.3f} | q4={q4:.3f} | corr_any={corr_any:.3f}"
-    )
-    if is_categorical:
-        parts = " | ".join(f"{g}={v:.3f}" for g, v in group_cov_any.items())
-        msg += f" | group_cov: {parts}"
-    _diagnostic(verbose, msg)
-
-    return summary, rows
