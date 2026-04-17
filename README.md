@@ -582,7 +582,7 @@ Methods:
 - `.misdiagnosed(k=20, side="both")` -> `list[dict]`
 - `.snippets(pre_docs, top_per_side=200)` -> `dict`
 - `.snippets_extreme(pre_docs, k=50, by="predicted")` -> `dict`
-- `.split_test(n_splits=50, method="split")` -> `dict` (PLSResult only)
+- `.split_test(n_splits=50, method="split")` — mutates in place: overwrites `pvalue`, `p_method`, `split_mean_r` (PLSResult only). Returns `self`.
 - `.plot_sweep(path=None)` — PCA-K sweep plot (PCAOLSResult only)
 
 ### `GroupResult`

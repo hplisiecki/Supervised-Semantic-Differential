@@ -639,31 +639,45 @@ class PLSResult(_SSDResultBase):
         seed: int = 42,
         method: Literal["split", "split_cal"] = "split",
         n_perm: int = 200,
-    ) -> dict:
-        """Split-half significance test."""
+    ) -> "PLSResult":
+        """Split-half significance test. Mutates the result in place.
+
+        Overwrites ``pvalue``, ``p_method``, ``split_mean_r``, ``n_splits``,
+        ``split_ratio``, ``random_state`` (and ``n_perm`` for ``"split_cal"``).
+        Clears ``perm_null`` — stale if the prior test was permutation.
+
+        Returns ``self`` for convenience; read updated fields directly on
+        the result (``pls_result.pvalue``, ``pls_result.split_mean_r``).
+        """
         if method == "split":
             from ssdiff.backends.pls import pls1_split_test
-
-            p_split, mean_r = pls1_split_test(
+            p, mean_r = pls1_split_test(
                 self.x, self.y_kept, self.n_components,
                 n_splits=n_splits, split_ratio=split_ratio,
                 seed=seed, pca_k=self.pca_k,
             )
-            return {"pvalue": p_split, "mean_r": mean_r}
-
-        if method == "split_cal":
+        elif method == "split_cal":
             from ssdiff.backends.pls import pls1_split_test_calibrated
-
-            p_cal, mean_r = pls1_split_test_calibrated(
+            p, mean_r = pls1_split_test_calibrated(
                 self.x, self.y_kept, self.n_components,
                 n_splits=n_splits, split_ratio=split_ratio,
                 n_perm=n_perm, seed=seed, pca_k=self.pca_k,
             )
-            return {"pvalue": p_cal, "mean_r": mean_r}
+        else:
+            raise ValueError(
+                f"Unknown method {method!r}. Choose 'split' or 'split_cal'."
+            )
 
-        raise ValueError(
-            f"Unknown method {method!r}. Choose 'split' or 'split_cal'."
-        )
+        self.pvalue = p
+        self.p_method = method
+        self.split_mean_r = mean_r
+        self.n_splits = n_splits
+        self.split_ratio = split_ratio
+        self.random_state = seed
+        if method == "split_cal":
+            self.n_perm = n_perm
+        self.perm_null = None
+        return self
 
     def __repr__(self) -> str:
         return (

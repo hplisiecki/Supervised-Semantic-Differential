@@ -241,30 +241,50 @@ class TestMisdiagnosed:
 
 
 class TestSplitTest:
-    def test_returns_dict(self, pls_result):
-        result = pls_result.split_test(n_splits=10, seed=42)
-        assert isinstance(result, dict)
-        assert set(result.keys()) == {"pvalue", "mean_r"}
+    """split_test mutates the result in place; use a per-test copy so the
+    session-scoped pls_result fixture stays clean for other tests."""
 
-    def test_pvalue_range(self, pls_result):
-        result = pls_result.split_test(n_splits=10, seed=42)
-        assert 0 <= result["pvalue"] <= 1
+    @pytest.fixture
+    def r(self, pls_result):
+        import copy
+        return copy.copy(pls_result)
 
-    def test_default_is_split(self, pls_result):
-        result = pls_result.split_test(n_splits=10, seed=42)
-        explicit = pls_result.split_test(n_splits=10, seed=42, method="split")
-        assert result["pvalue"] == explicit["pvalue"]
+    def test_mutates_in_place_and_returns_self(self, r):
+        out = r.split_test(n_splits=10, seed=42)
+        assert out is r
+        assert r.p_method == "split"
+        assert r.split_mean_r is not None
 
-    def test_invalid_method(self, pls_result):
-        import pytest
+    def test_pvalue_range(self, r):
+        r.split_test(n_splits=10, seed=42)
+        assert 0 <= r.pvalue <= 1
+
+    def test_default_is_split(self, r):
+        r.split_test(n_splits=10, seed=42)
+        p1 = r.pvalue
+        r.split_test(n_splits=10, seed=42, method="split")
+        assert r.pvalue == p1
+        assert r.p_method == "split"
+
+    def test_invalid_method(self, r):
         with pytest.raises(ValueError, match="Unknown method"):
-            pls_result.split_test(method="bogus")
+            r.split_test(method="bogus")
 
-    def test_significant_data_yields_positive_r(self, pls_result):
-        result = pls_result.split_test(n_splits=20, seed=42)
-        # For data with real signal, mean_r should be positive
-        assert result["mean_r"] > -1
-        assert result["mean_r"] < 1
+    def test_mean_r_in_range(self, r):
+        r.split_test(n_splits=20, seed=42)
+        assert -1 < r.split_mean_r < 1
+
+    def test_split_cal_sets_method_and_clears_perm_null(self, r):
+        r.perm_null = np.array([0.1, 0.2])  # simulate prior perm test
+        r.split_test(method="split_cal", n_splits=5, n_perm=20, seed=42)
+        assert r.p_method == "split_cal"
+        assert r.perm_null is None
+
+    def test_records_params(self, r):
+        r.split_test(n_splits=15, split_ratio=0.6, seed=7)
+        assert r.n_splits == 15
+        assert r.split_ratio == 0.6
+        assert r.random_state == 7
 
     def test_not_on_pcaols(self, pcaols_result):
         assert not hasattr(pcaols_result, "split_test")

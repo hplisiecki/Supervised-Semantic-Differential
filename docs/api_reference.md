@@ -438,7 +438,7 @@ result.split_test(n_splits=50, split_ratio=0.5, seed=42, method="split", n_perm=
 | `method` | `str` | `"split"` | `"split"` or `"split_cal"` |
 | `n_perm` | `int` | `200` | Permutations for `"split_cal"` |
 
-Returns `dict` with keys `"pvalue"` and `"mean_r"`.
+**Mutates the result in place**, overwriting `result.pvalue`, `result.p_method`, `result.split_mean_r`, and the corresponding params (`n_splits`, `split_ratio`, `random_state`, and `n_perm` for `"split_cal"`). Clears `result.perm_null` (stale if the prior test was permutation). Returns `self` for convenience — read new values via `result.pvalue`, `result.split_mean_r`.
 
 ---
 

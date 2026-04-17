@@ -45,7 +45,8 @@ print(pls.summary())
 print()
 pls.report(top_words=10, clusters=50, extreme_docs=5, misdiagnosed=5)
 print()
-print(pls.split_test(n_splits=30))
+pls.split_test(n_splits=30)  # mutates in place
+print(f"split p={pls.pvalue:.4g}, mean_r={pls.split_mean_r:.4f}")
 
 # ── Group (median split) ────────────────────────────────────────
 gr = ssd.fit_groups(median_split=True, verbose=True)
