@@ -1,422 +1,332 @@
-# ssdiff — Results Layer
+# ssdiff — Results Guide
 
-Guide to working with results returned by `SSD.fit_pls()`, `SSD.fit_ols()`, `SSD.fit_groups()`, and `Corpus.suggest_lexicon()` / `Corpus.evaluate_lexicon()`.
+Everything you can do with objects returned by:
 
-> **Status:** This document describes the **v2 results layer** (planned for `ssdiff` ≥ 2.0). The v1 API (`result.cluster_neighbors("pos")`, `result.snippets(...)`, `gr.report()`) is still in place and will continue to work in 1.x. v2 is a clean rewrite of the result/display surface — see [Migration from v1](#migration-from-v1) at the bottom.
+- `SSD.fit_pls()` → `PLSResult`
+- `SSD.fit_ols()` → `PCAOLSResult`
+- `SSD.fit_groups()` → `GroupResult`
+- `Corpus.suggest_lexicon()` / `.evaluate_lexicon()` → `LexiconResult`
+
+All of them share the same shape: **scalar stats, data views, a textual report, and a unified `save()` on every view/report**.
 
 ---
 
-## At a glance
+## Quick tour
 
 ```python
 result = ssd.fit_pls()
 
-# Navigate
-result.stats                            # scalars: r2, pvalue, n_kept, …
-result.words.df()                       # DataFrame of top words per pole
-result.clusters.pos[0]                  # Cluster object
-result.clusters.pos[0].words            # words inside that cluster
-result.clusters.pos[0].snippets         # snippets anchored in that cluster
-result.snippets.df()                    # all snippets, flat
+# Scalar summaries
+result.stats                 # r², p-value, n_kept, …
+result.fit_info              # PLS/PCA+OLS fit hyperparameters
 
-# Export
-result.words.to_csv("words.csv")
-result.clusters.pos.to_excel("clusters_pos.xlsx")
-result.snippets.to_docx("snippets.docx")
+# Tabular views — iterable, sliceable, exportable
+result.words                 # top words (β-pos + β-neg)
+result.words.pos             # top 20 positive-side words
+result.words.pos(50)         # top 50 positive-side words
+result.words.neg             # top 20 negative-side words
+result.clusters.pos          # positive-side clusters (default topn=100)
+result.clusters.pos(topn=50) # recompute with topn=50
+result.snippets              # representative snippets (default top_per_side=30)
+result.snippets(top_per_side=200)
+result.docs                  # one row per document (y, ŷ, residual, alignment)
 
-# Report (multi-format)
-result.report().text()                  # terminal
-result.report().markdown()              # markdown
-result.report().html()                  # styled HTML (also _repr_html_ in Jupyter)
-result.report().save("report.docx")     # dispatched on extension
-```
+# Per-cluster joins
+cl = result.clusters.pos
+cl.words(cluster_id=0)       # words inside cluster 0
+cl.snippets                  # all positive-side snippets — SidedSnippetsView
+cl.snippets(cluster_id=0)    # snippets seeded inside cluster 0
 
-Group results expose the same interface, with `gr.pairs["A","B"]` giving you a per-contrast view shaped exactly like a continuous result.
+# Ordering docs
+result.docs.pos(10)          # 10 docs most aligned with β-pos (highest ŷ)
+result.docs.neg(10)          # 10 docs most aligned with β-neg (lowest ŷ)
+result.docs.misdiagnosed(5)  # 5 docs with largest |residual|
+result.docs.misdiagnosed(5, direction="over")   # model over-predicted
+result.docs.misdiagnosed(5, direction="under")  # model under-predicted
+result.docs.id(42)           # single doc + its original text (if corpus attached)
 
----
-
-## Result types
-
-| Returned by | Class | Inherits |
-|---|---|---|
-| `SSD.fit_pls()` | `PLSResult` | `ContinuousResult` |
-| `SSD.fit_ols()` | `PCAOLSResult` | `ContinuousResult` |
-| `SSD.fit_groups()` | `GroupResult` | `Result` |
-| `Corpus.suggest_lexicon(...)` | `LexiconResult` | `Result` |
-| `Corpus.evaluate_lexicon(...)` | `LexiconResult` | `Result` |
-
-All five share the same view / export / report / caching machinery. They differ only in **which views they expose** (e.g. `GroupResult` has `.pairs` and `.omnibus`; `LexiconResult` has `.suggestions` and `.summary`).
-
-```
-                 ┌──────────────┐
-                 │   Result     │  abstract: .stats, .report(), .save(), .clear_cache()
-                 └──────┬───────┘
-        ┌───────────────┼─────────────────────┐
-        ▼               ▼                     ▼
-ContinuousResult    GroupResult           LexiconResult
-.words              .pairs[g1,g2] →       .suggestions
-.clusters.pos/neg     PairView            .summary
-.snippets           .omnibus
-.docs               (also flat .words,
-                     .clusters, .snippets
-                     across all pairs)
-   ▼
-PLSResult / PCAOLSResult
-(small backend-specific extras)
+# Multi-format narrative report
+r = result.report(top_words=5, clusters=30, extreme_docs=5, misdiagnosed=5)
+print(r)                     # plain text (also auto-rendered in Jupyter as HTML)
+r.save("report.md")          # dispatched on extension:
+r.save("report.html")        #   .md .html .docx .tex .txt .json
+r.save("report.docx", style="APA")
 ```
 
 ---
 
-## The view interface
+## Result types at a glance
 
-Every "view" object on a Result implements the same contract:
-
-| Method / attr | Returns | Notes |
+| Returned by | Class | Key views |
 |---|---|---|
-| `len(view)` | `int` | Number of rows |
-| `iter(view)` | yields domain objects | `Word`, `Cluster`, `Snippet`, … |
-| `view[i]` | one domain object | by integer index |
-| `view.where(**filters)` | sub-view | e.g. `clusters.where(side="pos", min_size=3)` |
-| `view.df()` | `pandas.DataFrame` | requires `[results]` extra |
-| `view.to_dict()` | `list[dict]` | always available, stdlib only |
-| `view.to_records()` | `list[tuple]` | column-oriented; stdlib only |
-| `view.to_csv(path)` | — | writes CSV (uses pandas if available, falls back to `csv`) |
-| `view.to_excel(path, sheet=None)` | — | requires `[results]` |
-| `view.to_docx(path)` | — | requires `[results]` |
-| `view.recompute(**params)` | new view | re-runs the underlying computation with different params |
-| `view.params` | `dict` | the params this view was computed with |
-| `repr(view)` | short summary | shape + first few rows |
+| `SSD.fit_pls()` | `PLSResult` | `stats`, `fit_info`, `test`, `words`, `clusters`, `snippets`, `docs` |
+| `SSD.fit_ols()` | `PCAOLSResult` | same + `sweep`, `plot_sweep()` |
+| `SSD.fit_groups()` | `GroupResult` | `stats`, `test`, `pairs` (→ `PairView` per contrast) |
+| `Corpus.suggest_lexicon()` | `LexiconResult` | `stats`, `suggestions`, `tokens` |
+| `Corpus.evaluate_lexicon()` | `LexiconResult` | same + `summary` |
 
-### Views on a continuous result
+A `PairView` from `gr.pairs["A", "B"]` looks just like a continuous result — it has `.stats`, `.words`, `.clusters`, `.snippets` — so everything you learn here transfers.
+
+---
+
+## Working with views
+
+Every tabular view (`words`, `clusters.pos`, `snippets`, `docs`, `pairs`, `suggestions`, …) supports the same operations:
 
 ```python
-result.stats             # dict-like: r2, r2_adj, pvalue, n_kept, y_mean, y_std, cos_align, …
-result.words             # WordsView    (top words per pole, ranked)
-result.clusters          # ClustersIndex   .pos / .neg → SidedClustersView
-result.snippets          # SnippetsView (all snippets, including those tied to clusters)
-result.docs              # DocsView     (predicted vs observed, residuals, extreme/misdiagnosed)
-result.predictions       # PredictionsView (y_hat, residuals; thin wrapper over docs)
-result.components        # PLSResult only — loadings, scores
-result.sweep             # PCAOLSResult only — PCA-K sweep table + plot helper
+len(view)              # row count
+view[0]                # first row (a frozen dataclass — Word, Cluster, …)
+view[:10]              # slice → a view without truncation
+list(view)             # materialize to a list of rows
+for row in view: ...   # iterate
+
+# Display (`print(view)` in terminal, auto-rendered in Jupyter)
+print(view)            # aligned text table with save-hint footer
+# to_text() / to_html() are used internally for repr — for file output use save()
+
+# Python values (no file I/O)
+view.to_df()           # pandas DataFrame     (needs ssdiff[results])
+view.to_dict()         # list[dict]           (always works, no deps)
+view.to_records()      # list[tuple]
+
+# File output — one method, extension picks the format
+view.save("x.csv")     # .csv .json .xlsx .md .txt .html .tex .docx
+view.save("x.xlsx")    # xlsx/docx need ssdiff[results]
+view.save("x.md", cols=["word", "cos_beta"])   # optional column subset & order
+view.save("x.csv", k=50)                        # optional row cap on size-bearing views
 ```
 
-### Views on a group result
+Scalar views (`stats`, `fit_info`, `test`, `summary`) behave like dicts too — `stats.r2`, `stats["r2"]`, or `stats.to_dict()`.
+
+### What gets printed in the terminal
+
+- Long views auto-truncate to ~20 rows with a `... N more rows` footer.
+- Long text cells (e.g. `snippet.text_window`) are clipped to ~40 chars in the terminal. Exports (`to_df`, `save(...)`, …) keep the full text.
+- P-values render as `<.001` or three decimals (`.007`) across all formats — never as `2.36e-07`.
+- A short "Save:" hint line is appended so you can copy-paste an export command.
+
+### Changing how many rows you get
+
+Any view with a row-count knob is **callable**. The same shape, the same effect on display AND export — slicing the view first means `save(...)`, `to_df`, etc. return fewer rows too.
+
+| View | Default | Change via | Also applies to export? |
+|---|---|---|---|
+| `result.words.pos` / `.neg` | 20 | `words.pos(50)` (or `words.pos(None)` for all) | yes |
+| `result.docs.pos()` / `.neg()` / `.misdiagnosed()` | 20 | `docs.pos(50)` | yes |
+| `result.clusters.pos` / `.neg` | topn=100 | `clusters.pos(topn=50)` (re-clusters) | yes |
+| `result.snippets` | top_per_side=30 | `result.snippets(top_per_side=200)` (recomputes) | yes |
+| `result.report(...)` | see below | `report(top_words=10, clusters=30, …)` | report only |
 
 ```python
-gr.stats                 # G (n groups), n_kept, n_perm, correction, random_state, …
-gr.omnibus               # dict: omnibus_T, omnibus_p
-gr.pairs                 # PairsView, mapping-like (also has .df() for the pairwise table)
-gr.pairs["A","B"]        # PairView — a single-contrast result. Same interface as ContinuousResult,
-                         #   minus .docs / .predictions (no per-doc prediction in group mode).
-gr.words                 # flat WordsView across all pairs (with `contrast` column)
-gr.clusters.pos          # flat clusters across all pairs
-gr.snippets              # flat snippets across all pairs
+# Saving 50 positive words to CSV (not 20, not all):
+result.words.pos(50).save("top50_pos.csv")
+
+# Equivalent: use k= on save() to cap rows directly
+result.words.pos.save("top50_pos.csv", k=50)
+
+# Saving every available word:
+result.words.pos(None).save("all_pos.csv")
+
+# Saving 10 worst-predicted docs as DataFrame:
+result.docs.misdiagnosed(10).to_df()
 ```
 
-### Views on a lexicon result
+**How to discover the knob on any view.** When you `print(view)` in a terminal, the last few lines are a "Save:" hint that shows the resize idiom for that view, with the current value. Example:
+
+```
+Count: .pos(k) → first k (current 20, max 100; k=None for all)
+```
+
+Cluster and snippet variants cache separately by parameter set, so recomputing with different `topn` / `top_per_side` doesn't overwrite the earlier view:
 
 ```python
-lex.stats                # var_type, n_docs, n_tokens
-lex.suggestions          # SuggestionsView — per-token rows (token, freq, cov_bal, corr, p, direction, rank)
-lex.summary              # dict | None  (present after evaluate_lexicon, absent after suggest_lexicon)
-lex.tokens               # convenience: list[str] in rank order
+result.clusters.pos                       # cached (topn=100)
+result.clusters.pos(topn=50)              # separate cache entry
+result.clusters.pos                       # still the original
+
+result.clear_cache()                      # drop everything
+result.clear_cache("clusters")            # drop all cluster variants
 ```
 
 ---
 
-## Domain objects
+## Domain rows
 
-Iterating a view yields **frozen dataclasses**, not dicts. Fields are typed and IDE-autocomplete-friendly.
-
-```python
-@dataclass(frozen=True, slots=True)
-class Word:
-    side: str          # "pos" | "neg"
-    rank: int          # 1, 2, 3, …
-    word: str
-    cos_beta: float
-    contrast: str | None = None   # set on group / pair results
-
-@dataclass(frozen=True, slots=True)
-class Cluster:
-    cluster_id: int
-    side: str
-    size: int
-    coherence: float            # mean cos(word, centroid) inside cluster
-    centroid_cos_beta: float    # cos(centroid, beta)
-    contrast: str | None = None
-    # joins (lazy):
-    @property
-    def words(self) -> "ClusterWordsView": ...
-    @property
-    def snippets(self) -> "SnippetsView": ...
-
-@dataclass(frozen=True, slots=True)
-class ClusterWord:
-    cluster_id: int
-    word: str
-    cos_centroid: float
-    cos_beta: float
-
-@dataclass(frozen=True, slots=True)
-class Snippet:
-    snippet_id: int
-    side: str
-    profile_id: int
-    post_id: int
-    cosine: float
-    seed: str
-    start_token_idx: int
-    end_token_idx: int
-    start_sent_idx: int
-    end_sent_idx: int
-    text_surface: str
-    text_lemmas: str
-    cluster_id: int | None = None     # set when the snippet is anchored in a cluster
-    contrast: str | None = None
-
-@dataclass(frozen=True, slots=True)
-class Doc:
-    doc_id: int
-    y_true: float
-    y_hat: float
-    residual: float
-    cos_align: float
-
-@dataclass(frozen=True, slots=True)
-class Pair:
-    contrast: str          # "A_vs_B"
-    g1: str
-    g2: str
-    T: float
-    p_raw: float
-    p_corrected: float
-    cohens_d: float
-    n_g1: int
-    n_g2: int
-    contrast_norm: float
-
-@dataclass(frozen=True, slots=True)
-class Suggestion:
-    rank: int
-    token: str
-    freq: int
-    cov_all: float
-    cov_bal: float
-    corr: float
-    pvalue: float
-    direction: str         # "+" | "-" | "n/a" for categorical
-```
-
----
-
-## Data schema (canonical tables)
-
-For power users and `.df()` consumers — these are the underlying tidy tables. **Joins are by id**, never by nested structure.
-
-### Continuous result (`PLSResult`, `PCAOLSResult`)
-
-| Table | Key | Columns |
-|---|---|---|
-| `stats` | — | backend, r2, r2_adj, pvalue, n_raw, n_kept, n_dropped, y_mean, y_std, cos_align, … |
-| `words` | (side, rank) | side, rank, word, cos_beta |
-| `clusters` | (cluster_id) | cluster_id, side, size, coherence, centroid_cos_beta |
-| `cluster_words` | (cluster_id, word) | cluster_id, word, cos_centroid, cos_beta |
-| `snippets` | (snippet_id) | snippet_id, side, profile_id, post_id, cosine, seed, start_token_idx, end_token_idx, start_sent_idx, end_sent_idx, text_surface, text_lemmas, **cluster_id (nullable)** |
-| `docs` | (doc_id) | doc_id, y_true, y_hat, residual, cos_align |
-
-### Group result (`GroupResult`)
-
-Adds a `contrast` column to `words`, `clusters`, `cluster_words`, `snippets`. Replaces `stats` / `docs` with:
-
-| Table | Key | Columns |
-|---|---|---|
-| `omnibus` | — | omnibus_T, omnibus_p, n_perm, correction, G |
-| `pairs` | (contrast) | contrast, g1, g2, T, p_raw, p_corrected, cohens_d, n_g1, n_g2, contrast_norm |
-
-### Lexicon result (`LexiconResult`)
-
-| Table | Key | Columns |
-|---|---|---|
-| `stats` | — | var_type, n_docs, n_tokens |
-| `suggestions` | (rank) | rank, token, freq, cov_all, cov_bal, corr, pvalue, direction |
-| `summary` | — | docs_any, cov_all, q1, q4, corr_any, hits_mean, hits_median, types_mean, types_median, group_cov? *(only after `evaluate_lexicon`)* |
-
----
-
-## Computing & re-computing
-
-Views with parameters (clusters, snippets) are computed on first access with sensible defaults and **cached by parameter set**.
+Iterating a view yields typed, immutable dataclasses (not dicts) — your IDE autocompletes their fields.
 
 ```python
-# First access — computed with defaults
-result.clusters.pos                                 # topn=100, k=auto, k_min=2, k_max=10
-
-# Same params — cache hit
-result.clusters.pos                                 # ← returns cached
-
-# Different params — separate cache entry, recomputed
-result.clusters.pos.recompute(topn=50, k=5)        # new view, also cached
-result.clusters.pos                                 # ← still the original cached default
-
-# Force recompute with same params
-result.clusters.pos.recompute()
+Word         side ("pos"|"neg"), rank, word, cos_beta, contrast
+Cluster      cluster_id, side, size, coherence, centroid_cos_beta, contrast
+ClusterWord  cluster_id, side, word, cos_centroid, cos_beta, contrast
+Snippet      snippet_id, side, doc_id, cosine, seed,
+             start_token_idx, end_token_idx, start_sent_idx, end_sent_idx,
+             text_window, text_surface, text_lemmas,
+             cluster_id, contrast, profile_id, post_id
+Doc          doc_id, y_true, y_hat, residual, cos_align
+Pair         contrast, g1, g2, T, p_raw, p_corrected, cohens_d,
+             n_g1, n_g2, contrast_norm
+Suggestion   rank, token, freq, cov_all, cov_bal, corr, pvalue, direction
+             direction ∈ {"positive", "negative", "none"}
 ```
 
-Snippet views similarly:
+**Terminology convention**
 
-```python
-result.snippets                                     # default top_per_side=200
-result.snippets.recompute(top_per_side=500)        # separate cache entry
-```
-
-Cache management:
-
-```python
-result.clear_cache()                                # everything
-result.clear_cache("clusters")                      # one view family
-result.clear_cache("clusters", side="pos")          # one view, one set of params
-```
-
-> **What changed from v1:** in v1, calling `cluster_neighbors(topn=50)` after `cluster_neighbors(topn=100)` silently returned the topn=100 result. v2 keys the cache on params, so this can't happen.
+- `side` uses `"pos"` / `"neg"` for β-direction (positive pole = higher y_hat).
+- `direction` on `misdiagnosed()` uses `"over"` / `"under"` for residual sign — distinct axis from the β direction.
 
 ---
 
 ## Reports
 
-`result.report(...)` returns a `Report` object — a builder for multi-format rendering of the same content.
+`result.report(...)` returns a `Report` object with the same text/markdown/html/docx/latex renderers as views.
 
 ```python
 r = result.report(
-    top_words=10,
-    clusters=50,
-    snippets_per_cluster=3,
-    extreme_docs=5,         # ignored on GroupResult / LexiconResult
-    misdiagnosed=5,         # ignored on GroupResult / LexiconResult
+    top_words=5,             # top N words per pole (default 5)
+    clusters=30,              # include N clusters per side (default: off)
+    snippets_per_cluster=3,   # anchor snippets per cluster (default: off)
+    extreme_docs=5,           # N most-positive + N most-negative docs
+    misdiagnosed=5,           # N most over-predicted + N most under-predicted
 )
 
-print(r)                   # → r.text()
-r.text()                   # plain terminal output
-r.markdown()               # markdown source
-r.html()                   # styled HTML (also _repr_html_ for Jupyter)
-r.docx()                   # python-docx Document object
-r.save("report.md")        # extension dispatch: .txt .md .html .docx
+print(r)                      # text (also auto-renders as HTML in Jupyter)
+
+r.save("report.md")           # extension dispatch:
+r.save("report.html")         #   .md  .txt  .html
+r.save("report.tex")          #   .tex .json
+r.save("report.docx", style="APA")   # style= is only valid for .docx
 ```
 
-`GroupResult.report()` automatically expands sections per pairwise contrast — you don't write the loop.
-
-`LexiconResult.report()` renders the suggestions table + summary block (matches v1 output but pluggable).
+`GroupResult.report()` loops over pairwise contrasts for you.  
+`LexiconResult.report(top=20)` renders the suggestions table + optional coverage summary.
 
 ---
 
-## Export — quick reference
+## Exporting tables
 
-| Want | Code |
-|---|---|
-| One table as DataFrame | `result.words.df()` |
-| One table as CSV | `result.words.to_csv("w.csv")` |
-| One table as Excel | `result.words.to_excel("w.xlsx")` |
-| All tables as one Excel workbook (one sheet each) | `result.to_excel("everything.xlsx")` |
-| All tables as a folder of CSVs | `result.to_csv_folder("out_dir/")` |
-| Full report as DOCX | `result.report().save("report.docx")` |
-| Full report as Markdown | `result.report().save("report.md")` |
-| Pickle (round-trip with cache, no embeddings) | `result.save("r.pkl")`  /  `Result.load("r.pkl")` |
+Each view exports itself. There is no bulk `result.save()` — call `save()` on the table you want.
+
+```python
+result.stats.save("stats.csv")
+result.docs.save("docs.csv")
+result.words.save("words.xlsx")
+result.clusters.pos.save("clusters_pos.json")
+result.snippets.save("snippets.md", cols=["doc_id", "text_window"])
+```
+
+Every view accepts the same kwargs:
+
+- `cols=[...]` — select & reorder columns (unknown names warn and are dropped)
+- `k=N` — cap rows on size-bearing views (ignored on single-row scalar views)
+- `style="APA"` — only valid for `.docx` output
+
+For a narrative bundle, use `result.report().save(...)` — see the [Reports](#reports) section.
+
+---
+
+## Attach / detach
+
+Some views need the source corpus or embeddings to compute:
+
+```python
+result.words       # needs embeddings
+result.clusters    # needs embeddings
+result.snippets    # needs both corpus and embeddings
+result.docs.id(42) # corpus attachment unlocks the raw text
+
+result.attach(corpus=my_corpus, embeddings=my_embeddings)
+```
+
+Accessing a view without its resource raises a clear `RuntimeError` telling you to call `attach(...)`.
+
+---
+
+## Result-specific extras
+
+### `PLSResult`
+
+```python
+result.fit_info              # n_components, pca_k, p_method, n_perm, random_state, …
+result.test                  # current p-value test (perm / split / split_cal)
+result.test(name="perm", n_perm=5000)    # rerun; updates stats.pvalue too
+result.cv_scores             # cv R² by n_components (dict, or None)
+result.perm_null             # null-distribution array (or None)
+```
+
+### `PCAOLSResult`
+
+```python
+result.sweep                 # SweepView: k → (r², r²_adj, p-value)
+result.sweep_result          # raw sweep_result object (or None)
+result.plot_sweep("sweep.png")      # dual-axis chart; raises if no sweep data
+result.test                  # F-test
+```
+
+### `GroupResult`
+
+```python
+gr.stats                     # G, n_kept, n_perm, correction, random_state, pvalue
+gr.test                      # omnibus permutation test — rerun with gr.test(n_perm=...)
+gr.pairs                     # list of Pair rows (iterable + exportable)
+gr.pairs["A", "B"]           # PairView — reverse order flips T/d signs automatically
+gr.pairs["A", "B"].stats     # per-contrast stats
+gr.pairs["A", "B"].words     # per-contrast words
+gr.pairs["A", "B"].clusters.pos
+gr.pairs["A", "B"].snippets
+```
+
+### `LexiconResult`
+
+```python
+lex.stats                    # var_type, n_docs, n_tokens
+lex.suggestions              # token-level rows (cov_bal, corr, pvalue, direction, rank)
+lex.tokens                   # list[str] in rank order
+lex.summary                  # coverage block — present only after evaluate_lexicon()
+```
 
 ---
 
 ## Optional dependencies
 
-Tabular and document export require the `[results]` extra:
+The core library has no hard requirement on pandas / openpyxl / python-docx. Install the extra when you need them:
 
 ```bash
 pip install ssdiff[results]
 ```
 
-This adds:
+Without the extra you can still:
 
-- `pandas` — for `.df()`, `.to_csv()` (when available), `.to_excel()`
-- `openpyxl` — Excel write backend (used through pandas)
-- `python-docx` — DOCX rendering
+- iterate views and inspect rows,
+- call `to_dict()`, `to_records()`,
+- `save(...)` to `.csv`, `.json`, `.md`, `.tex`, `.txt`, `.html` — no optional deps needed,
+- render reports as text / markdown / html / latex / json.
 
-Without `[results]` you can still:
-
-- Iterate views (yields domain objects)
-- Call `.to_dict()` / `.to_records()`
-- Call `.to_csv()` (falls back to stdlib `csv`)
-- Call `report().text()` / `report().markdown()` / `report().html()`
-- Save and load via `result.save()` / `Result.load()` (pickle)
-
-Methods that need a missing dep raise `ImportError` with a clear hint:
-
-```
-ImportError: Cluster.df() requires pandas. Install with: pip install ssdiff[results]
-```
+`save('x.xlsx')`, `save('x.docx')`, and `to_df()` need the extra and raise a clear `ImportError` with the install hint when it's missing.
 
 ---
 
-## Save / load
+## Cheat sheet
 
-```python
-result.save("model_results.pkl")
-loaded = PLSResult.load("model_results.pkl")        # or Result.load(...) for auto-dispatch
-```
-
-What's persisted:
-
-- All canonical tables (`stats`, `words`, `clusters`, `cluster_words`, `snippets`, `docs`, …)
-- Cached computed views (so `.clusters.pos` is instant after load)
-- Backend metadata (n_components, cv_result, sweep_result, perm_null, …)
-
-What's **not** persisted:
-
-- The `Embeddings` object (recompute neighbors with `result.attach(embeddings=...)` if you need to re-cluster)
-- The `Corpus` (re-attach to compute new snippets)
-
----
-
-## Code organization
-
-Internally the results layer lives in `ssdiff/results/`:
-
-```
-ssdiff/results/
-  __init__.py         # public exports
-  _base.py            # Result, View, domain dataclasses, schema
-  _cache.py           # parameter-keyed cache
-  _export.py          # to_csv / to_excel / to_docx / to_dict shims
-  _report.py          # Report builder + text/md/html/docx renderers
-  ssd.py              # ContinuousResult, PLSResult, PCAOLSResult
-  group.py            # GroupResult, PairView
-  lexicon.py          # LexiconResult
-```
-
-Notably, `LexiconResult` shares the same view / export / report machinery as the SSD results — if you understand one, you understand all.
-
----
-
-## Migration from v1
-
-| v1 | v2 |
+| Task | Code |
 |---|---|
-| `result.summary()` | `print(result.report())` or `result.stats` |
-| `result.top_words(20)` | `result.words[:20]` or `result.words.df().head(20)` |
-| `result.cluster_neighbors("pos", topn=100)` | `result.clusters.pos.recompute(topn=100)` (or `result.clusters.pos` for defaults) |
-| `result.snippets(corpus.pre_docs)` | `result.snippets` (auto-attached after `attach(corpus=…)`) |
-| `result.cluster_snippets(...)` | `result.clusters.pos[i].snippets` (per-cluster) or `result.snippets.where(cluster_id__notnull=True)` |
-| `result.report(top_words=10, clusters=50)` | `result.report(top_words=10, clusters=50).text()` |
-| `gr.report()` (loops over pairs) | `gr.report()` (still loops; same output, multi-format) |
-| `gr.cluster_neighbors("pos")` (flat) | `gr.clusters.pos` (flat, with `contrast` column) |
-| `gr.filter_groups("A","B")` | `gr.pairs["A","B"]` (cheaper, just a view) |
-| `LexiconResult.tokens` | `lex.tokens` (unchanged) or `lex.suggestions.df()` |
-| `LexiconResult.report()` | `lex.report().text()` |
-
-A v1.x → v2 migration script will be provided that rewrites the most common call patterns automatically.
+| Print a summary of the fit | `print(result)` |
+| Full narrative report (terminal) | `print(result.report())` |
+| Save report as DOCX / Markdown | `result.report().save("r.docx", style="APA")` / `"r.md"` |
+| Top 20 positive words as DataFrame | `result.words.pos.to_df()` *(20 is the default)* |
+| Top 50 positive words to CSV | `result.words.pos(50).save("w.csv")` |
+| Save each table separately | `result.stats.save("stats.csv")`, `result.docs.save("docs.csv")`, … |
+| Single table to Excel | `result.words.save("words.xlsx")` |
+| 10 worst-predicted docs | `result.docs.misdiagnosed(10)` |
+| 10 docs the model over-predicted | `result.docs.misdiagnosed(10, direction="over")` |
+| Snippets inside cluster 3 (pos side) | `result.clusters.pos.snippets(cluster_id=3)` |
+| Rerun PLS permutation test | `result.test(name="perm", n_perm=5000)` |
+| Per-contrast view in group mode | `gr.pairs["A", "B"]` |
 
 ---
 
 ## See also
 
-- [`api_reference.md`](api_reference.md) — full ssdiff API (fitting, embeddings, corpus)
-- [`architecture.md`](architecture.md) — fitting backends and statistical methods
-- [`demo_new_api.py`](demo_new_api.py) — runnable continuous-results example
+- [`api_reference.md`](api_reference.md) — fitting, embeddings, corpus
+- [`architecture.md`](architecture.md) — backends and statistical methods
+- [`demo_new_api.py`](demo_new_api.py) — runnable continuous example
 - [`demo_lexicon_api.py`](demo_lexicon_api.py) — runnable lexicon example

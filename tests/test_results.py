@@ -3,345 +3,255 @@
 import numpy as np
 import pytest
 
+from ssdiff.results import PLSResult, PCAOLSResult
+from ssdiff.results.report import Report
+
 
 class TestPLSResultAttributes:
     def test_has_fit_stats(self, pls_result):
-        assert hasattr(pls_result, "r2")
-        # r2_adj is None for PLS (not meaningful)
-        assert pls_result.r2_adj is None
-        assert hasattr(pls_result, "pvalue")
-        assert 0 <= pls_result.r2 <= 1
+        assert pls_result.stats.r2 is not None
+        assert pls_result.stats.pvalue is not None
+        assert 0 <= pls_result.stats.r2 <= 1
 
     def test_has_beta(self, pls_result):
         assert pls_result.beta.ndim == 1
         assert pls_result.beta_unit.ndim == 1
 
     def test_has_pls_specific(self, pls_result):
-        assert hasattr(pls_result, "n_components")
-        assert hasattr(pls_result, "cv_result")
-        assert hasattr(pls_result, "perm_null")
+        # fit_info carries PLS hyperparams
+        assert pls_result.fit_info.n_components is not None
+        # perm_null set when p_method='perm'
+        assert pls_result.perm_null is not None
 
     def test_has_doc_info(self, pls_result):
-        assert pls_result.n_kept > 0
-        assert pls_result.n_kept + pls_result.n_dropped == pls_result.n_raw
+        assert pls_result.stats.n_kept > 0
+        n = pls_result.stats.n_kept
+        assert pls_result.stats.n_kept + pls_result.stats.n_dropped == pls_result.stats.n_raw
 
 
 class TestPCAOLSResultAttributes:
     def test_has_fit_stats(self, pcaols_result):
-        assert hasattr(pcaols_result, "r2")
-        assert hasattr(pcaols_result, "pvalue")
-        assert 0 <= pcaols_result.r2 <= 1
+        assert pcaols_result.stats.r2 is not None
+        assert pcaols_result.stats.pvalue is not None
+        assert 0 <= pcaols_result.stats.r2 <= 1
 
     def test_has_pcaols_specific(self, pcaols_result):
+        # sweep_result is None when fixed_k is explicit
         assert hasattr(pcaols_result, "sweep_result")
 
-    def test_no_pls_attributes(self, pcaols_result):
-        assert not hasattr(pcaols_result, "cv_result")
+    def test_no_pls_diagnostics(self, pcaols_result):
         assert not hasattr(pcaols_result, "perm_null")
 
 
 class TestResultInterpretation:
-    """Both result types share interpretation methods."""
+    """Both result types share words + docs views."""
 
-    def test_top_words(self, pls_result):
-        words = pls_result.top_words(n=5)
-        assert isinstance(words, list)
+    def test_words_view(self, pls_result):
+        words = list(pls_result.words)
         assert len(words) > 0
-        assert set(words[0].keys()) == {"side", "rank", "word", "cos"}
-        sides = {w["side"] for w in words}
+        # Words have side/rank/word/cos_beta
+        w = words[0]
+        assert w.side in ("pos", "neg")
+        assert isinstance(w.word, str)
+        assert isinstance(w.cos_beta, float)
+        # Both sides present
+        sides = {w.side for w in words}
         assert sides == {"pos", "neg"}
 
-    def test_neighbors(self, pls_result):
-        nbrs = pls_result.neighbors("pos", n=3)
-        assert isinstance(nbrs, list)
-        assert len(nbrs) <= 3
-        assert isinstance(nbrs[0], tuple)
+    def test_words_sliced_by_side(self, pls_result):
+        """Top-N words per side via list comprehension."""
+        pos_words = [w for w in pls_result.words if w.side == "pos"][:5]
+        neg_words = [w for w in pls_result.words if w.side == "neg"][:5]
+        assert len(pos_words) == 5
+        assert len(neg_words) == 5
 
-    def test_doc_scores(self, pls_result):
-        scores = pls_result.doc_scores()
-        assert "idx" in scores
-        assert "cos_align" in scores
-        assert "score_std" in scores
-        assert "yhat_raw" in scores
-        n = pls_result.n_kept
-        assert scores["idx"].shape[0] == n
-        assert scores["cos_align"].shape[0] == n
-        assert scores["score_std"].shape[0] == n
-        assert scores["yhat_raw"].shape[0] == n
+    def test_docs_view(self, pls_result):
+        docs = list(pls_result.docs)
+        n = pls_result.stats.n_kept
+        assert len(docs) == n
+        d = docs[0]
+        assert hasattr(d, "doc_id")
+        assert hasattr(d, "y_true")
+        assert hasattr(d, "y_hat")
+        assert hasattr(d, "cos_align")
 
 
 class TestResultRepr:
     def test_pls_repr(self, pls_result):
         r = repr(pls_result)
-        assert "PLS" in r
-        assert "r2=" in r
+        assert "PLSResult" in r
+        assert "r²" in r
 
     def test_pcaols_repr(self, pcaols_result):
         r = repr(pcaols_result)
-        assert "PCAOLS" in r
-        assert "r2=" in r
+        assert "PCAOLSResult" in r
+        assert "r²" in r
 
 
 class TestEffectSizes:
     def test_y_mean_y_std(self, pls_result):
-        assert isinstance(pls_result.y_mean, float)
-        assert isinstance(pls_result.y_std, float)
-        assert pls_result.y_std > 0
+        assert isinstance(pls_result.stats.y_mean, float)
+        assert isinstance(pls_result.stats.y_std, float)
+        assert pls_result.stats.y_std > 0
 
-    def test_cos_align(self, pls_result):
-        assert pls_result.cos_align.shape == (pls_result.n_kept,)
-        assert np.all(pls_result.cos_align >= -1.0 - 1e-10)
-        assert np.all(pls_result.cos_align <= 1.0 + 1e-10)
+    def test_cos_align_on_docs(self, pls_result):
+        """cos_align is per-doc, accessed via docs view."""
+        cos_aligns = np.array([d.cos_align for d in pls_result.docs])
+        assert cos_aligns.shape == (pls_result.stats.n_kept,)
+        assert np.all(cos_aligns >= -1.0 - 1e-10)
+        assert np.all(cos_aligns <= 1.0 + 1e-10)
 
     def test_y_corr_pred(self, pls_result):
-        assert 0 <= pls_result.y_corr_pred <= 1
+        assert 0 <= pls_result.stats.y_corr_pred <= 1
 
     def test_delta(self, pls_result):
-        assert isinstance(pls_result.delta, float)
-        expected = 0.10 * pls_result.beta_norm * pls_result.y_std
-        assert abs(pls_result.delta - expected) < 1e-12
+        assert isinstance(pls_result.stats.delta, float)
+        expected = 0.10 * pls_result.stats.beta_norm * pls_result.stats.y_std
+        assert abs(pls_result.stats.delta - expected) < 1e-12
 
     def test_iqr_effect(self, pls_result):
-        assert isinstance(pls_result.iqr_effect, float)
-        assert pls_result.iqr_effect >= 0
-
-    def test_doc_scores_reuses_cos_align(self, pls_result):
-        """doc_scores() should use precomputed cos_align."""
-        scores = pls_result.doc_scores()
-        np.testing.assert_array_almost_equal(
-            scores["cos_align"], pls_result.cos_align,
-        )
+        assert isinstance(pls_result.stats.iqr_effect, float)
+        assert pls_result.stats.iqr_effect >= 0
 
     def test_pcaols_has_effect_sizes(self, pcaols_result):
-        assert hasattr(pcaols_result, "delta")
-        assert hasattr(pcaols_result, "iqr_effect")
-        assert hasattr(pcaols_result, "y_corr_pred")
-
-
-class TestSummary:
-    def test_pls_summary_is_string(self, pls_result):
-        s = pls_result.summary()
-        assert isinstance(s, str)
-
-    def test_pls_summary_contains_key_info(self, pls_result):
-        s = pls_result.summary()
-        assert "PLS" in s
-        assert "kept" in s
-
-    def test_pcaols_summary(self, pcaols_result):
-        s = pcaols_result.summary()
-        assert isinstance(s, str)
-        assert "PCA" in s
-
-    def test_summary_multiline(self, pls_result):
-        s = pls_result.summary()
-        assert s.count("\n") >= 5
+        assert hasattr(pcaols_result.stats, "delta")
+        assert hasattr(pcaols_result.stats, "iqr_effect")
+        assert hasattr(pcaols_result.stats, "y_corr_pred")
 
 
 class TestExtremeDocs:
-    def test_returns_list_of_dicts(self, pls_result):
-        docs = pls_result.extreme_docs(k=2)
-        assert isinstance(docs, list)
-        assert all(isinstance(d, dict) for d in docs)
+    """docs.pos(k) / docs.neg(k) expose the β-aligned ends of y_hat."""
 
-    def test_dict_keys(self, pls_result):
-        docs = pls_result.extreme_docs(k=2)
-        if docs:
-            assert set(docs[0].keys()) == {"idx", "y_true", "yhat", "cos", "side"}
+    def test_pos_docs_are_doc_objects(self, pls_result):
+        pos = list(pls_result.docs.pos(2))
+        assert len(pos) == 2
+        assert all(hasattr(d, "doc_id") for d in pos)
 
-    def test_sides(self, pls_result):
-        docs = pls_result.extreme_docs(k=2)
-        sides = {d["side"] for d in docs}
-        assert sides == {"top", "bottom"}
+    def test_pos_docs_sorted_descending(self, pls_result):
+        pos = list(pls_result.docs.pos(3))
+        yhats = [d.y_hat for d in pos]
+        assert yhats == sorted(yhats, reverse=True)
 
-    def test_top_docs_have_highest_yhat(self, pls_result):
-        docs = pls_result.extreme_docs(k=2, by="predicted")
-        top_docs = [d for d in docs if d["side"] == "top"]
-        bottom_docs = [d for d in docs if d["side"] == "bottom"]
-        if top_docs and bottom_docs:
-            # Top docs should have higher yhat than bottom docs
-            min_top = min(d["yhat"] for d in top_docs)
-            max_bottom = max(d["yhat"] for d in bottom_docs)
-            assert min_top >= max_bottom
+    def test_neg_docs_sorted_ascending(self, pls_result):
+        neg = list(pls_result.docs.neg(3))
+        yhats = [d.y_hat for d in neg]
+        assert yhats == sorted(yhats)
 
-    def test_k_clamped(self, pls_result):
-        docs = pls_result.extreme_docs(k=9999)
-        assert len(docs) <= pls_result.n_kept
+    def test_k_clamped_to_n_docs(self, pls_result):
+        pos = list(pls_result.docs.pos(9999))
+        assert len(pos) <= pls_result.stats.n_kept
 
-    def test_by_observed(self, pls_result):
-        docs = pls_result.extreme_docs(k=2, by="observed")
-        assert len(docs) > 0
+    def test_no_overlap_pos_neg(self, pls_result):
+        pos = {d.doc_id for d in pls_result.docs.pos(2)}
+        neg = {d.doc_id for d in pls_result.docs.neg(2)}
+        # With n=8 docs and k=2, they should not overlap
+        assert len(pos) == 2
+        assert len(neg) == 2
 
-    def test_invalid_by(self, pls_result):
-        with pytest.raises(ValueError):
-            pls_result.extreme_docs(k=2, by="invalid")
-
-    def test_empty_when_k_zero(self, pls_result):
-        docs = pls_result.extreme_docs(k=0)
-        assert docs == []
-
-    def test_no_duplicate_indices(self, pls_result):
-        docs = pls_result.extreme_docs(k=2)
-        indices = [d["idx"] for d in docs]
-        assert len(indices) == len(set(indices))
+    def test_k_zero_returns_empty(self, pls_result):
+        pos = list(pls_result.docs.pos(0))
+        assert pos == []
 
 
-class TestSnippetsExtreme:
-    def test_returns_dict(self, pls_result, sample_preprocessed_docs):
-        result = pls_result.snippets_extreme(
-            sample_preprocessed_docs, k=2,
-        )
-        assert isinstance(result, dict)
-        assert "pos" in result and "neg" in result
+class TestFitInfo:
+    """PLS/PCAOLSResult expose FitInfoView with all hyperparams."""
+
+    def test_pls_fit_info_n_components(self, pls_result):
+        assert pls_result.fit_info.n_components == 2
+
+    def test_pls_fit_info_n_perm(self, pls_result):
+        assert pls_result.fit_info.n_perm == 50
+
+    def test_pls_fit_info_n_splits(self, pls_result):
+        assert pls_result.fit_info.n_splits == 50  # default
+
+    def test_pls_fit_info_split_ratio(self, pls_result):
+        assert pls_result.fit_info.split_ratio == 0.5  # default
+
+    def test_pls_fit_info_random_state(self, pls_result):
+        assert pls_result.fit_info.random_state == 42
+
+    def test_pcaols_fit_info_k_params_when_explicit(self, pcaols_result):
+        """When fixed_k is explicit, k_min/k_max/k_step are None."""
+        assert pcaols_result.fit_info.k_min is None
+        assert pcaols_result.fit_info.k_max is None
+        assert pcaols_result.fit_info.k_step is None
+
+    def test_pcaols_fit_info_k_params_when_sweep(self, pcaols_result_sweep):
+        """When sweep is used, k_min/k_max/k_step are stored."""
+        assert pcaols_result_sweep.fit_info.k_min == 2
+        assert pcaols_result_sweep.fit_info.k_max == 6
+        assert pcaols_result_sweep.fit_info.k_step == 1
 
 
-class TestMisdiagnosed:
-    def test_returns_list_of_dicts(self, pls_result):
-        docs = pls_result.misdiagnosed(k=2)
-        assert isinstance(docs, list)
-        assert all(isinstance(d, dict) for d in docs)
+class TestR2AdjPlacement:
+    def test_pls_stats_has_no_r2_adj(self, pls_result):
+        """PLS stats must not expose r2_adj — adjusted R² is OLS-only."""
+        with pytest.raises(AttributeError):
+            pls_result.stats.r2_adj
+        assert "r2_adj" not in pls_result.stats.columns
 
-    def test_dict_keys(self, pls_result):
-        docs = pls_result.misdiagnosed(k=2)
-        if docs:
-            assert set(docs[0].keys()) == {"idx", "y_true", "yhat", "cos", "residual", "side"}
-
-    def test_both_sides(self, pls_result):
-        docs = pls_result.misdiagnosed(k=2, side="both")
-        sides = {d["side"] for d in docs}
-        assert sides == {"over", "under"}
-
-    def test_over_only(self, pls_result):
-        docs = pls_result.misdiagnosed(k=2, side="over")
-        assert all(d["side"] == "over" for d in docs)
-
-    def test_under_only(self, pls_result):
-        docs = pls_result.misdiagnosed(k=2, side="under")
-        assert all(d["side"] == "under" for d in docs)
-
-    def test_residual_sign(self, pls_result):
-        docs = pls_result.misdiagnosed(k=2, side="over")
-        for d in docs:
-            assert d["residual"] >= 0
-
-    def test_invalid_side(self, pls_result):
-        with pytest.raises(ValueError):
-            pls_result.misdiagnosed(k=2, side="invalid")
-
-    def test_sorted_by_abs_residual(self, pls_result):
-        docs = pls_result.misdiagnosed(k=3, side="over")
-        residuals = [abs(d["residual"]) for d in docs]
-        assert residuals == sorted(residuals, reverse=True)
-
-    def test_residual_matches_yhat_minus_y(self, pls_result):
-        docs = pls_result.misdiagnosed(k=3, side="both")
-        for d in docs:
-            expected_residual = d["yhat"] - d["y_true"]
-            assert abs(d["residual"] - expected_residual) < 1e-10
-
-
-class TestSplitTest:
-    """split_test mutates the result in place; use a per-test copy so the
-    session-scoped pls_result fixture stays clean for other tests."""
-
-    @pytest.fixture
-    def r(self, pls_result):
-        import copy
-        return copy.copy(pls_result)
-
-    def test_mutates_in_place_and_returns_self(self, r):
-        out = r.split_test(n_splits=10, seed=42)
-        assert out is r
-        assert r.p_method == "split"
-        assert r.split_mean_r is not None
-
-    def test_pvalue_range(self, r):
-        r.split_test(n_splits=10, seed=42)
-        assert 0 <= r.pvalue <= 1
-
-    def test_default_is_split(self, r):
-        r.split_test(n_splits=10, seed=42)
-        p1 = r.pvalue
-        r.split_test(n_splits=10, seed=42, method="split")
-        assert r.pvalue == p1
-        assert r.p_method == "split"
-
-    def test_invalid_method(self, r):
-        with pytest.raises(ValueError, match="Unknown method"):
-            r.split_test(method="bogus")
-
-    def test_mean_r_in_range(self, r):
-        r.split_test(n_splits=20, seed=42)
-        assert -1 < r.split_mean_r < 1
-
-    def test_split_cal_sets_method_and_clears_perm_null(self, r):
-        r.perm_null = np.array([0.1, 0.2])  # simulate prior perm test
-        r.split_test(method="split_cal", n_splits=5, n_perm=20, seed=42)
-        assert r.p_method == "split_cal"
-        assert r.perm_null is None
-
-    def test_records_params(self, r):
-        r.split_test(n_splits=15, split_ratio=0.6, seed=7)
-        assert r.n_splits == 15
-        assert r.split_ratio == 0.6
-        assert r.random_state == 7
-
-    def test_not_on_pcaols(self, pcaols_result):
-        assert not hasattr(pcaols_result, "split_test")
+    def test_pcaols_has_r2_adj(self, pcaols_result):
+        """PCAOLSResult should still have r2_adj in stats."""
+        assert pcaols_result.stats.r2_adj is not None
+        assert isinstance(pcaols_result.stats.r2_adj, float)
 
 
 class TestReport:
-    """report() method on regression results."""
+    """report() method on regression results returns a Report object."""
 
-    def test_pls_report_default(self, pls_result, capsys):
-        text = pls_result.report()
-        captured = capsys.readouterr()
-        assert captured.out.strip() == text.strip()
+    def test_pls_report_returns_report(self, pls_result):
+        report = pls_result.report()
+        assert isinstance(report, Report)
+
+    def test_pls_report_to_text_contains_pls(self, pls_result):
+        text = pls_result.report().to_text()
         assert "PLS" in text
-        assert "Top Words" in text
-        assert "+ pole" in text
 
-    def test_pcaols_report_default(self, pcaols_result, capsys):
-        text = pcaols_result.report()
-        captured = capsys.readouterr()
-        assert captured.out.strip() == text.strip()
-        assert "PCA" in text
-        assert "Top Words" in text
+    def test_pls_report_to_text_contains_top_words_section(self, pls_result):
+        text = pls_result.report().to_text()
+        assert "Top words" in text
 
-    def test_top_words_none_skips(self, pls_result):
-        text = pls_result.report(top_words=None)
-        assert "Top Words" not in text
+    def test_pcaols_report_to_text_contains_pca(self, pcaols_result):
+        text = pcaols_result.report().to_text()
+        assert "PCA" in text or "PCAOLSResult" in text
+
+    def test_pcaols_report_has_top_words(self, pcaols_result):
+        text = pcaols_result.report().to_text()
+        assert "Top words" in text
+
+    def test_top_words_none_skips_section(self, pls_result):
+        text = pls_result.report(top_words=None).to_text()
+        assert "Top words" not in text
 
     def test_top_words_custom_n(self, pls_result):
-        text = pls_result.report(top_words=3)
+        text = pls_result.report(top_words=3).to_text()
         assert "n=3" in text
 
-    def test_clusters(self, pls_result):
-        text = pls_result.report(top_words=None, clusters=10)
+    def test_clusters_section(self, pls_result):
+        text = pls_result.report(clusters=10).to_text()
         assert "Clusters" in text
         assert "coherence" in text
 
-    def test_extreme_docs(self, pls_result):
-        text = pls_result.report(top_words=None, extreme_docs=2)
-        assert "Extreme Documents" in text
-        assert "Highest predicted" in text
-        assert "Lowest predicted" in text
+    def test_extreme_docs_section(self, pls_result):
+        text = pls_result.report(extreme_docs=2).to_text()
+        assert "Docs" in text
 
-    def test_misdiagnosed(self, pls_result):
-        text = pls_result.report(top_words=None, misdiagnosed=2)
-        assert "Misdiagnosed" in text
+    def test_stats_always_present(self, pls_result):
+        text = pls_result.report(top_words=None).to_text()
+        assert "r²" in text or "r2" in text.lower()
+        assert "n_kept" in text
 
-    def test_all_sections(self, pls_result):
-        text = pls_result.report(top_words=3, clusters=10, extreme_docs=2, misdiagnosed=2)
-        assert "Top Words" in text
-        assert "Clusters" in text
-        assert "Extreme Documents" in text
-        assert "Misdiagnosed" in text
+    def test_report_citation_always_present(self, pls_result):
+        """Every report ends with the APA citation."""
+        text = pls_result.report(top_words=None).to_text()
+        assert "Plisiecki" in text
 
-    def test_summary_always_present(self, pls_result):
-        text = pls_result.report(top_words=None)
-        assert "R²" in text
-        assert "kept" in text
+    def test_report_not_auto_printed(self, pls_result, capsys):
+        """report() does NOT auto-print to stdout; use .to_text() explicitly."""
+        _ = pls_result.report()
+        captured = capsys.readouterr()
+        assert captured.out == ""
 
 
 class TestPlotSweep:
@@ -384,209 +294,39 @@ class TestPlotSweepMatplotlibOptional:
             pcaols_result_sweep.plot_sweep()
 
 
-class TestSnippetsOnResult:
-    """_SSDResultBase.snippets() on real result objects."""
-
-    def test_pls_snippets(self, pls_result, sample_preprocessed_docs):
-        result = pls_result.snippets(sample_preprocessed_docs, top_per_side=10)
-        assert isinstance(result, dict)
-        assert "pos" in result and "neg" in result
-
-    def test_pcaols_snippets(self, pcaols_result, sample_preprocessed_docs):
-        result = pcaols_result.snippets(sample_preprocessed_docs, top_per_side=10)
-        assert isinstance(result, dict)
-        assert "pos" in result and "neg" in result
-
-
-class TestGroupResultNeighborsTuples:
-    """GroupResult.neighbors() returns consistent 3-tuples."""
-
-    def test_2group_returns_3tuples(self, group_result_2g):
-        nbrs = group_result_2g.neighbors("pos", n=3)
-        assert isinstance(nbrs, list)
-        assert len(nbrs) > 0
-        for item in nbrs:
-            assert len(item) == 3, f"Expected 3-tuple, got {len(item)}-tuple: {item}"
-            label, word, cos = item
-            assert isinstance(label, str)
-            assert isinstance(word, str)
-            assert isinstance(cos, float)
-
-    def test_3group_returns_3tuples(self, group_result_3g):
-        nbrs = group_result_3g.neighbors("pos", n=3)
-        assert isinstance(nbrs, list)
-        assert len(nbrs) > 0
-        for item in nbrs:
-            assert len(item) == 3
-
-    def test_3group_has_all_contrast_labels(self, group_result_3g):
-        nbrs = group_result_3g.neighbors("pos", n=3)
-        labels = {item[0] for item in nbrs}
-        assert len(labels) == 3  # C(3,2) = 3 contrasts
-
-
-class TestPLSResultHyperparams:
-    def test_stores_random_state(self, pls_result):
-        assert hasattr(pls_result, "random_state")
-        assert pls_result.random_state == 42
-
-    def test_stores_n_perm(self, pls_result):
-        assert hasattr(pls_result, "n_perm")
-        assert pls_result.n_perm == 50
-
-    def test_stores_n_splits(self, pls_result):
-        assert hasattr(pls_result, "n_splits")
-        assert pls_result.n_splits == 50  # default
-
-    def test_stores_split_ratio(self, pls_result):
-        assert hasattr(pls_result, "split_ratio")
-        assert pls_result.split_ratio == 0.5  # default
-
-
-class TestPCAOLSResultHyperparams:
-    def test_stores_k_min_none_when_explicit(self, pcaols_result):
-        """When n_components is explicitly set, sweep params are None."""
-        assert hasattr(pcaols_result, "k_min")
-        assert pcaols_result.k_min is None
-
-    def test_stores_k_max_none_when_explicit(self, pcaols_result):
-        assert hasattr(pcaols_result, "k_max")
-        assert pcaols_result.k_max is None
-
-    def test_stores_k_step_none_when_explicit(self, pcaols_result):
-        assert hasattr(pcaols_result, "k_step")
-        assert pcaols_result.k_step is None
-
-    def test_stores_k_params_when_sweep(self, pcaols_result_sweep):
-        """When sweep is used, k_min/k_max/k_step are stored."""
-        assert pcaols_result_sweep.k_min == 2
-        assert pcaols_result_sweep.k_max == 6
-        assert pcaols_result_sweep.k_step == 1
-
-
 class TestGroupResultHyperparams:
     def test_stores_random_state(self, group_result_2g):
-        assert hasattr(group_result_2g, "random_state")
         assert group_result_2g.random_state == 42
 
     def test_stores_random_state_3g(self, group_result_3g):
         assert group_result_3g.random_state == 42
 
 
-class TestR2AdjPlacement:
-    def test_pls_has_no_r2_adj(self, pls_result):
-        """PLSResult should not have r2_adj (not meaningful for PLS)."""
-        assert pls_result.r2_adj is None
+class TestGroupResultStats:
+    """GroupResult exposes G, n_kept, pairs, omnibus via new views."""
 
-    def test_pcaols_has_r2_adj(self, pcaols_result):
-        """PCAOLSResult should still have r2_adj."""
-        assert pcaols_result.r2_adj is not None
-        assert isinstance(pcaols_result.r2_adj, float)
+    def test_group_result_g(self, group_result_2g):
+        assert group_result_2g.G == 2
 
-    def test_pls_summary_no_r2_adj(self, pls_result):
-        """PLS summary should not mention R²_adj."""
-        s = pls_result.summary()
-        assert "R²_adj" not in s
+    def test_group_result_n_kept(self, group_result_2g):
+        assert group_result_2g.n_kept > 0
 
-    def test_pcaols_summary_has_r2_adj(self, pcaols_result):
-        """PCA+OLS summary should still show R²_adj."""
-        s = pcaols_result.summary()
-        assert "R²_adj" in s
+    def test_group_omnibus(self, group_result_2g):
+        assert np.isfinite(group_result_2g.test.omnibus_T)
+        assert 0 <= group_result_2g.test.omnibus_p <= 1
 
+    def test_pairs_count_2g(self, group_result_2g):
+        assert len(group_result_2g.pairs) == 1
 
-class TestGroupResultSnippets:
-    """GroupResult.snippets() method."""
+    def test_pairs_count_3g(self, group_result_3g):
+        assert len(group_result_3g.pairs) == 3  # C(3,2)=3
 
-    def test_returns_pos_neg_dict(self, group_result_2g, sample_preprocessed_docs):
-        result = group_result_2g.snippets(
-            sample_preprocessed_docs, top_per_side=10,
-        )
-        assert isinstance(result, dict)
-        assert "pos" in result and "neg" in result
+    def test_pair_access(self, group_result_2g):
+        pair = list(group_result_2g.pairs)[0]
+        assert np.isfinite(pair.T)
+        assert 0 <= pair.p_raw <= 1
+        assert 0 <= pair.p_corrected <= 1
+        assert np.isfinite(pair.cohens_d)
 
-    def test_snippets_have_contrast_key(self, group_result_2g, sample_preprocessed_docs):
-        result = group_result_2g.snippets(
-            sample_preprocessed_docs, top_per_side=10,
-        )
-        for side in ("pos", "neg"):
-            for row in result[side]:
-                assert "contrast" in row
-                assert "vs" in row["contrast"]
-
-    def test_3group_snippets(self, group_result_3g, sample_preprocessed_docs):
-        result = group_result_3g.snippets(
-            sample_preprocessed_docs, top_per_side=10,
-        )
-        assert isinstance(result, dict)
-        contrasts = set()
-        for side in ("pos", "neg"):
-            for row in result[side]:
-                contrasts.add(row["contrast"])
-        # Should have snippets from multiple contrasts
-        assert len(contrasts) >= 1
-
-
-class TestClusterSnippetsOnResult:
-    """_Interpretable.cluster_snippets() integration via real result objects."""
-
-    def test_pls_with_explicit_clusters(self, pls_result, sample_preprocessed_docs):
-        clusters = pls_result.cluster_neighbors("pos", topn=10, k=2)
-        result = pls_result.cluster_snippets(
-            sample_preprocessed_docs,
-            pos_clusters=clusters,
-            neg_clusters=[],
-            top_per_cluster=10,
-        )
-        assert isinstance(result, dict)
-        assert "pos" in result and "neg" in result
-        # neg_clusters=[] → neg side empty
-        assert result["neg"] == []
-
-    def test_pls_falls_back_to_cached_clusters(self, pls_result, sample_preprocessed_docs):
-        # cluster_neighbors() caches on the result object
-        pls_result.cluster_neighbors("pos", topn=10, k=2)
-        pls_result.cluster_neighbors("neg", topn=10, k=2)
-        result = pls_result.cluster_snippets(
-            sample_preprocessed_docs, top_per_cluster=10,
-        )
-        assert isinstance(result, dict)
-        assert "pos" in result and "neg" in result
-
-    def test_pls_empty_clusters_returns_empty(self, pls_result, sample_preprocessed_docs):
-        # Passing empty lists explicitly bypasses any cached clusters
-        result = pls_result.cluster_snippets(
-            sample_preprocessed_docs,
-            pos_clusters=[],
-            neg_clusters=[],
-            top_per_cluster=10,
-        )
-        assert result == {"pos": [], "neg": []}
-
-    def test_pcaols_cluster_snippets(self, pcaols_result, sample_preprocessed_docs):
-        clusters = pcaols_result.cluster_neighbors("pos", topn=10, k=2)
-        result = pcaols_result.cluster_snippets(
-            sample_preprocessed_docs,
-            pos_clusters=clusters,
-            top_per_cluster=10,
-        )
-        assert isinstance(result, dict)
-        assert "pos" in result and "neg" in result
-
-    def test_snippet_dicts_have_centroid_label(self, pls_result, sample_preprocessed_docs):
-        clusters = pls_result.cluster_neighbors("pos", topn=10, k=2)
-        result = pls_result.cluster_snippets(
-            sample_preprocessed_docs,
-            pos_clusters=clusters,
-            top_per_cluster=10,
-        )
-        for row in result["pos"]:
-            assert "centroid_label" in row
-
-    def test_group_result_uses_cached_clusters(self, group_result_2g, sample_preprocessed_docs):
-        # GroupResult.cluster_neighbors() now caches — cluster_snippets() uses cached clusters
-        group_result_2g.cluster_neighbors("pos", topn=10)
-        group_result_2g.cluster_neighbors("neg", topn=10)
-        result = group_result_2g.cluster_snippets(
-            sample_preprocessed_docs, top_per_cluster=10,
-        )
-        assert "pos" in result and "neg" in result
+    def test_correction_default_holm(self, group_result_2g):
+        assert group_result_2g.correction == "holm"

@@ -273,8 +273,8 @@ Original SSD algorithm from the paper.
 
 ```python
 result = ssd.fit_ols(
-    n_components=None,    # None = auto-select via interpretability+stability sweep
-    k_min=20,
+    fixed_k=None,         # None = auto-select via interpretability+stability sweep
+    k_min=2,
     k_max=120,
     k_step=2,
     verbose=False,
@@ -283,8 +283,8 @@ result = ssd.fit_ols(
 
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
-| `n_components` | `int \| None` | `None` | PCA components. `None` = auto-select via sweep |
-| `k_min` | `int` | `20` | Minimum PCA-K for sweep |
+| `fixed_k` | `int \| None` | `None` | Fixed PCA components. `None` = auto-select via sweep |
+| `k_min` | `int` | `2` | Minimum PCA-K for sweep |
 | `k_max` | `int` | `120` | Maximum PCA-K for sweep |
 | `k_step` | `int` | `2` | Step size |
 | `verbose` | `bool` | `False` | Print progress |
@@ -356,7 +356,7 @@ print(result.report(top_words=10, clusters=100, extreme_docs=30, misdiagnosed=20
 
 ## Choosing PCA Dimensionality (PCA Sweep)
 
-When using `fit_ols()`, selecting the number of PCA components (`n_components = K`) can be a researcher degree of freedom. Pass `n_components=None` (the default) to run an automatic **PCA sweep** that evaluates a range of K values and selects the most robust solution.
+When using `fit_ols()`, selecting the number of PCA components (`fixed_k = K`) can be a researcher degree of freedom. Pass `fixed_k=None` (the default) to run an automatic **PCA sweep** that evaluates a range of K values and selects the most robust solution.
 
 ### What PCA Sweep optimizes
 
@@ -371,7 +371,7 @@ These signals are smoothed using an AUCK window.
 ### Example
 
 ```python
-result = ssd.fit_ols(n_components=None, k_min=20, k_max=120, verbose=True)
+result = ssd.fit_ols(fixed_k=None, k_min=2, k_max=120, verbose=True)
 print(f"Selected K = {result.n_components}")
 print(result.summary())
 
@@ -564,7 +564,7 @@ from ssdiff import Embeddings, Corpus, SSD
 
 - `SSD(embeddings, corpus, y, lexicon, *, window=3, sif_a=1e-3, use_full_doc=False)`
 - `.fit_pls(n_components=1, p_method="auto", ...)` -> `PLSResult`
-- `.fit_ols(n_components=None, ...)` -> `PCAOLSResult`
+- `.fit_ols(fixed_k=None, ...)` -> `PCAOLSResult`
 - `.fit_groups(median_split=False, n_perm=5000, correction="holm", ...)` -> `GroupResult`
 
 ### `PLSResult` / `PCAOLSResult`

@@ -5,6 +5,7 @@ import pytest
 
 from ssdiff.corpus import Corpus
 from ssdiff.results import GroupResult
+from ssdiff.results.group_result import PairView
 from ssdiff.ssd import SSD
 
 
@@ -19,39 +20,26 @@ class TestFitGroups2Groups:
 
     def test_returns_group_result(self, result):
         assert isinstance(result, GroupResult)
-        assert result.result_type == "group"
 
     def test_attributes(self, result):
         assert result.G == 2
-        assert set(result.group_labels) == {"A", "B"}
+        # group_labels removed; check via pairs
+        g_labels = {p.g1 for p in result.pairs} | {p.g2 for p in result.pairs}
+        assert g_labels == {"A", "B"}
         assert result.n_kept > 0
-        assert np.isfinite(result.omnibus_T)
-        assert 0 <= result.omnibus_p <= 1
-        assert result.omnibus_T >= 0  # T-statistic from permutation should be non-negative
+        assert np.isfinite(result.test.omnibus_T)
+        assert 0 <= result.test.omnibus_p <= 1
+        assert result.test.omnibus_T >= 0
 
     def test_pairwise(self, result):
-        assert len(result.pairwise) == 1  # 2 groups → 1 pair
-        key = list(result.pairwise.keys())[0]
-        r = result.pairwise[key]
-        assert "T" in r
-        assert "p_raw" in r
-        assert "p_corrected" in r
-        assert "cohens_d" in r
-        assert "beta_unit" in r
-        # Values should be reasonable
-        assert np.isfinite(r["T"])
-        assert 0 <= r["p_raw"] <= 1
-        assert 0 <= r["p_corrected"] <= 1
-        assert r["p_corrected"] >= r["p_raw"]  # Correction only inflates
-        assert np.isfinite(r["cohens_d"])
-        assert r["beta_unit"].ndim == 1
-        assert np.linalg.norm(r["beta_unit"]) == pytest.approx(1.0, abs=1e-6)
-
-    def test_results_table(self, result):
-        table = result.results_table()
-        assert isinstance(table, list)
-        assert len(table) == 1
-        assert "group_A" in table[0]
+        assert len(result.pairs) == 1  # 2 groups → 1 pair
+        p = list(result.pairs)[0]
+        assert np.isfinite(p.T)
+        assert 0 <= p.p_raw <= 1
+        assert 0 <= p.p_corrected <= 1
+        assert p.p_corrected >= p.p_raw  # Correction only inflates
+        assert np.isfinite(p.cohens_d)
+        assert p.n_g1 > 0 and p.n_g2 > 0
 
     def test_correction_default_holm(self, result):
         assert result.correction == "holm"
@@ -68,8 +56,8 @@ class TestFitGroups2Groups:
 
     def test_repr(self, result):
         r = repr(result)
-        assert "2 groups" in r
-        assert "omnibus_p" in r
+        assert "GroupResult" in r
+        assert "omnibus" in r or "omnibus_T" in r or "p=" in r
 
 
 class TestFitGroups3Groups:
@@ -81,8 +69,8 @@ class TestFitGroups3Groups:
         ssd = SSD(tiny_kv, corpus, large_groups_3x20, lexicon)
         result = ssd.fit_groups(n_perm=50, random_state=42)
         assert result.G == 3
-        assert len(result.pairwise) == 3  # C(3,2) = 3 pairs
-        assert 0 <= result.omnibus_p <= 1
+        assert len(result.pairs) == 3  # C(3,2) = 3 pairs
+        assert 0 <= result.test.omnibus_p <= 1
 
 
 class TestFitGroupsSmallGroupFilter:
@@ -108,13 +96,14 @@ class TestFitGroupsSmallGroupFilter:
         with pytest.warns(UserWarning, match="Group 'C' dropped"):
             result = ssd.fit_groups(n_perm=50)
         assert result.G == 2
-        assert result.n_group_dropped == 5
+        # n_group_dropped not in new API; core behavior verified via G==2
 
     def test_too_few_groups_after_filter_raises(self, tiny_kv, sample_docs, sample_groups, lexicon):
         """If all groups are <20, raise ValueError."""
         corpus = Corpus(sample_docs, pretokenized=True, lang="pl")
         ssd = SSD(tiny_kv, corpus, sample_groups, lexicon)
-        with pytest.raises(ValueError, match="Need at least 2 groups"):
+        with pytest.warns(UserWarning, match="dropped"), \
+             pytest.raises(ValueError, match="Need at least 2 groups"):
             ssd.fit_groups(n_perm=50)
 
 
@@ -126,7 +115,8 @@ class TestFitGroupsMedianSplit:
         ssd = SSD(tiny_kv, corpus, sample_y, lexicon)
         result = ssd.fit_groups(median_split=True, n_perm=50)
         assert result.G == 2
-        assert set(result.group_labels) == {"high", "low"}
+        g_labels = {p.g1 for p in result.pairs} | {p.g2 for p in result.pairs}
+        assert g_labels == {"high", "low"}
 
     def test_median_split_identical_y_raises(self, tiny_kv, sample_docs, lexicon):
         y_const = np.ones(len(sample_docs))
@@ -146,33 +136,33 @@ class TestFitGroupsCorrection:
 
     def test_holm(self, ssd):
         r = ssd.fit_groups(n_perm=50, correction="holm")
-        for pw in r.pairwise.values():
-            assert pw["p_corrected"] >= pw["p_raw"]
+        for p in r.pairs:
+            assert p.p_corrected >= p.p_raw
 
     def test_bonferroni(self, ssd):
         r = ssd.fit_groups(n_perm=50, correction="bonferroni")
-        for pw in r.pairwise.values():
-            assert pw["p_corrected"] >= pw["p_raw"]
+        for p in r.pairs:
+            assert p.p_corrected >= p.p_raw
 
     def test_fdr_bh(self, ssd):
         r = ssd.fit_groups(n_perm=50, correction="fdr_bh")
         assert r.correction == "fdr_bh"
-        for pw in r.pairwise.values():
-            assert 0 <= pw["p_corrected"] <= 1
-            assert pw["p_corrected"] >= pw["p_raw"]
+        for p in r.pairs:
+            assert 0 <= p.p_corrected <= 1
+            assert p.p_corrected >= p.p_raw
 
     def test_none(self, ssd):
         r = ssd.fit_groups(n_perm=50, correction="none")
-        for pw in r.pairwise.values():
-            assert pw["p_corrected"] == pw["p_raw"]
+        for p in r.pairs:
+            assert p.p_corrected == p.p_raw
 
     def test_invalid_raises(self, ssd):
         with pytest.raises(ValueError, match="Unknown correction"):
             ssd.fit_groups(n_perm=50, correction="invalid")
 
 
-class TestGroupResultInterpretation:
-    """GroupResult interpretation methods."""
+class TestGroupResultPairsAccess:
+    """GroupResult.pairs access: tuple key, iteration, PairView semantics."""
 
     @pytest.fixture(scope="class")
     def result(self, tiny_kv, large_docs, large_groups_2, lexicon):
@@ -180,24 +170,23 @@ class TestGroupResultInterpretation:
         ssd = SSD(tiny_kv, corpus, large_groups_2, lexicon)
         return ssd.fit_groups(n_perm=50, random_state=42)
 
-    def test_top_words_has_contrast(self, result):
-        words = result.top_words(n=3)
-        assert isinstance(words, list)
-        assert len(words) > 0
-        assert "contrast" in words[0]
-        assert "side" in words[0]
+    def test_pairs_iterable(self, result):
+        pairs = list(result.pairs)
+        assert len(pairs) == 1
 
-    def test_neighbors(self, result):
-        nbrs = result.neighbors("pos", n=3)
-        assert isinstance(nbrs, list)
+    def test_pairs_tuple_key_access(self, result):
+        """gr.pairs["A", "B"] returns a PairView."""
+        pv = result.pairs["A", "B"]
+        assert isinstance(pv, PairView)
+        assert "A" in pv.contrast and "B" in pv.contrast
 
-    def test_cluster_neighbors(self, result):
-        clusters = result.cluster_neighbors("pos", topn=10, k=2)
-        assert isinstance(clusters, list)
+    def test_pairs_missing_key_raises(self, result):
+        with pytest.raises(KeyError):
+            _ = result.pairs["X", "Y"]
 
 
-class TestGroupResultFilterGroups:
-    """GroupResult.filter_groups()."""
+class TestGroupResultPairViewSemantics:
+    """PairView sign-flip and field-swap on reverse access."""
 
     @pytest.fixture(scope="class")
     def result_3g(self, tiny_kv, large_docs_3x20, large_groups_3x20, lexicon):
@@ -205,44 +194,30 @@ class TestGroupResultFilterGroups:
         ssd = SSD(tiny_kv, corpus, large_groups_3x20, lexicon)
         return ssd.fit_groups(n_perm=50, random_state=42)
 
-    def test_filter_two_groups(self, result_3g):
-        filtered = result_3g.filter_groups("X", "Y")
-        assert filtered.G == 2
-        assert len(filtered.pairwise) == 1
+    def test_pair_access_all_contrasts(self, result_3g):
+        """3 groups → 3 pairs accessible by tuple key."""
+        pairs = list(result_3g.pairs)
+        g_set = {(p.g1, p.g2) for p in pairs}
+        # C(3,2) = 3 unique ordered pairs
+        assert len(g_set) == 3
 
-    def test_filter_one_group(self, result_3g):
-        filtered = result_3g.filter_groups("X")
-        for g1, g2 in filtered.pairwise:
-            assert "X" in (g1, g2)
+    def test_reverse_access_flips_t(self, result_3g):
+        """Accessing pair in reverse order flips the T statistic sign."""
+        # Find one pair
+        p_canonical = list(result_3g.pairs)[0]
+        g1, g2 = p_canonical.g1, p_canonical.g2
+        pv_forward = result_3g.pairs[g1, g2]
+        pv_reverse = result_3g.pairs[g2, g1]
+        assert abs(pv_forward.pair.T + pv_reverse.pair.T) < 1e-9
 
-    def test_filter_invalid_label_raises(self, result_3g):
-        with pytest.raises(ValueError, match="not found"):
-            result_3g.filter_groups("NONEXISTENT")
-
-    def test_filtered_summary(self, result_3g):
-        filtered = result_3g.filter_groups("X", "Y")
-        s = filtered.summary()
-        assert "filtered" in s.lower()
-
-
-class TestGroupSummary:
-    """GroupResult.summary() display."""
-
-    def test_summary_2groups(self, tiny_kv, large_docs, large_groups_2, lexicon):
-        corpus = Corpus(large_docs, pretokenized=True, lang="pl")
-        ssd = SSD(tiny_kv, corpus, large_groups_2, lexicon)
-        result = ssd.fit_groups(n_perm=50)
-        s = result.summary()
-        assert isinstance(s, str)
-        assert "Omnibus" in s
-        assert "Pairwise" in s
-
-    def test_summary_3groups(self, tiny_kv, large_docs_3x20, large_groups_3x20, lexicon):
-        corpus = Corpus(large_docs_3x20, pretokenized=True, lang="pl")
-        ssd = SSD(tiny_kv, corpus, large_groups_3x20, lexicon)
-        result = ssd.fit_groups(n_perm=50)
-        s = result.summary()
-        assert s.count("vs") == 3
+    def test_reverse_access_preserves_pvalues(self, result_3g):
+        """P-values are symmetric — must not flip on reverse access."""
+        p_canonical = list(result_3g.pairs)[0]
+        g1, g2 = p_canonical.g1, p_canonical.g2
+        pv_forward = result_3g.pairs[g1, g2]
+        pv_reverse = result_3g.pairs[g2, g1]
+        assert pv_forward.pair.p_raw == pv_reverse.pair.p_raw
+        assert pv_forward.pair.p_corrected == pv_reverse.pair.p_corrected
 
 
 class TestGroupReport:
@@ -254,37 +229,32 @@ class TestGroupReport:
         ssd = SSD(tiny_kv, corpus, large_groups_2, lexicon)
         return ssd.fit_groups(n_perm=50, random_state=42)
 
-    def test_default(self, result, capsys):
-        text = result.report()
-        captured = capsys.readouterr()
-        assert captured.out.strip() == text.strip()
-        assert "Group Analysis" in text
-        assert "Top Words" in text
+    def test_default_report_is_report_object(self, result):
+        from ssdiff.results.report import Report
+        assert isinstance(result.report(), Report)
 
-    def test_top_words_none_skips(self, result):
-        text = result.report(top_words=None)
-        assert "Top Words" not in text
+    def test_report_text_has_omnibus(self, result):
+        text = result.report().to_text()
+        assert "Omnibus" in text
 
-    def test_top_words_has_contrast_label(self, result):
-        text = result.report(top_words=3)
+    def test_report_text_has_pairwise(self, result):
+        text = result.report().to_text()
+        assert "Pairwise" in text
+
+    def test_report_text_has_vs(self, result):
+        text = result.report().to_text()
         assert "vs" in text
 
-    def test_clusters(self, result):
-        text = result.report(top_words=None, clusters=10)
-        assert "Clusters" in text
+    def test_report_not_auto_printed(self, result, capsys):
+        """report() does NOT auto-print to stdout."""
+        _ = result.report()
+        captured = capsys.readouterr()
+        assert captured.out == ""
 
-    def test_extreme_docs_ignored(self, result):
-        text = result.report(top_words=None, extreme_docs=5)
-        assert "Extreme" not in text
-
-    def test_misdiagnosed_ignored(self, result):
-        text = result.report(top_words=None, misdiagnosed=5)
-        assert "Misdiagnosed" not in text
-
-    def test_summary_always_present(self, result):
-        text = result.report(top_words=None)
-        assert "Omnibus" in text
-        assert "Pairwise" in text
+    def test_report_citation_present(self, result):
+        """Every report contains the citation."""
+        text = result.report().to_text()
+        assert "Plisiecki" in text
 
 
 class TestSSDReuseFitGroups:
@@ -307,11 +277,9 @@ class TestSSDReuseFitGroups:
         ssd = SSD(tiny_kv, corpus, large_y, lexicon)
         gr = ssd.fit_groups(median_split=True, n_perm=50)
         pls = ssd.fit_pls(n_components=2, p_method=None)
-        assert gr.result_type == "group"
-        assert pls.result_type == "pls"
-        # Results should be independent
+        assert isinstance(gr, GroupResult)
         assert gr.G == 2
-        assert pls.n_components == 2
+        assert pls.fit_info.n_components == 2
 
     def test_pls_then_groups(self, tiny_kv, large_docs, large_y, lexicon):
         """Same SSD can fit PLS first and then groups."""
@@ -319,14 +287,13 @@ class TestSSDReuseFitGroups:
         ssd = SSD(tiny_kv, corpus, large_y, lexicon)
         pls = ssd.fit_pls(n_components=2, p_method=None)
         gr = ssd.fit_groups(median_split=True, n_perm=50)
-        assert pls.result_type == "pls"
-        assert gr.result_type == "group"
+        assert isinstance(gr, GroupResult)
 
     def test_pls_then_ols(self, tiny_kv, large_docs, large_y, lexicon):
         """Same SSD can fit PLS and then OLS."""
         corpus = Corpus(large_docs, pretokenized=True, lang="pl")
         ssd = SSD(tiny_kv, corpus, large_y, lexicon)
         pls = ssd.fit_pls(n_components=2, p_method=None)
-        ols = ssd.fit_ols(n_components=3)
-        assert pls.result_type == "pls"
-        assert ols.result_type == "pca_ols"
+        from ssdiff.results import PCAOLSResult
+        ols = ssd.fit_ols(fixed_k=3)
+        assert isinstance(ols, PCAOLSResult)

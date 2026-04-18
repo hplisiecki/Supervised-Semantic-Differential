@@ -129,18 +129,29 @@ class Corpus:
         LexiconResult
             Per-token rows sorted by descending rank.
         """
-        from .lexicon_result import LexiconResult
+        from ssdiff.results.lexicon_result import LexiconResult
+        from ssdiff.results.schema import Suggestion
         from .utils.lexicon import _filter_y, _rank_tokens, _token_sets
 
         docs, y_clean = _filter_y(self.docs, y, var_type=var_type)
         token_sets = _token_sets(docs)
-        rows = _rank_tokens(
+        raw_rows = _rank_tokens(
             token_sets, y_clean,
             top_k=top_k, min_docs=min_docs, n_bins=n_bins,
             corr_cap=corr_cap, var_type=var_type,
         )
+        suggestions = [
+            Suggestion(
+                rank=r["rank"], token=r["token"], freq=r["freq"],
+                cov_all=r["cov_all"], cov_bal=r["cov_bal"],
+                corr=r["corr"], pvalue=r["pvalue"], direction=r["direction"],
+            )
+            for r in raw_rows
+        ]
         return LexiconResult(
-            rows, var_type=var_type, n_docs=len(docs),
+            var_type=var_type, n_docs=len(docs),
+            n_tokens=len(suggestions), suggestions=suggestions,
+            summary=None, corpus=self,
         )
 
     def token_stats(
@@ -370,20 +381,42 @@ class Corpus:
         LexiconResult
             Per-token rows plus aggregate coverage summary.
         """
-        from .lexicon_result import LexiconResult
+        from ssdiff.results.lexicon_result import LexiconResult
+        from ssdiff.results.schema import Suggestion, Summary
         from .utils.lexicon import _filter_y
 
         docs, _ = _filter_y(self.docs, y, var_type=var_type)
-        rows = self.token_stats(
+        raw_rows = self.token_stats(
             y, lexicon, n_bins=n_bins, corr_cap=corr_cap,
             var_type=var_type,
         )
-        summary = self.coverage_summary(
+        s = self.coverage_summary(
             y, lexicon, n_bins=n_bins, var_type=var_type,
         )
+        suggestions = [
+            Suggestion(
+                rank=r["rank"], token=r["token"], freq=r["freq"],
+                cov_all=r["cov_all"], cov_bal=r["cov_bal"],
+                corr=r["corr"], pvalue=r["pvalue"], direction=r["direction"],
+            )
+            for r in raw_rows
+        ]
+        summary = Summary(
+            docs_any=s["docs_any"],
+            cov_all=s["cov_all"],
+            q1=s["q1"],
+            q4=s["q4"],
+            corr_any=s["corr_any"],
+            hits_mean=s["hits_mean"],
+            hits_median=s["hits_median"],
+            types_mean=s["types_mean"],
+            types_median=s["types_median"],
+            group_cov=s.get("group_cov"),
+        )
         return LexiconResult(
-            rows, summary=summary, var_type=var_type,
-            n_docs=len(docs),
+            var_type=var_type, n_docs=len(docs),
+            n_tokens=len(suggestions), suggestions=suggestions,
+            summary=summary, corpus=self,
         )
 
     @property

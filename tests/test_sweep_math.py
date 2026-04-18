@@ -71,7 +71,9 @@ class TestZscoreIgnoreNan:
 
     def test_all_nan(self):
         x = np.array([np.nan, np.nan])
-        z = zscore_ignore_nan(x)
+        with np.errstate(invalid="ignore"), \
+             pytest.warns(RuntimeWarning):
+            z = zscore_ignore_nan(x)
         assert all(np.isnan(z))
 
 

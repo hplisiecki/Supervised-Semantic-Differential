@@ -8,6 +8,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import matplotlib
+
+matplotlib.use("Agg")
+
 import numpy as np
 import pytest
 
@@ -294,16 +298,16 @@ def pls_result(ssd_instance):
 @pytest.fixture(scope="session")
 def pcaols_result(ssd_instance):
     """Fitted PCAOLSResult from SSD.fit_ols()."""
-    return ssd_instance.fit_ols(n_components=3)
+    return ssd_instance.fit_ols(fixed_k=3)
 
 
 @pytest.fixture(scope="session")
 def pcaols_result_sweep(tiny_kv, large_docs, large_y, lexicon):
-    """Fitted PCAOLSResult with sweep (n_components=None)."""
+    """Fitted PCAOLSResult with sweep (fixed_k=None)."""
     from ssdiff.ssd import SSD
     corpus = Corpus(large_docs, pretokenized=True, lang="pl")
     ssd = SSD(tiny_kv, corpus, large_y, lexicon)
-    return ssd.fit_ols(n_components=None, k_min=2, k_max=6, k_step=1)
+    return ssd.fit_ols(fixed_k=None, k_min=2, k_max=6, k_step=1)
 
 
 @pytest.fixture(scope="session")

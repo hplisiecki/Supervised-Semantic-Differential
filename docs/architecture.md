@@ -44,9 +44,9 @@ Both `SSD` and `SSDGroup` inherit this pipeline. SSD then immediately runs OLS r
 
 ```
 SSD                          → builds doc vectors in __init__, defers fitting
-  ├── .fit_pls()    → PLSResult (_SSDResultBase → _Interpretable)
-  ├── .fit_ols()    → PCAOLSResult (_SSDResultBase → _Interpretable)
-  └── .fit_groups() → GroupResult (_Interpretable)
+  ├── .fit_pls()    → PLSResult (ContinuousResult → Result)
+  ├── .fit_ols()    → PCAOLSResult (ContinuousResult → Result)
+  └── .fit_groups() → GroupResult (Result)
 
 Embeddings                   → standalone, no Gensim dependency
 Corpus                       → standalone, wraps spaCy + suggest_lexicon()
@@ -55,7 +55,7 @@ Corpus                       → standalone, wraps spaCy + suggest_lexicon()
 Key differences:
 - **Unified SSD class** — one class for continuous and group analysis
 - **Deferred fitting** — `SSD.__init__()` prepares data; `fit_pls()`, `fit_ols()`, or `fit_groups()` runs the analysis
-- **Result objects** — fitting returns `PLSResult`, `PCAOLSResult`, or `GroupResult` with shared interpretation API via `_Interpretable` mixin
+- **Result objects** — fitting returns `PLSResult`, `PCAOLSResult`, or `GroupResult` with shared view / export / report API via the `Result` base class
 - **First-class input wrappers** — `Embeddings` and `Corpus` are proper classes, not utility functions
 
 ---
@@ -113,9 +113,9 @@ Embeddings + Corpus + y
               └───────┬────────┘            │
                       ▼                     │
               Shared API:                   │
-              .summary(), .top_words(),     │
-              .neighbors(), .doc_scores(),  │
-              .cluster_neighbors(), ...     │
+              .stats, .words,               │
+              .clusters.pos/neg,            │
+              .docs, .snippets, .report()   │
 ```
 
 Construction prepares data. Fitting is a separate, explicit step. Multiple backends can be used on the same `SSD` instance.
@@ -189,15 +189,16 @@ ssd.f_pvalue    # float
 ssd.top_words() # pd.DataFrame (requires pandas)
 ```
 
-**`ssdiff`**: Results are separate objects with a shared base class.
+**`ssdiff`**: Results are separate objects with a shared base class and view-based API.
 
 ```python
 ssd = SSD(emb, corpus, y, lexicon)
 result = ssd.fit_pls()
-result.r2          # float
-result.beta        # ndarray
-result.pvalue      # float
-result.top_words() # list[dict] (no pandas needed)
+result.stats.r2         # float
+result.stats.pvalue     # float
+list(result.words)[:20] # list[Word] dataclasses (no pandas needed)
+result.clusters.pos     # SidedClustersView
+result.report().save("report.md")
 ```
 
 ### 6. Significance Testing
@@ -289,16 +290,24 @@ ssdiff/
 
 ```
 ssdiff/
-├── __init__.py        # Exports: Embeddings, Corpus, SSD
+├── __init__.py        # Exports: Embeddings, Corpus, SSD, result classes
 ├── embeddings.py      # Embeddings class (load/normalize/save/lookup)
-├── corpus.py          # Corpus class (spaCy tokenization + suggest_lexicon)
+├── corpus.py          # Corpus class (spaCy tokenization + suggest_lexicon/evaluate_lexicon)
 ├── ssd.py             # SSD class (doc vectors + fit_pls/fit_ols/fit_groups)
-├── results.py         # _Interpretable, _SSDResultBase, PLSResult, PCAOLSResult, GroupResult
 ├── lang_config.py     # Language → spaCy model mapping
 ├── backends/
 │   ├── pls.py         # PLS1 NIPALS, CV, permutation/split tests
 │   ├── pca_sweep.py   # PCA+OLS sweep
 │   └── group.py       # Group permutation tests (fit_groups backend)
+├── results/
+│   ├── __init__.py    # Public exports: Result, PLSResult, PCAOLSResult, GroupResult, PairView, LexiconResult
+│   ├── base.py        # Result ABC, View/ScalarView contract, param-keyed cache
+│   ├── schema.py      # Frozen domain dataclasses (Word, Cluster, Snippet, Doc, Pair, Suggestion, …)
+│   ├── format.py      # APA-inspired formatting primitives
+│   ├── report.py      # Report builder + text/md/html/docx renderers
+│   ├── ssd.py         # ContinuousResult, PLSResult, PCAOLSResult
+│   ├── group.py       # GroupResult, PairView
+│   └── lexicon.py     # LexiconResult
 └── utils/
     ├── math.py        # standardize, PCA, KMeans, f_sf, t_sf, chi2_sf
     ├── text.py        # spaCy wrappers, PreprocessedDoc
@@ -308,9 +317,20 @@ ssdiff/
     └── lexicon.py     # Lexicon suggestion, coverage
 ```
 
-Key structural differences:
+#### Results layer architecture
+
+The results layer uses a **View / ScalarView / Result** pattern:
+
+- `Result` (in `base.py`) is an abstract base class providing `.stats`, `.report()`, `.save()`, `.load()`, and `.clear_cache()`. It holds no mutable state after construction.
+- Views (`WordsView`, `ClustersIndex`, `SnippetsView`, `DocsView`, etc.) are lazy, cacheable, iterable objects that expose domain dataclasses. They implement a uniform contract: `len`, `iter`, `__getitem__`, `.where(...)`, `.df()`, `.to_dict()`, `.to_csv()`, etc. Parameter-keyed views (clusters, snippets) are cached on first access and can be recomputed with `.recompute(**params)`.
+- `ScalarView` handles `.stats` — a dict-like bag of scalar metrics with attribute access.
+- Domain objects (`Word`, `Cluster`, `Snippet`, `Doc`, `Pair`, `Suggestion`) are frozen dataclasses defined in `schema.py`.
+
+All three result types (`ContinuousResult`, `GroupResult`, `LexiconResult`) share the same view / export / report machinery. See [`results.md`](results.md) for the full user-facing surface.
+
+Key structural differences from v0.2:
 - **`ssdiff` separates backends** into their own subpackage (`backends/`)
-- **`ssdiff` separates results** into their own module (`results.py`)
+- **`ssdiff` results are a package** (`results/`) — eight focused files vs a single 1,260-line monolith
 - **`ssdiff` has first-class input classes** (`embeddings.py`, `corpus.py`) instead of utility functions
 - **`ssdiff` implements math internally** (`utils/math.py`) — pure numpy, no scipy dependency
 
@@ -405,8 +425,8 @@ flowchart TD
 
     %% ── 5B. PCA/OLS ───────────────────────────────────
     subgraph PCAOLS["5B. PCA/OLS Backend"]
-        sweep{"n_components given?"}
-        sweep -- "No (auto)" --> pca_sweep["PCA Sweep k=20,22,...,120\nFor each K:\n  PCA(K) → Z → OLS → β\n  Cluster both poles\n  → coherence + cos(β)\n  Track stability Δ(β)"]
+        sweep{"fixed_k given?"}
+        sweep -- "No (auto)" --> pca_sweep["PCA Sweep k=2,4,...,120\nFor each K:\n  PCA(K) → Z → OLS → β\n  Cluster both poles\n  → coherence + cos(β)\n  Track stability Δ(β)"]
         pca_sweep --> score_k["Score each K\ninterp = detrend coherence by var%\nstab = −Δ(β)\njoint = 0.5×(AUCK_interp + AUCK_stab)\n→ best_k"]
         score_k --> final_pca
         sweep -- "Yes (fixed)" --> final_pca["PCA(best_k) + OLS\nw = (Z'Z)⁻¹Z'y"]
@@ -420,10 +440,10 @@ flowchart TD
     %% ── 6. RESULTS ─────────────────────────────────────
     subgraph RESULT["6. Interpretation (shared)"]
         beta["β vector (D,)\nSemantic dimension in embedding space"]
-        beta --> topw["top_words(n)\nNearest neighbors to ±β̂\n→ pos & neg poles"]
-        beta --> cluster["cluster_neighbors()\nK-means on top neighbors\nauto-k via silhouette\n→ thematic clusters"]
-        beta --> effects["effect_sizes()\ncosine alignment per doc\nΔy per +0.10 cos"]
-        beta --> snip["snippets_along_beta()\nSentences scored by\nalignment to β̂"]
+        beta --> topw["result.words\nNearest neighbors to ±β̂\n→ pos & neg poles"]
+        beta --> cluster["result.clusters.pos/neg\nK-means on top neighbors\nauto-k via silhouette\n→ thematic clusters"]
+        beta --> effects["result.docs\ncosine alignment per doc\nΔy per +0.10 cos"]
+        beta --> snip["result.snippets\nSentences scored by\nalignment to β̂"]
     end
 
     pls_stats --> beta

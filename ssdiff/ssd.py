@@ -76,6 +76,7 @@ class SSD:
             raise ValueError(f"sif_a must be > 0, got {sif_a}")
 
         self.embeddings = embeddings
+        self.corpus = corpus
         self.lexicon = set(lexicon)
         self.window = window
         self.sif_a = sif_a
@@ -183,10 +184,10 @@ class SSD:
         """
         return {
             "embeddings": self.embeddings,
+            "corpus": self.corpus,
             "lexicon": self.lexicon,
             "window": self.window,
             "sif_a": self.sif_a,
-
             "lang": self.lang,
             "x": self.x,
             "keep_mask": self.keep_mask,
@@ -250,7 +251,7 @@ class SSD:
         PLSResult
         """
         from ssdiff.backends.pls import pls1_cv_select, pls1_fit
-        from ssdiff.results import PLSResult
+        from ssdiff.results.continuous_result import PLSResult
 
         if not self.is_numeric:
             raise ValueError(
@@ -380,21 +381,54 @@ class SSD:
         kwargs["_y_mean"] = _y_mean
         kwargs["_y_scale"] = _y_scale
 
+        # Build initial TestView info based on resolved p_method.
+        test_name = resolved
+        test_info: dict | None = None
+        if resolved == "perm":
+            test_info = {
+                "pvalue": pvalue,
+                "n_perm": n_perm,
+                "random_state": random_state,
+            }
+        elif resolved == "split":
+            test_info = {
+                "pvalue": pvalue,
+                "split_r2": split_mean_r,
+                "n_splits": n_splits,
+                "split_ratio": split_ratio,
+                "random_state": random_state,
+            }
+        elif resolved == "split_cal":
+            test_info = {
+                "pvalue": pvalue,
+                "split_r2": split_mean_r,
+                "n_splits": n_splits,
+                "split_ratio": split_ratio,
+                "n_perm": n_perm,
+                "random_state": random_state,
+            }
+
         return PLSResult(
-            n_components=n_comp,
-            cv_result=cv_result,
-            cv_scores=cv_scores,
-            perm_null=perm_null,
-            pca_k=pca_k,
-            p_method=resolved,
-            split_mean_r=split_mean_r,
-            random_state=random_state,
-            n_perm=n_perm,
-            n_splits=n_splits,
-            split_ratio=split_ratio,
             beta=beta,
             pvalue=pvalue,
             r2=stats["r2"],
+            fit_info={
+                "n_components": n_comp,
+                "pca_k": pca_k,
+                "p_method": resolved,
+                "split_mean_r": split_mean_r,
+                "n_perm": n_perm,
+                "n_splits": n_splits,
+                "split_ratio": split_ratio,
+                "random_state": random_state,
+            },
+            raw_diagnostics={
+                "cv_result": cv_result,
+                "cv_scores": cv_scores,
+                "perm_null": perm_null,
+            },
+            test_name=test_name,
+            test_info=test_info,
             **kwargs,
         )
 
@@ -403,8 +437,8 @@ class SSD:
     def fit_ols(
         self,
         *,
-        n_components: int | None = None,
-        k_min: int = 20,
+        fixed_k: int | None = None,
+        k_min: int = 2,
         k_max: int = 120,
         k_step: int = 2,
         verbose: bool = False,
@@ -413,10 +447,10 @@ class SSD:
 
         Parameters
         ----------
-        n_components : int or None
-            Number of PCA components. None = auto-select via sweep.
+        fixed_k : int or None
+            Fixed number of PCA components. None = auto-select via sweep.
         k_min, k_max, k_step : int
-            Range for PCA-K sweep when n_components is None.
+            Range for PCA-K sweep when fixed_k is None.
         verbose : bool
             Print progress.
 
@@ -424,7 +458,7 @@ class SSD:
         -------
         PCAOLSResult
         """
-        from ssdiff.results import PCAOLSResult
+        from ssdiff.results.continuous_result import PCAOLSResult
 
         if not self.is_numeric:
             raise ValueError(
@@ -439,7 +473,7 @@ class SSD:
         # Standardize X
         Xs, X_mean, X_scale = standardize(self.x)
 
-        if n_components is None:
+        if fixed_k is None:
             from ssdiff.backends.pca_sweep import pca_sweep
             sweep_result = pca_sweep(
                 Xs=Xs,
@@ -453,7 +487,7 @@ class SSD:
             )
             n_pca = sweep_result.best_k
         else:
-            n_pca = int(n_components)
+            n_pca = int(fixed_k)
             sweep_result = None
 
         max_comp = min(n_pca, Xs.shape[0], Xs.shape[1])
@@ -478,16 +512,31 @@ class SSD:
         kwargs["_y_mean"] = _y_mean
         kwargs["_y_scale"] = _y_scale
 
+        _sweep_rows = None
+        if sweep_result is not None:
+            _sweep_rows = [
+                (r["PCA_K"], r.get("r2", 0.0), r.get("r2_adj", 0.0), r.get("f_pvalue", float("nan")))
+                for r in sweep_result.df_joined
+            ]
+
         return PCAOLSResult(
-            n_components=n_pca,
-            sweep_result=sweep_result,
-            k_min=k_min if sweep_result is not None else None,
-            k_max=k_max if sweep_result is not None else None,
-            k_step=k_step if sweep_result is not None else None,
             beta=beta,
             pvalue=stats["f_pvalue"],
             r2=stats["r2"],
             r2_adj=stats["r2_adj"],
+            fit_info={
+                "n_components": n_pca,
+                "k_min": k_min if sweep_result is not None else None,
+                "k_max": k_max if sweep_result is not None else None,
+                "k_step": k_step if sweep_result is not None else None,
+                "best_k": sweep_result.best_k if sweep_result is not None else None,
+            },
+            raw_diagnostics={
+                "sweep_result": sweep_result,
+            },
+            sweep=_sweep_rows,
+            test_name="f_test",
+            test_info={"pvalue": stats["f_pvalue"]},
             **kwargs,
         )
 
@@ -535,7 +584,8 @@ class SSD:
         from ssdiff.backends.group import (
             median_split as _median_split,
         )
-        from ssdiff.results import GroupResult
+        from ssdiff.results.group_result import GroupResult
+        from ssdiff.results.schema import Pair
 
         # Local copies — never mutate self.x or self.y_kept
         x_local = self.x.copy()
@@ -568,27 +618,41 @@ class SSD:
             verbose=verbose,
         )
 
+        # Build list[Pair] from backend's pairwise dict
+        pairs = []
+        for (g1, g2), pw in test_result["pairwise"].items():
+            pairs.append(Pair(
+                contrast=f"{g1}_vs_{g2}",
+                g1=str(g1),
+                g2=str(g2),
+                T=float(pw["T"]),
+                p_raw=float(pw["p_raw"]),
+                p_corrected=float(pw["p_corrected"]),
+                cohens_d=float(pw["cohens_d"]),
+                n_g1=int(pw["n_g1"]),
+                n_g2=int(pw["n_g2"]),
+                contrast_norm=float(pw["contrast_norm"]),
+            ))
+
+        # words_rows / cluster_rows / snippets_rows left empty here;
+        # per-contrast neighbor lookup is deferred to embeddings access on PairView.
         return GroupResult(
-            embeddings=self.embeddings,
-            lexicon=self.lexicon,
-            window=self.window,
-            sif_a=self.sif_a,
-            lang=self.lang,
-            x=x_local,
-            groups_kept=groups_local,
-            keep_mask=self.keep_mask,
-            n_raw=self.n_raw,
-            n_kept=len(x_local),
-            n_dropped=self.n_dropped,
-            n_group_dropped=n_group_dropped,
-            omnibus_T=test_result["omnibus_T"],
-            omnibus_p=test_result["omnibus_p"],
-            pairwise=test_result["pairwise"],
-            group_labels=group_labels,
             G=G,
+            n_kept=len(x_local),
             n_perm=n_perm,
             correction=correction,
             random_state=random_state,
+            omnibus_T=float(test_result["omnibus_T"]),
+            omnibus_p=float(test_result["omnibus_p"]),
+            pairs=pairs,
+            words_rows=[],
+            cluster_rows=[],
+            cluster_words_rows=[],
+            snippets_rows=[],
+            embeddings=self.embeddings,
+            corpus=self.corpus,
+            x=x_local,
+            groups=groups_local,
         )
 
     def __repr__(self) -> str:

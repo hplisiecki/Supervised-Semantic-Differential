@@ -25,8 +25,9 @@ ssd = SSD(emb, corpus, y=scores, lexicon=["happy", "sad", "joy", "anger"])
 result = ssd.fit_pls()
 
 # 4. Interpret
-print(result.summary())
-print(result.top_words(20))
+print(result.stats)
+print(list(result.words)[:20])
+result.report().to_text()
 ```
 
 ---
@@ -220,8 +221,8 @@ Returns → `PLSResult`.
 
 ```python
 result = ssd.fit_ols(
-    n_components=None,
-    k_min=20,
+    fixed_k=None,
+    k_min=2,
     k_max=120,
     k_step=2,
     verbose=False,
@@ -230,8 +231,8 @@ result = ssd.fit_ols(
 
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
-| `n_components` | `int \| None` | `None` | Number of PCA components. `None` = auto-select via interpretability+stability sweep |
-| `k_min` | `int` | `20` | Minimum PCA-K for sweep |
+| `fixed_k` | `int \| None` | `None` | Fixed number of PCA components. `None` = auto-select via interpretability+stability sweep |
+| `k_min` | `int` | `2` | Minimum PCA-K for sweep |
 | `k_max` | `int` | `120` | Maximum PCA-K for sweep |
 | `k_step` | `int` | `2` | Step size for PCA-K sweep |
 | `verbose` | `bool` | `False` | Print progress |
@@ -242,41 +243,70 @@ Returns → `PCAOLSResult`.
 
 ### Step 5: Inspect Results
 
-Both `PLSResult` and `PCAOLSResult` share the same interpretation API.
+Both `PLSResult` and `PCAOLSResult` share the same view-based interpretation API. See [`results.md`](results.md) for the full view / export / report reference.
 
-#### Result attributes
+#### Stats
 
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `result.r2` | `float` | Coefficient of determination |
-| `result.r2_adj` | `float` | Adjusted R² |
-| `result.pvalue` | `float` | P-value (NaN if skipped) |
-| `result.n_components` | `int` | Number of components used |
-| `result.beta` | `ndarray` | Regression weight vector in embedding space |
-| `result.beta_unit` | `ndarray` | Unit-length direction of beta |
-| `result.beta_norm` | `float` | ‖beta‖ |
-| `result.delta` | `float` | Predicted change in y per +0.10 cosine shift |
-| `result.iqr_effect` | `float` | Predicted change in y across IQR of cosine alignment |
-| `result.y_corr_pred` | `float` | \|Pearson r(y_true, y_pred)\| |
-| `result.cos_align` | `ndarray` | Per-document cosine alignment to beta_unit |
-| `result.y_mean` | `float` | Outcome mean (original scale) |
-| `result.y_std` | `float` | Outcome SD (original scale) |
+```python
+result.stats.r2          # float — coefficient of determination
+result.stats.r2_adj      # float — adjusted R²
+result.stats.pvalue      # float — p-value (NaN if skipped)
+result.stats.n_kept      # int — documents used
+result.stats.cos_align   # float — mean cosine alignment
+```
 
-PLSResult-specific:
+PLSResult-specific attributes on `result.stats`: `p_method`, `split_mean_r`, `pca_k`.
 
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `result.p_method` | `str \| None` | Which significance test was used |
-| `result.cv_scores` | `dict \| None` | Per-component CV R² (if `n_components="auto"`) |
-| `result.perm_null` | `ndarray \| None` | Null distribution from permutation test |
-| `result.split_mean_r` | `float \| None` | Mean Pearson r from split-half test |
-| `result.pca_k` | `int \| None` | PCA components used for preprocessing |
+PCAOLSResult-specific: `result.sweep` view (PCA-K sweep table).
 
-PCAOLSResult-specific:
+#### Words
 
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `result.sweep_result` | `object \| None` | Result from PCA-K sweep |
+```python
+list(result.words)[:20]                     # first 20 Word objects
+result.words.to_dict()                      # list[dict], always stdlib-only
+result.words.df()                           # pandas DataFrame (requires [results])
+result.words.to_csv("words.csv")
+```
+
+#### Clusters
+
+```python
+result.clusters.pos                         # SidedClustersView (defaults: topn=100, k=auto)
+result.clusters.neg
+result.clusters.pos.recompute(topn=50, k=5) # recompute with different params
+result.clusters.pos[0].words                # ClusterWordsView for cluster 0
+result.clusters.pos.to_csv("clusters_pos.csv")
+result.clusters.pos.to_markdown("clusters_pos.md")   # requires [results]
+```
+
+#### Snippets
+
+After `result.attach(corpus=corpus)`:
+
+```python
+result.snippets                             # SnippetsView (default top_per_side=200)
+result.snippets.recompute(top_per_side=500)
+result.snippets.df()
+```
+
+#### Docs
+
+```python
+result.docs.top(5)       # DocsView of 5 highest-predicted docs
+result.docs.bottom(5)    # DocsView of 5 lowest-predicted docs
+result.docs.to_dict()
+result.docs.df()
+```
+
+#### Report
+
+```python
+r = result.report(top_words=10, clusters=50)
+r.to_text()          # plain terminal output
+r.to_markdown()      # markdown source
+r.to_html()          # styled HTML
+r.save("report.md")  # extension dispatch: .txt .md .html .docx
+```
 
 #### Sweep plot (PCAOLSResult only)
 
@@ -293,136 +323,7 @@ Dual-axis plot: detrended interpretability (z-score, blue) and beta stability (s
 
 Returns `bytes` (raw PNG) in all cases.
 
-Raises `RuntimeError` if `fit_ols()` was called with an explicit `n_components` (no sweep data).
-
-#### Summary
-
-```python
-print(result.summary())
-```
-
-Human-readable model summary with R², effect sizes, and p-value.
-
-#### Comprehensive report
-
-```python
-print(result.report(top_words=10, clusters=100, extreme_docs=30, misdiagnosed=20))
-```
-
-| Argument | Type | Default | Description |
-|----------|------|---------|-------------|
-| `top_words` | `int \| None` | `5` | Number of top words per side. `None` to skip |
-| `clusters` | `int \| None` | `None` | Number of top neighbors to cluster (topn). `None` to skip |
-| `extreme_docs` | `int \| None` | `None` | Number of extreme docs per side (top/bottom). `None` to skip |
-| `misdiagnosed` | `int \| None` | `None` | Number of misdiagnosed docs per side. `None` to skip |
-
-Prints and returns a comprehensive text report combining summary, top words, clusters, extreme docs, and misdiagnosed docs. Each section is only included if its argument is not `None`.
-
-#### Semantic neighbors (top words)
-
-```python
-result.top_words(n=20)
-```
-
-| Argument | Type | Default | Description |
-|----------|------|---------|-------------|
-| `n` | `int` | `20` | Number of neighbors per pole |
-
-Returns `list[dict]` with keys: `side` (`"pos"`/`"neg"`), `rank`, `word`, `cos`.
-
-```python
-result.neighbors(side="pos", n=20)
-```
-
-| Argument | Type | Default | Description |
-|----------|------|---------|-------------|
-| `side` | `str` | `"pos"` | `"pos"` for +beta neighbors, `"neg"` for -beta |
-| `n` | `int` | `20` | Number of neighbors |
-
-Returns `list[tuple[str, float]]` — (word, cosine) pairs.
-
-#### Cluster neighbors
-
-```python
-result.cluster_neighbors(
-    side="pos",
-    topn=100,
-    k=None,
-    k_min=2,
-    k_max=10,
-    random_state=2137,
-    min_cluster_size=2,
-)
-```
-
-| Argument | Type | Default | Description |
-|----------|------|---------|-------------|
-| `side` | `str` | `"pos"` | Pole to cluster |
-| `topn` | `int` | `100` | Size of candidate neighbor pool |
-| `k` | `int \| None` | `None` | Fixed cluster count. `None` = auto-select via silhouette |
-| `k_min` | `int` | `2` | Minimum k for auto-selection |
-| `k_max` | `int` | `10` | Maximum k for auto-selection |
-| `random_state` | `int` | `2137` | Random seed for K-Means |
-| `min_cluster_size` | `int` | `2` | Discard clusters smaller than this |
-
-Returns `list[dict]` with keys: `id`, `size`, `centroid_cos_beta`, `coherence`, `words`.
-
-#### Document scores
-
-```python
-result.doc_scores()
-```
-
-Returns `dict` with keys:
-- `keep_mask` — bool array (n_raw,), which docs were kept
-- `cos_align` — float array (n_kept,), cosine alignment to beta_unit
-- `score_std` — float array (n_kept,), standardized predicted scores
-- `yhat_raw` — float array (n_kept,), predicted outcome in original scale
-
-#### Extreme documents
-
-```python
-result.extreme_docs(k=50, by="predicted")
-```
-
-| Argument | Type | Default | Description |
-|----------|------|---------|-------------|
-| `k` | `int` | `50` | Number of extremes per side |
-| `by` | `str` | `"predicted"` | `"predicted"` or `"observed"` |
-
-Returns `list[dict]` with keys: `idx`, `y_true`, `yhat`, `cos`, `side` (`"top"`/`"bottom"`).
-
-#### Misdiagnosed documents
-
-```python
-result.misdiagnosed(k=20, side="both")
-```
-
-| Argument | Type | Default | Description |
-|----------|------|---------|-------------|
-| `k` | `int` | `20` | Number of docs per side |
-| `side` | `str` | `"both"` | `"both"`, `"over"` (model over-predicts), `"under"` |
-
-Returns `list[dict]` with keys: `idx`, `y_true`, `yhat`, `cos`, `residual`, `side`.
-
-#### Text snippets
-
-```python
-# Snippets along beta (all docs)
-result.snippets(corpus.pre_docs, top_per_side=200)
-
-# Snippets from extreme docs only
-result.snippets_extreme(corpus.pre_docs, k=50, by="predicted", top_per_side=200)
-```
-
-| Argument | Type | Default | Description |
-|----------|------|---------|-------------|
-| `pre_docs` | `list[PreprocessedDoc]` | — | From `corpus.pre_docs` |
-| `top_per_side` | `int` | `200` | Number of top snippets per side |
-| `k` | `int` | `50` | (snippets_extreme) Number of extreme docs per side |
-| `by` | `str` | `"predicted"` | (snippets_extreme) Ranking criterion |
-
-Returns `dict` with keys `"pos"` and `"neg"`, each containing snippet metadata.
+Raises `RuntimeError` if `fit_ols()` was called with an explicit `fixed_k` (no sweep data).
 
 #### Re-run split-half test (PLSResult only)
 
@@ -472,41 +373,29 @@ Groups with fewer than 20 documents are automatically dropped (with a warning). 
 
 `fit_groups()` does **not** mutate `self.x` or `self.y_kept` — all filtering operates on local copies, so subsequent `fit_pls()`/`fit_ols()` calls are unaffected.
 
-#### GroupResult attributes
-
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `result.result_type` | `str` | Always `"group"` |
-| `result.omnibus_T` | `float` | Mean pairwise cosine distance between centroids |
-| `result.omnibus_p` | `float` | Permutation p-value for omnibus test |
-| `result.group_labels` | `list` | Sorted unique group labels |
-| `result.G` | `int` | Number of groups |
-| `result.n_kept` | `int` | Docs used (after both preprocessing and small-group filtering) |
-| `result.n_group_dropped` | `int` | Docs dropped by small-group filter |
-| `result.pairwise` | `dict` | `(g1, g2)` → result dict (see below) |
-
-Pairwise result dict keys: `T`, `p_raw`, `p_corrected`, `beta_unit`, `contrast_norm`, `cohens_d`, `n_g1`, `n_g2`.
-
-#### GroupResult methods
+#### GroupResult views and methods
 
 ```python
-print(result.summary())         # Human-readable summary
-print(result.report(top_words=10, clusters=100))  # Comprehensive report
-result.results_table()          # list[dict] of pairwise results
+gr.stats.omnibus_T          # float — mean pairwise cosine distance between centroids
+gr.stats.omnibus_p          # float — permutation p-value
+gr.stats.G                  # int — number of groups
+gr.stats.n_kept             # int — docs used
 
-# Interpretation (works across all contrasts, adds "contrast" key)
-result.top_words(20)            # list[dict] with "contrast", "side", "rank", "word", "cos"
-result.neighbors("pos", 10)
-result.cluster_neighbors()
-result.snippets(pre_docs)
+gr.pairs                    # PairsView — mapping-like, iterate or index by contrast
+gr.pairs["A","B"]           # PairView — single-contrast result (same interface as ContinuousResult)
+gr.pairs.df()               # pairwise table as DataFrame
 
-# Filter to specific groups (returns new GroupResult, no recomputation)
-r = result.filter_groups("A", "B")        # 1 contrast
-r = result.filter_groups("A")             # all contrasts involving A
-r = result.filter_groups("A", "B", "C")   # 3 contrasts (A-B, A-C, B-C)
+gr.words                    # flat WordsView across all contrasts (with "contrast" column)
+gr.clusters.pos             # flat clusters across all contrasts
+gr.snippets                 # flat snippets across all contrasts (after attach(corpus=...))
 ```
 
-`filter_groups()` returns a new `GroupResult` with subsetted pairwise results and doc vectors. The original omnibus stats are preserved for display.
+Reports:
+
+```python
+gr.report(top_words=10, clusters=50).to_text()   # loops over all contrasts automatically
+gr.report().save("group_report.md")
+```
 
 ---
 
@@ -583,7 +472,6 @@ Returns `(summary_dict, per_token_list)`:
 ```python
 import numpy as np
 from ssdiff import Embeddings, Corpus, SSD
-from ssdiff.utils.lexicon import suggest_lexicon, coverage_by_lexicon
 
 # ── Data ──
 texts = ["I feel very happy today", "This is so sad and depressing", ...]
@@ -598,11 +486,8 @@ emb.normalize(l2=True, abtt_m=1)
 corpus = Corpus(texts, lang="en")
 
 # ── Lexicon selection ──
-candidates = suggest_lexicon((corpus.docs, scores), top_k=100, min_docs=3)
-summary, per_token = coverage_by_lexicon(
-    (corpus.docs, scores), lexicon=candidates[:30], verbose=True,
-)
-lexicon = candidates[:20]  # pick top-20
+lex_result = corpus.suggest_lexicon(scores, top_k=100, min_docs=3)
+lexicon = lex_result.tokens[:20]  # pick top-20
 
 # ── Continuous analysis (PLS) ──
 ssd = SSD(emb, corpus, y=scores, lexicon=lexicon, window=3)
@@ -613,39 +498,41 @@ result = ssd.fit_pls(
     verbose=True,
 )
 
-print(result.summary())
-print(f"R² = {result.r2:.4f}, p = {result.pvalue:.4g}")
-print(f"Δy per +0.10 cos = {result.delta:.3f}")
+print(result.stats.r2, result.stats.pvalue)
 
 # Top words on both poles
-for w in result.top_words(15):
-    print(f"  {w['side']:3s} #{w['rank']:2d}  {w['word']:20s}  cos={w['cos']:.3f}")
+for w in list(result.words)[:15]:
+    print(f"  {w.side:3s} #{w.rank:2d}  {w.word:20s}  cos={w.cos_beta:.3f}")
 
 # Thematic clusters
-for cl in result.cluster_neighbors("pos", topn=100, k_max=8):
-    print(f"  Cluster {cl['id']}: {', '.join(cl['words'][:5])}  (coherence={cl['coherence']:.3f})")
+for cl in result.clusters.pos.recompute(topn=100, k_max=8):
+    words_preview = ", ".join(cw.word for cw in list(cl.words)[:5])
+    print(f"  Cluster {cl.cluster_id}: {words_preview}  (coherence={cl.coherence:.3f})")
 
 # Document-level scores
-scores_dict = result.doc_scores()
-extremes = result.extreme_docs(k=30)
+for doc in result.docs.top(30):
+    print(doc.y_true, doc.y_hat, doc.cos_align)
 
-# Snippets
-if corpus.pre_docs:
-    snips = result.snippets(corpus.pre_docs, top_per_side=100)
+# Snippets (after attaching corpus)
+result.attach(corpus=corpus)
+for snip in list(result.snippets)[:5]:
+    print(snip.side, snip.text_surface)
+
+# Report
+result.report(top_words=10, clusters=50).save("report.md")
 
 # ── Continuous analysis (PCA+OLS) ──
-result_ols = ssd.fit_ols(n_components=None, k_min=20, k_max=100, verbose=True)
-print(result_ols.summary())
-result_ols.plot_sweep()                  # display sweep plot
-result_ols.plot_sweep("sweep.png")       # save to file
+result_ols = ssd.fit_ols(fixed_k=None, k_min=2, k_max=100, verbose=True)
+result_ols.plot_sweep()           # display sweep plot
+result_ols.plot_sweep("sweep.png")  # save to file
 
 # ── Group analysis ──
 ssd_g = SSD(emb, corpus, y=groups, lexicon=lexicon)
 result_g = ssd_g.fit_groups(n_perm=5000, correction="holm")
-print(result_g.summary())
+result_g.report(top_words=10, clusters=50).to_text()
 
-for w in result_g.top_words(10):
-    print(f"  {w['contrast']}  {w['side']:3s} #{w['rank']:2d}  {w['word']}")
+for w in list(result_g.words)[:10]:
+    print(f"  {w.contrast}  {w.side:3s} #{w.rank:2d}  {w.word}")
 ```
 
 ---
