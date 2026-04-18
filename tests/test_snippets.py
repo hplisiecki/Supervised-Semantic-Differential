@@ -247,7 +247,7 @@ class TestSnippetsAlongBeta:
             verbose=False,
         )
         expected_keys = {
-            "side_label", "profile_id", "post_id", "cosine", "seed",
+            "side", "profile_id", "post_id", "cosine", "seed",
             "start_token_idx", "end_token_idx", "start_sent_idx", "end_sent_idx",
             "snippet_anchor", "essay_text_surface", "essay_text_lemmas",
         }

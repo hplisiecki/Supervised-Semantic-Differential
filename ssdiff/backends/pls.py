@@ -137,7 +137,11 @@ def pls1_cv_select(
     PLSCVResult
     """
     n = X.shape[0]
+    if n < 2:
+        raise ValueError(f"CV requires at least 2 samples, got n={n}")
     rng = np.random.default_rng(seed)
+    # Cap n_folds at n so np.array_split can't produce empty folds
+    n_folds = max(min(n_folds, n), 2)
     max_comp = max(min(max_components, n // n_folds - 2), 1)
 
     indices = np.arange(n)
@@ -312,7 +316,8 @@ def pls1_permutation_test(
     p_perm = float((np.sum(cv_r2_null >= cv_r2_obs) + 1) / (n_perm + 1))
 
     from ssdiff.utils import _diagnostic
-    _diagnostic(verbose, f"[perm] p={p_perm:.4g} (observed CV R²={cv_r2_obs:.4f}, {n_perm} perms)")
+    from ssdiff.results.format import fmt_p
+    _diagnostic(verbose, f"[perm] p={fmt_p(p_perm)} (observed CV R²={cv_r2_obs:.4f}, {n_perm} perms)")
 
     return p_perm, cv_r2_obs, cv_r2_null
 
@@ -435,7 +440,8 @@ def pls1_split_test(
     mean_r = float(np.tanh(z_mean))
 
     from ssdiff.utils import _diagnostic
-    _diagnostic(verbose, f"[split] p={p_split:.4g}, mean r={mean_r:.4f} ({n_splits} splits)")
+    from ssdiff.results.format import fmt_p
+    _diagnostic(verbose, f"[split] p={fmt_p(p_split)}, mean r={mean_r:.4f} ({n_splits} splits)")
 
     return p_split, mean_r
 
@@ -513,6 +519,7 @@ def pls1_split_test_calibrated(
     p_cal = float((exceedances + 1) / (m + 1))
 
     from ssdiff.utils import _diagnostic
-    _diagnostic(verbose, f"[split_cal] p={p_cal:.4g}, mean r={mean_r_obs:.4f} ({m}/{n_perm} perms)")
+    from ssdiff.results.format import fmt_p
+    _diagnostic(verbose, f"[split_cal] p={fmt_p(p_cal)}, mean r={mean_r_obs:.4f} ({m}/{n_perm} perms)")
 
     return p_cal, mean_r_obs

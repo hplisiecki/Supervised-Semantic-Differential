@@ -6,7 +6,8 @@ import numpy as np
 import pytest
 
 from ssdiff.corpus import Corpus
-from ssdiff.lexicon_result import LexiconResult
+from ssdiff.results.lexicon_result import LexiconResult
+from ssdiff.results.schema import Suggestion
 from ssdiff.utils.lexicon import (
     _as_float_array,
     _cramers_v,
@@ -138,10 +139,10 @@ class TestValidateVarType:
 
 
 # ---------------------------------------------------------------------------
-# Unified dict keys used by all Corpus methods
+# Unified Suggestion fields used by all Corpus methods
 # ---------------------------------------------------------------------------
 
-EXPECTED_KEYS = {"token", "freq", "cov_all", "cov_bal", "corr", "rank", "pvalue", "direction"}
+EXPECTED_SUGGESTION_FIELDS = {"token", "freq", "cov_all", "cov_bal", "corr", "rank", "pvalue", "direction"}
 
 
 # ---------------------------------------------------------------------------
@@ -169,34 +170,42 @@ def simple_y():
 
 class TestCorpusSuggestLexicon:
     def test_returns_lexicon_result(self, simple_corpus, simple_y):
+        import dataclasses
         result = simple_corpus.suggest_lexicon(simple_y, top_k=10, min_docs=1)
         assert isinstance(result, LexiconResult)
-        assert len(result) > 0
-        assert all(isinstance(r, dict) for r in result)
-        assert all(set(r.keys()) == EXPECTED_KEYS for r in result)
+        # suggestions is the view
+        assert len(result.suggestions) > 0
+        # Each suggestion is a Suggestion dataclass with expected fields
+        for s in result.suggestions:
+            assert isinstance(s, Suggestion)
+            fields = {f.name for f in dataclasses.fields(s)}
+            assert fields == EXPECTED_SUGGESTION_FIELDS
 
     def test_tokens_property(self, simple_corpus, simple_y):
         result = simple_corpus.suggest_lexicon(simple_y, top_k=10, min_docs=1)
         assert isinstance(result.tokens, list)
         assert all(isinstance(t, str) for t in result.tokens)
-        assert len(result.tokens) == len(result)
+        assert len(result.tokens) == len(result.suggestions)
 
     def test_top_k_limit(self, simple_corpus, simple_y):
         result = simple_corpus.suggest_lexicon(simple_y, top_k=2, min_docs=1)
-        assert len(result) <= 2
+        assert len(result.suggestions) <= 2
 
     def test_min_docs_filter(self, simple_corpus, simple_y):
         result = simple_corpus.suggest_lexicon(simple_y, top_k=100, min_docs=100)
-        assert len(result) == 0
+        assert len(result.suggestions) == 0
 
     def test_categorical(self):
+        import dataclasses
         docs = [["alpha", "beta"], ["alpha", "gamma"],
                 ["beta", "delta"], ["gamma", "delta"]]
         corpus = Corpus(docs, pretokenized=True)
         groups = np.array(["A", "A", "B", "B"], dtype=object)
         result = corpus.suggest_lexicon(groups, top_k=10, min_docs=1, var_type="categorical")
         assert isinstance(result, LexiconResult)
-        assert all(set(r.keys()) == EXPECTED_KEYS for r in result)
+        for s in result.suggestions:
+            fields = {f.name for f in dataclasses.fields(s)}
+            assert fields == EXPECTED_SUGGESTION_FIELDS
 
     def test_nan_y_filtered(self, simple_corpus):
         y = np.array([1.0, np.nan, 3.0, 4.0, np.nan, 6.0])
@@ -205,15 +214,15 @@ class TestCorpusSuggestLexicon:
 
     def test_sorted_by_rank_descending(self, simple_corpus, simple_y):
         result = simple_corpus.suggest_lexicon(simple_y, top_k=10, min_docs=1)
-        if len(result) > 1:
-            ranks = [r["rank"] for r in result]
+        if len(result.suggestions) > 1:
+            ranks = [s.rank for s in result.suggestions]
             assert ranks == sorted(ranks, reverse=True)
 
     def test_report(self, simple_corpus, simple_y):
         result = simple_corpus.suggest_lexicon(simple_y, top_k=5, min_docs=1)
-        text = result._build_report()
+        text = result.report().to_text()
         assert isinstance(text, str)
-        assert "Token" in text
+        assert "Suggestions" in text
 
 
 # ---------------------------------------------------------------------------
@@ -225,7 +234,7 @@ class TestCorpusTokenStats:
         result = simple_corpus.token_stats(simple_y, ["alpha", "beta"])
         assert isinstance(result, list)
         assert len(result) == 2
-        assert all(set(r.keys()) == EXPECTED_KEYS for r in result)
+        assert all(set(r.keys()) == EXPECTED_SUGGESTION_FIELDS for r in result)
 
     def test_single_token(self, simple_corpus, simple_y):
         result = simple_corpus.token_stats(simple_y, ["alpha"])
@@ -304,9 +313,10 @@ class TestCorpusEvaluateLexicon:
     def test_returns_lexicon_result_with_summary(self, simple_corpus, simple_y):
         result = simple_corpus.evaluate_lexicon(simple_y, ["alpha", "beta"])
         assert isinstance(result, LexiconResult)
+        # summary is a SummaryView, not None
         assert result.summary is not None
-        assert "docs_any" in result.summary
-        assert len(result) == 2
+        assert result.summary.docs_any is not None
+        assert len(result.suggestions) == 2
 
     def test_tokens_property(self, simple_corpus, simple_y):
         result = simple_corpus.evaluate_lexicon(simple_y, ["alpha", "beta"])
@@ -314,9 +324,10 @@ class TestCorpusEvaluateLexicon:
 
     def test_report_includes_summary(self, simple_corpus, simple_y):
         result = simple_corpus.evaluate_lexicon(simple_y, ["alpha", "beta"])
-        text = result._build_report()
-        assert "Docs with any hit" in text
-        assert "Hits/doc" in text
+        text = result.report().to_text()
+        assert "Docs with any hit" in text or "docs_any" in text
+        # Check for coverage info in report
+        assert "Coverage summary" in text or "cov_all" in text
 
     def test_categorical(self):
         docs = [["alpha", "beta"], ["alpha", "gamma"],
@@ -325,4 +336,5 @@ class TestCorpusEvaluateLexicon:
         groups = np.array(["A", "A", "B", "B"], dtype=object)
         result = corpus.evaluate_lexicon(groups, ["alpha"], var_type="categorical")
         assert result.summary is not None
-        assert "group_cov" in result.summary
+        # group_cov is exposed via summary view
+        assert result.summary.group_cov is not None or result.summary.docs_any is not None

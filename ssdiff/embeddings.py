@@ -201,21 +201,34 @@ class Embeddings:
         Returns
         -------
         numpy.ndarray, shape (n_words, dim)
-            Float array of unit-length row vectors. If the embeddings were
-            already L2-normalized via :meth:`normalize`, returns the original
-            vectors directly (no copy). Otherwise computes and caches
-            normalized copies on first call.
+            Float array of unit-length row vectors.  Normalizes
+            ``self.vectors`` **in place** on first call to avoid duplicating
+            a potentially multi-GB matrix in RAM.  After this call the
+            instance is in the same state as if :meth:`normalize` had been
+            invoked with ``l2=True, abtt_m=0``.
         """
         if self._is_unit_normed:
             return self.vectors
-        if self._normed_vectors is None:
-            n = self.norms.copy()
-            zero_mask = n < 1e-12
-            n[zero_mask] = 1.0  # avoid division by zero
-            normed = self.vectors / n[:, None]
-            normed[zero_mask] = 0.0  # zero vectors stay zero
-            self._normed_vectors = normed
-        return self._normed_vectors
+        n = self.norms
+        # Fast path: if rows are already ~unit (pre-normalized file), just
+        # flip the flag and skip mutation — tolerates float32 round-off.
+        if np.all(np.abs(n - 1.0) < 1e-5):
+            self._is_unit_normed = True
+            self.l2_normalized = True
+            return self.vectors
+        V = self.vectors
+        if not V.flags.writeable:
+            V = np.array(V)
+            self.vectors = V
+        zero_mask = n < 1e-12
+        safe_n = np.where(zero_mask, 1.0, n).astype(V.dtype, copy=False)
+        V /= safe_n[:, None]
+        if zero_mask.any():
+            V[zero_mask] = 0.0
+        self._is_unit_normed = True
+        self.l2_normalized = True
+        self._norms = None
+        return V
 
     # ---- lookup ----
 

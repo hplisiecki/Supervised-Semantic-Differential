@@ -241,9 +241,10 @@ def unified_permutation_test(
 
     # --- P-values ---
     from ssdiff.utils import _diagnostic
+    from ssdiff.results.format import fmt_p
 
     omnibus_p = float((np.sum(null_omnibus >= T_omnibus_obs) + 1) / (n_perm + 1))
-    _diagnostic(verbose, f"[groups] omnibus p={omnibus_p:.4g} ({G} groups, {n_perm} perms)")
+    _diagnostic(verbose, f"[groups] omnibus p={fmt_p(omnibus_p)} ({G} groups, {n_perm} perms)")
 
     p_raw_arr = np.empty(n_pairs, dtype=np.float64)
     for k in range(n_pairs):

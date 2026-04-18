@@ -657,7 +657,7 @@ def snippets_along_beta(
 
     Returns dict with 'pos' and 'neg' keys, each a list of dicts.
     Each dict has keys:
-        side_label, profile_id, post_id, cosine, seed,
+        side, profile_id, post_id, cosine, seed,
         start_token_idx, end_token_idx, start_sent_idx, end_sent_idx,
         snippet_anchor, essay_text_surface, essay_text_lemmas
 
@@ -730,7 +730,7 @@ def snippets_along_beta(
             if (min_cosine is None) or (cp >= min_cosine):
                 rows_pos.append(
                     dict(
-                        side_label="beta_pos",
+                        side="pos",
                         profile_id=occ["profile_id"],
                         post_id=occ["post_id"],
                         cosine=cp,
@@ -747,7 +747,7 @@ def snippets_along_beta(
             if (min_cosine is None) or (cn >= min_cosine):
                 rows_neg.append(
                     dict(
-                        side_label="beta_neg",
+                        side="neg",
                         profile_id=occ["profile_id"],
                         post_id=occ["post_id"],
                         cosine=cn,

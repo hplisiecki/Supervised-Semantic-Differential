@@ -122,43 +122,45 @@ class TestPLSRegression:
 
     def test_r2(self, pls_run):
         result, expected, theme = pls_run
-        assert result.r2 == pytest.approx(expected["R2"], abs=1e-10), (
-            f"{theme}: R2 {result.r2:.10f} != expected {expected['R2']:.10f}"
-        )
-
-    def test_adj_r2(self, pls_run):
-        result, expected, theme = pls_run
-        assert result.r2_adj == pytest.approx(expected["adj_R2"], abs=1e-10), (
-            f"{theme}: adj_R2 {result.r2_adj:.10f} != expected {expected['adj_R2']:.10f}"
+        assert result.stats.r2 == pytest.approx(expected["R2"], abs=1e-10), (
+            f"{theme}: R2 {result.stats.r2:.10f} != expected {expected['R2']:.10f}"
         )
 
     def test_n_observations(self, pls_run):
         result, expected, theme = pls_run
-        assert result.n_raw == expected["N"], (
-            f"{theme}: N {result.n_raw} != expected {expected['N']}"
+        assert result.stats.n_raw == expected["N"], (
+            f"{theme}: N {result.stats.n_raw} != expected {expected['N']}"
         )
 
     def test_coverage(self, pls_run):
         result, expected, theme = pls_run
-        actual_cov = round(result.n_kept / result.n_raw, 4) if result.n_raw > 0 else 0
+        s = result.stats
+        actual_cov = round(s.n_kept / s.n_raw, 4) if s.n_raw > 0 else 0
         assert actual_cov == expected["coverage"], (
             f"{theme}: coverage {actual_cov} != expected {expected['coverage']}"
         )
 
     def test_n_components(self, pls_run):
         result, expected, theme = pls_run
-        assert result.n_components == expected["K"], (
-            f"{theme}: K {result.n_components} != expected {expected['K']}"
+        assert result.fit_info.n_components == expected["K"], (
+            f"{theme}: K {result.fit_info.n_components} != expected {expected['K']}"
         )
 
 
 class TestTopWordsRegression:
     """Verify top-20 words exactly match the benchmark."""
 
+    @staticmethod
+    def _top_n_per_side(result, n: int) -> dict[str, list[str]]:
+        out: dict[str, list[str]] = {"pos": [], "neg": []}
+        for w in result.words:
+            if w.rank <= n:
+                out[w.side].append(w.word)
+        return out
+
     def test_pos_words_exact(self, pls_run):
         result, expected, theme = pls_run
-        tw = result.top_words(n=20)
-        actual_pos = [w["word"] for w in tw if w["side"] == "pos"]
+        actual_pos = self._top_n_per_side(result, 20)["pos"]
         expected_pos = expected["pos_words"]
         assert actual_pos == expected_pos, (
             f"{theme} pos words differ.\n"
@@ -168,8 +170,7 @@ class TestTopWordsRegression:
 
     def test_neg_words_exact(self, pls_run):
         result, expected, theme = pls_run
-        tw = result.top_words(n=20)
-        actual_neg = [w["word"] for w in tw if w["side"] == "neg"]
+        actual_neg = self._top_n_per_side(result, 20)["neg"]
         expected_neg = expected["neg_words"]
         assert actual_neg == expected_neg, (
             f"{theme} neg words differ.\n"

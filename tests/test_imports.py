@@ -1,34 +1,9 @@
-"""Tests for clean imports — no pandas at import time."""
+"""Tests for clean imports — no pandas/sklearn/matplotlib at import time."""
 
 import subprocess
 import sys
 
-
-def _check_no_module_imported(
-    module_substring: str,
-    imports: list[str],
-    exclude: list[str] | None = None,
-) -> None:
-    """Run imports in a subprocess and verify module_substring is not in sys.modules."""
-    exclude = exclude or []
-    exclude_cond = " and ".join(
-        f"'{ex}' not in m" for ex in exclude
-    ) if exclude else "True"
-    code = (
-        "import sys; "
-        + "; ".join(f"import {m}" for m in imports)
-        + f"; mods = [m for m in sys.modules if '{module_substring}' in m and {exclude_cond}]; "
-        f"print(','.join(mods) if mods else 'CLEAN')"
-    )
-    result = subprocess.run(
-        [sys.executable, "-c", code],
-        capture_output=True, text=True, timeout=30,
-    )
-    output = result.stdout.strip()
-    assert output == "CLEAN", (
-        f"'{module_substring}' found in sys.modules after importing "
-        f"{imports}: {output}"
-    )
+import pytest
 
 
 CORE_IMPORTS = [
@@ -42,20 +17,44 @@ CORE_IMPORTS = [
 ]
 
 
-def test_no_pandas_in_ssdiff_code():
+@pytest.fixture(scope="session")
+def ssdiff_loaded_modules() -> list[str]:
+    """Import CORE_IMPORTS in a fresh subprocess and return sys.modules.
+
+    Running one subprocess and reusing its module list across the three
+    import-hygiene tests avoids paying Python startup + ssdiff-import cost
+    three times (~6-10s saved on the fast suite).
+    """
+    code = (
+        "import sys; "
+        + "; ".join(f"import {m}" for m in CORE_IMPORTS)
+        + "; print('\\n'.join(sorted(sys.modules)))"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True, text=True, timeout=30,
+    )
+    result.check_returncode()
+    return result.stdout.splitlines()
+
+
+def test_no_pandas_in_ssdiff_code(ssdiff_loaded_modules):
     """ssdiff core imports should not pull in pandas."""
     # tqdm registers a _tqdm_pandas shim at import time — not a real pandas import
-    _check_no_module_imported("pandas", CORE_IMPORTS, exclude=["tqdm"])
+    bad = [m for m in ssdiff_loaded_modules if "pandas" in m and "tqdm" not in m]
+    assert not bad, f"pandas found in sys.modules: {bad}"
 
 
-def test_no_sklearn_at_import():
+def test_no_sklearn_at_import(ssdiff_loaded_modules):
     """ssdiff core imports should not pull in sklearn."""
-    _check_no_module_imported("sklearn", CORE_IMPORTS)
+    bad = [m for m in ssdiff_loaded_modules if "sklearn" in m]
+    assert not bad, f"sklearn found in sys.modules: {bad}"
 
 
-def test_no_matplotlib_at_import():
+def test_no_matplotlib_at_import(ssdiff_loaded_modules):
     """ssdiff core imports should not pull in matplotlib."""
-    _check_no_module_imported("matplotlib", CORE_IMPORTS)
+    bad = [m for m in ssdiff_loaded_modules if "matplotlib" in m]
+    assert not bad, f"matplotlib found in sys.modules: {bad}"
 
 
 def test_public_api():
