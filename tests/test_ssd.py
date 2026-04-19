@@ -40,7 +40,12 @@ class TestSSDConstructor:
         corpus = Corpus(sample_docs, pretokenized=True, lang="pl")
         ssd = SSD(tiny_kv, corpus, sample_y, lexicon)
         r = repr(ssd)
-        assert "n_kept=" in r
+        assert r.startswith("SSD")
+        assert "n=" in r and "D=" in r and "|L|=" in r
+        assert ".x" in r and ".y" in r
+        assert ".fit_pls()" in r
+        assert ".fit_ols()" in r
+        assert ".fit_groups()" in r
 
 
 class TestSSDPLS:
@@ -56,9 +61,9 @@ class TestSSDPLS:
         assert 0 <= pls_result.stats.pvalue <= 1
         assert pls_result.beta.ndim == 1
         assert pls_result.beta.shape[0] > 0  # Not empty
-        assert pls_result.beta_unit.ndim == 1
-        # beta_unit should be a unit vector
-        assert np.linalg.norm(pls_result.beta_unit) == pytest.approx(1.0, abs=1e-6)
+        assert pls_result.gradient.ndim == 1
+        # gradient should be a unit vector
+        assert np.linalg.norm(pls_result.gradient) == pytest.approx(1.0, abs=1e-6)
         # PLS does not expose r2_adj (OLS-only statistic)
         assert "r2_adj" not in pls_result.stats.columns
 
@@ -68,16 +73,22 @@ class TestSSDPLS:
         assert pls_result.perm_null.shape == (50,)
 
     def test_top_words(self, pls_result):
-        # words are 100 pos then 100 neg — iterate all to check both sides present
         words = list(pls_result.words)
         assert len(words) > 0
         sides = {w.side for w in words}
         assert sides == {"pos", "neg"}
+        # Each word's cos_beta is bounded and sign-consistent with its side.
+        for w in words:
+            assert -1.0 - 1e-9 <= w.cos_beta <= 1.0 + 1e-9
+            if w.side == "pos":
+                assert w.cos_beta >= 0
+            else:
+                assert w.cos_beta <= 0
 
     def test_doc_scores(self, pls_result):
         docs = list(pls_result.docs)
         assert len(docs) == pls_result.stats.n_kept
-        assert all(hasattr(d, "cos_align") for d in docs)
+        assert all(hasattr(d, "alignment_score") for d in docs)
 
     def test_no_pmethod_gives_nan_pvalue(self, ssd_instance):
         result = ssd_instance.fit_pls(n_components=2, p_method=None)
@@ -88,6 +99,8 @@ class TestSSDPLS:
         result = ssd_instance.fit_pls(n_components=None, p_method=None)
         assert result.fit_info.n_components >= 1
         assert result.cv_result is not None
+        # CV's chosen K must equal the fit's reported n_components.
+        assert result.cv_result.best_n_components == result.fit_info.n_components
 
     def test_repr(self, pls_result):
         r = repr(pls_result)

@@ -12,7 +12,7 @@ from .math import kmeans, kmeans_auto_k, unit_vector
 
 
 def filtered_neighbors(
-    kv,
+    embeddings,
     vec,
     topn: int = 20,
     cand: int = 2000,
@@ -28,7 +28,7 @@ def filtered_neighbors(
 
     Parameters
     ----------
-    kv : Embeddings
+    embeddings : Embeddings
         Word embedding model supporting ``similar_by_vector``.
     vec : (D,) ndarray
         Query vector in embedding space.
@@ -50,7 +50,7 @@ def filtered_neighbors(
         descending similarity.
     """
     bad_token = get_config(lang).bad_token_re
-    nbrs = kv.similar_by_vector(vec, topn=cand, restrict_vocab=restrict)
+    nbrs = embeddings.similar_by_vector(vec, topn=cand, restrict_vocab=restrict)
     out = []
     for w, sim in nbrs:
         if not bad_token.match(w):
@@ -61,7 +61,7 @@ def filtered_neighbors(
 
 
 def cluster_top_neighbors(
-    kv,
+    embeddings,
     beta: np.ndarray,
     *,
     topn: int = 100,
@@ -74,23 +74,64 @@ def cluster_top_neighbors(
     side: Literal["pos", "neg"] = "pos",
     lang: str = "pl",
 ) -> list[dict]:
-    """Cluster top neighbors of +/-beta into interpretable themes.
+    """Cluster the top vocabulary neighbors of +/-beta into interpretable themes.
 
-    Uses pure-numpy KMeans.
+    Retrieves the *topn* closest words to the positive or negative end of the
+    gradient *beta*, embeds them, and groups them with pure-numpy KMeans (either
+    a fixed *k* or automatic selection via silhouette score).
 
-    Returns list of cluster dicts with keys:
-        id, size, centroid_cos_beta, coherence, words
+    Parameters
+    ----------
+    embeddings : Embeddings
+        Word embedding model supporting ``similar_by_vector`` and
+        ``get_vector``.
+    beta : ndarray of shape (D,)
+        Gradient / loading vector from a fitted SSD model.
+    topn : int, default 100
+        Number of filtered neighbors to retrieve and cluster.
+    k : int or None, default None
+        Fixed number of clusters.  If None, *k* is chosen automatically in
+        ``[k_min, k_max]`` by maximising the silhouette score.
+    k_min : int, default 2
+        Minimum number of clusters when *k* is selected automatically.
+    k_max : int, default 10
+        Maximum number of clusters when *k* is selected automatically.
+    restrict_vocab : int, default 50000
+        Restrict neighbor search to the top-N most frequent vocabulary words.
+    random_state : int, default 2137
+        Random seed for KMeans reproducibility.
+    min_cluster_size : int, default 2
+        Clusters with fewer than this many words are silently dropped.
+    side : "pos" or "neg", default "pos"
+        Which end of *beta* to query.  ``"pos"`` queries ``+beta``;
+        ``"neg"`` queries ``-beta``.
+    lang : str, default "pl"
+        Language code for the token-filter regex (see
+        :func:`~ssdiff.lang_config.get_config`).
+
+    Returns
+    -------
+    list[dict]
+        Cluster dicts, each with keys:
+        ``id``, ``size``, ``centroid_cos_beta``, ``coherence``, ``words``.
+        Sorted by ``centroid_cos_beta`` descending for ``"pos"`` and
+        ascending for ``"neg"``.
+
+    Raises
+    ------
+    ValueError
+        If fewer than ``max(2, k_min)`` valid neighbors are found.
     """
     bu = unit_vector(beta)
     vec = bu if side == "pos" else -bu
 
-    pairs = filtered_neighbors(kv, vec, topn=topn, restrict=restrict_vocab, lang=lang)
+    pairs = filtered_neighbors(embeddings, vec, topn=topn, restrict=restrict_vocab, lang=lang)
     words = [w for (w, _s) in pairs]
     if len(words) < max(2, k_min):
         raise ValueError("Not enough neighbors to cluster.")
 
     W = np.vstack(
-        [kv.get_vector(w, norm=True).astype(np.float64) for w in words]
+        [embeddings.get_vector(w, norm=True).astype(np.float64) for w in words]
     )
 
     if k is not None:

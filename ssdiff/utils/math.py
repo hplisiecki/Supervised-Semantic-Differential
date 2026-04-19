@@ -20,7 +20,20 @@ def _categorical_mask(y) -> np.ndarray:
 
 
 def unit_vector(v: np.ndarray, eps: float = 1e-12) -> np.ndarray:
-    """Return unit vector in direction of v, or zero vector if ||v|| < eps."""
+    """Return unit vector in the direction of *v*.
+
+    Parameters
+    ----------
+    v : ndarray of shape (d,)
+        Input vector.
+    eps : float, default 1e-12
+        Minimum norm below which *v* is treated as zero.
+
+    Returns
+    -------
+    ndarray of shape (d,)
+        ``v / ||v||``, or a zero vector of the same shape if ``||v|| < eps``.
+    """
     n = float(np.linalg.norm(v))
     if n < eps:
         return np.zeros_like(v)
@@ -28,7 +41,25 @@ def unit_vector(v: np.ndarray, eps: float = 1e-12) -> np.ndarray:
 
 
 def standardize(X: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Z-score standardize columns. Returns (X_standardized, mean, scale)."""
+    """Z-score standardize columns of *X* (population std, ddof=0).
+
+    Columns with standard deviation below 1e-12 are treated as constant
+    and scaled by 1 to avoid division by zero.
+
+    Parameters
+    ----------
+    X : ndarray of shape (n, d)
+        Input data matrix.
+
+    Returns
+    -------
+    X_standardized : ndarray of shape (n, d)
+        Column-wise z-scored copy of *X*.
+    mean : ndarray of shape (d,)
+        Column means used for centering.
+    scale : ndarray of shape (d,)
+        Column standard deviations used for scaling (minimum-clamped to 1).
+    """
     mean = X.mean(axis=0, dtype=np.float64)
     scale = X.std(axis=0, dtype=np.float64, ddof=0)
     scale = np.where(scale > 1e-12, scale, 1.0)
@@ -72,7 +103,14 @@ def pca_fit_transform(
 
 
 def l2_normalize_rows_inplace(V: np.ndarray) -> None:
-    """L2-normalize each row of *V* in-place."""
+    """L2-normalize each row of *V* in-place.
+
+    Parameters
+    ----------
+    V : ndarray of shape (n, d)
+        Matrix whose rows are normalized to unit length.  Modified in-place.
+        Rows with norm below 1e-12 are left unchanged (norm is clamped).
+    """
     norms = np.sqrt(np.einsum("ij,ij->i", V, V))[:, None]
     np.maximum(norms, 1e-12, out=norms)
     if norms.dtype != V.dtype:
@@ -225,7 +263,20 @@ def kmeans(
 
 
 def pairwise_euclidean(X: np.ndarray) -> np.ndarray:
-    """Pairwise Euclidean distance matrix (n, n) via BLAS trick."""
+    """Compute full pairwise Euclidean distance matrix via the BLAS dot-product trick.
+
+    Parameters
+    ----------
+    X : ndarray of shape (n, d)
+        Input data matrix.
+
+    Returns
+    -------
+    D : ndarray of shape (n, n)
+        Symmetric distance matrix where ``D[i, j] = ||X[i] - X[j]||``.
+        Diagonal is zero; negative values from floating-point errors are
+        clamped to zero before taking the square root.
+    """
     X_sq = np.einsum("ij,ij->i", X, X)
     D_sq = X_sq[:, None] + X_sq[None, :] - 2.0 * (X @ X.T)
     np.maximum(D_sq, 0.0, out=D_sq)
@@ -233,7 +284,7 @@ def pairwise_euclidean(X: np.ndarray) -> np.ndarray:
 
 
 def _silhouette_from_dists(dists: np.ndarray, labels: np.ndarray) -> float:
-    """Mean silhouette coefficient from precomputed distance matrix."""
+    """Mean silhouette coefficient from a precomputed (n, n) distance matrix."""
     n = len(labels)
     unique_labels = np.unique(labels)
     if len(unique_labels) < 2:
@@ -263,7 +314,21 @@ def _silhouette_from_dists(dists: np.ndarray, labels: np.ndarray) -> float:
 
 
 def silhouette_score(X: np.ndarray, labels: np.ndarray) -> float:
-    """Mean silhouette coefficient (Euclidean)."""
+    """Mean silhouette coefficient using Euclidean distances.
+
+    Parameters
+    ----------
+    X : ndarray of shape (n, d)
+        Data matrix.
+    labels : ndarray of shape (n,) of int
+        Cluster assignments.
+
+    Returns
+    -------
+    float
+        Mean silhouette score in [-1, 1].  Returns 0.0 if fewer than two
+        distinct clusters are present.
+    """
     return _silhouette_from_dists(pairwise_euclidean(X), labels)
 
 
@@ -458,14 +523,43 @@ def _gammainc_lower(a: float, x: float) -> float:
 
 
 def chi2_sf(x: float, df: int) -> float:
-    """Survival function (1 - CDF) of the chi-squared distribution."""
+    """Survival function (1 - CDF) of the chi-squared distribution.
+
+    Parameters
+    ----------
+    x : float
+        Test statistic value.
+    df : int
+        Degrees of freedom.
+
+    Returns
+    -------
+    float
+        P(X > x) where X ~ chi2(df).  Returns 1.0 if x <= 0 or df <= 0.
+    """
     if x <= 0 or df <= 0:
         return 1.0
     return 1.0 - _gammainc_lower(df / 2.0, x / 2.0)
 
 
 def f_sf(f_val: float, dfn: float, dfd: float) -> float:
-    """Survival function (1 - CDF) of the F-distribution."""
+    """Survival function (1 - CDF) of the F-distribution.
+
+    Parameters
+    ----------
+    f_val : float
+        F-statistic value.
+    dfn : float
+        Numerator degrees of freedom.
+    dfd : float
+        Denominator degrees of freedom.
+
+    Returns
+    -------
+    float
+        P(F > f_val) where F ~ F(dfn, dfd).  Returns 1.0 for non-positive
+        inputs.
+    """
     if f_val <= 0 or dfn <= 0 or dfd <= 0:
         return 1.0
     x = dfn * f_val / (dfn * f_val + dfd)
@@ -473,7 +567,21 @@ def f_sf(f_val: float, dfn: float, dfd: float) -> float:
 
 
 def t_sf(t_val: float, df: float) -> float:
-    """Survival function P(T > t) for Student's t-distribution."""
+    """One-tailed survival function P(T > t) for Student's t-distribution.
+
+    Parameters
+    ----------
+    t_val : float
+        t-statistic value.
+    df : float
+        Degrees of freedom.
+
+    Returns
+    -------
+    float
+        P(T > t_val) where T ~ t(df).  Returns ``nan`` if df <= 0.
+        For a two-tailed p-value use ``2 * t_sf(abs(t_val), df)``.
+    """
     if df <= 0:
         return float("nan")
     if t_val == 0.0:

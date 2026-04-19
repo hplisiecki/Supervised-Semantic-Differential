@@ -36,8 +36,10 @@ def cosine(u: np.ndarray, v: np.ndarray) -> float:
 
 
 def zscore_ignore_nan(x: np.ndarray) -> np.ndarray:
-    """Z-score normalization ignoring NaNs."""
+    """Z-score normalization ignoring NaNs. All-NaN input returns all-NaN."""
     x = np.asarray(x, dtype=float)
+    if not np.any(np.isfinite(x)):
+        return np.full_like(x, np.nan)
     m = np.nanmean(x)
     s = np.nanstd(x)
     if not np.isfinite(s) or s < 1e-12:
@@ -130,7 +132,28 @@ def overall_interpretability(
 ) -> dict:
     """Compute aggregate interpretability from a list of cluster dicts.
 
-    Each dict must have keys: 'size', 'coherence', 'centroid_cos_beta'.
+    Parameters
+    ----------
+    clusters : list of dict
+        Each dict must contain the keys ``'size'`` (int), ``'coherence'``
+        (float, intra-cluster cosine coherence), and
+        ``'centroid_cos_beta'`` (float, cosine between cluster centroid
+        and the beta vector).
+    weight_by_size : bool, default True
+        If True, weight means by cluster size (number of words).
+
+    Returns
+    -------
+    dict
+        Keys: ``mean_coherence``, ``mean_abs_cosb``, ``aggregate``
+        (= mean_coherence * mean_abs_cosb), ``n_clusters``,
+        ``total_size``.  All float values are NaN when *clusters* is
+        empty.
+
+    Raises
+    ------
+    RuntimeError
+        If any cluster dict is missing a required key.
     """
     if not clusters:
         return dict(

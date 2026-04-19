@@ -18,7 +18,7 @@ from ssdiff.utils.text import PreprocessedDoc
 from ssdiff.utils.vectors import compute_global_sif
 
 
-def _centroid_unit_from_cluster_words(words: list, kv) -> np.ndarray:
+def _centroid_unit_from_cluster_words(words: list, embeddings) -> np.ndarray:
     """Compute unit centroid vector from cluster words.
 
     Accepts both dict format (from cluster_top_neighbors: {"word": ..., ...})
@@ -27,16 +27,22 @@ def _centroid_unit_from_cluster_words(words: list, kv) -> np.ndarray:
     vecs = []
     for entry in words:
         w = entry["word"] if isinstance(entry, dict) else entry[0]
-        if w in kv:
-            vecs.append(kv.get_vector(w, norm=True))
+        if w in embeddings:
+            vecs.append(embeddings.get_vector(w, norm=True))
     if not vecs:
-        return np.zeros(kv.vector_size, dtype=np.float64)
+        return np.zeros(embeddings.vector_size, dtype=np.float64)
     c = np.mean(np.vstack(vecs), axis=0)
     return unit_vector(c)
 
 
 # a lightweight "doc-like" view used for both single-doc and per-post in profiles
 class _DocLike:
+    """Lightweight struct holding the fields needed by snippet helpers.
+
+    Used as a uniform interface for both single documents (from
+    ``PreprocessedDoc``) and individual posts within a profile.
+    """
+
     __slots__ = (
         "doc_lemmas",
         "post_id",
@@ -53,6 +59,7 @@ class _DocLike:
         doc_lemmas: list[str],
         token_to_sent: list[int],
     ) -> None:
+        """Initialise all fields directly from caller-supplied values."""
         self.profile_id = profile_id  # for PreprocessedDoc: equals doc_id
         self.post_id = post_id  # for PreprocessedDoc: 0
         self.sents_surface = sents_surface
@@ -125,7 +132,7 @@ def _make_snippet_anchor(
 
 # ---------- vectorized per-doc precompute ----------
 def _precompute_doc_arrays(
-    kv,
+    embeddings,
     D: _DocLike,
     sif_a: float,
     global_wc: dict[str, int],
@@ -140,7 +147,7 @@ def _precompute_doc_arrays(
     """
     toks = D.doc_lemmas
     N = len(toks)
-    d = int(kv.vector_size)
+    d = int(embeddings.vector_size)
     if N == 0:
         return dict(N=0)
 
@@ -155,8 +162,8 @@ def _precompute_doc_arrays(
     V = np.zeros((N, d), dtype=np.float64)
     hit = np.zeros(N, dtype=bool)
     for i, t in enumerate(toks):
-        if t in kv:
-            V[i] = kv.get_vector(t, norm=True)
+        if t in embeddings:
+            V[i] = embeddings.get_vector(t, norm=True)
             hit[i] = True
 
     W = V * w[:, None]
@@ -235,7 +242,14 @@ def _collect_occurrences_for_doc(
 
 # small helper to reuse the existing _make_snippet_anchor signature without copying arrays around
 class _DL_proxy(_DocLike):
+    """Thin ``_DocLike`` wrapper around a precomputed doc-array dict.
+
+    Avoids copying arrays when passing a ``DA`` dict to
+    :func:`_make_snippet_anchor`, which expects a ``_DocLike`` object.
+    """
+
     def __init__(self, DA: dict[str, Any]) -> None:
+        """Build proxy from a precomputed doc-array dict returned by ``_precompute_doc_arrays``."""
         self.profile_id = DA["profile_id"]
         self.post_id = DA["post_id"]
         self.sents_surface = DA["sents_surface"]
@@ -246,7 +260,7 @@ class _DL_proxy(_DocLike):
 # ---------- parallel driver ----------
 def _precompute_all_docs(
     pre_docs: list[PreprocessedDoc],
-    kv,
+    embeddings,
     sif_a,
     global_wc,
     total_tokens,
@@ -257,14 +271,14 @@ def _precompute_all_docs(
     Returns list of per-doc dicts with precomputed arrays.
     """
     doclikes = list(_iter_doclikes(pre_docs))
-    # Threaded precompute (BLAS inside get_vector won't block; read-only kv is safe)
+    # Threaded precompute (BLAS inside get_vector won't block; read-only embeddings is safe)
     results: list[dict[str, Any] | None] = [None] * len(doclikes)
     with ThreadPoolExecutor(
         max_workers=(None if n_jobs in (-1, 0, None) else int(n_jobs))
     ) as ex:
         futs = {
             ex.submit(
-                _precompute_doc_arrays, kv, D, sif_a, global_wc, total_tokens
+                _precompute_doc_arrays, embeddings, D, sif_a, global_wc, total_tokens
             ): idx
             for idx, D in enumerate(doclikes)
         }
@@ -496,7 +510,7 @@ def _top_per_group(rows: list[dict], group_key: str, n: int) -> list[dict]:
 def cluster_snippets_by_centroids(
     *,
     pre_docs: list[PreprocessedDoc],
-    ssd,  # fitted SSD (must expose kv and lexicon)
+    ssd,  # fitted SSD (must expose embeddings and lexicon)
     pos_clusters: list[dict] | None,  # clusters from +beta
     neg_clusters: list[dict] | None,  # clusters from -beta
     token_window: int = 3,
@@ -522,7 +536,7 @@ def cluster_snippets_by_centroids(
     pre_docs : List[PreprocessedDoc]
         Preprocessed documents to extract snippets from.
     ssd : fitted SSD model
-        Duck-typed object exposing .kv (Embeddings), .beta_unit, .beta,
+        Duck-typed object exposing .embeddings (Embeddings), .gradient, .beta,
         .lexicon, .window, .sif_a.
     pos_clusters : List[dict] | None
         List of clusters from +beta side (each cluster is a dict with 'words' key).
@@ -554,7 +568,7 @@ def cluster_snippets_by_centroids(
     if global_wc is None or total_tokens is None:
         global_wc, total_tokens = _build_global_sif(pre_docs)
 
-    kv = ssd.embeddings
+    embeddings = ssd.embeddings
     seeds_set = set(seeds or getattr(ssd, "lexicon", []))
 
     # targets (cluster centroids)
@@ -565,7 +579,7 @@ def cluster_snippets_by_centroids(
         if not clusters:
             return
         for rank, C in enumerate(clusters, start=1):
-            uC = _centroid_unit_from_cluster_words(C["words"], kv)
+            uC = _centroid_unit_from_cluster_words(C["words"], embeddings)
             if uC.shape[0] and np.any(uC):
                 targets.append(uC)
                 labels.append(f"{side}_cluster_{rank}")
@@ -579,7 +593,7 @@ def cluster_snippets_by_centroids(
 
     # 1) precompute per-doc arrays once (parallel)
     doc_arrays = _precompute_all_docs(
-        pre_docs, kv, sif_a, global_wc, total_tokens, n_jobs
+        pre_docs, embeddings, sif_a, global_wc, total_tokens, n_jobs
     )
 
     # 2) collect occurrences:
@@ -641,7 +655,7 @@ def cluster_snippets_by_centroids(
 def snippets_along_beta(
     *,
     pre_docs: list[PreprocessedDoc],
-    ssd,  # fitted SSD (must expose beta_unit and kv)
+    ssd,  # fitted SSD (must expose gradient and embeddings)
     token_window: int = 3,
     seeds: Iterable[str] | None = None,
     sif_a: float = 1e-3,
@@ -666,7 +680,7 @@ def snippets_along_beta(
     pre_docs : List[PreprocessedDoc]
         Preprocessed documents to extract snippets from.
     ssd : fitted SSD model
-        Duck-typed object exposing .kv (Embeddings), .beta_unit, .beta,
+        Duck-typed object exposing .embeddings (Embeddings), .gradient, .beta,
         .lexicon, .window, .sif_a.
     token_window : int, optional
         Token window size around seed occurrences, by default 3.
@@ -696,13 +710,13 @@ def snippets_along_beta(
     if global_wc is None or total_tokens is None:
         global_wc, total_tokens = _build_global_sif(pre_docs)
 
-    kv = ssd.embeddings
-    b_unit = unit_vector(getattr(ssd, "beta_unit", ssd.beta))
+    embeddings = ssd.embeddings
+    b_unit = unit_vector(getattr(ssd, "gradient", ssd.beta))
     seeds_set = set(seeds or getattr(ssd, "lexicon", []))
 
     # 1) precompute per-doc arrays once (parallel)
     doc_arrays = _precompute_all_docs(
-        pre_docs, kv, sif_a, global_wc, total_tokens, n_jobs
+        pre_docs, embeddings, sif_a, global_wc, total_tokens, n_jobs
     )
 
     # 2) collect occurrences:

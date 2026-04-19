@@ -131,7 +131,24 @@ def _resolve_lang(lang: str | None) -> str:
 
 
 def get_config(lang: str) -> LangConfig:
-    """Return the ``LangConfig`` for a language code or name."""
+    """Return the ``LangConfig`` for a language code or full name.
+
+    Parameters
+    ----------
+    lang : str
+        ISO 639-1 code (e.g. ``"pl"``) or full English name
+        (e.g. ``"polish"``), case-insensitive.
+
+    Returns
+    -------
+    LangConfig
+        Frozen configuration dataclass for the requested language.
+
+    Raises
+    ------
+    ValueError
+        If *lang* is not found in :data:`LANGUAGES` or ``_ALIASES``.
+    """
     return LANGUAGES[_resolve_lang(lang)]
 
 

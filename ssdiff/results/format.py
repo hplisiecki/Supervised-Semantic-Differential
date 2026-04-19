@@ -36,7 +36,17 @@ def fmt_p(p: float) -> str:
 
 
 def fmt_r(r: float, *, digits: int = 2, signed: bool = False) -> str:
-    """Bounded coefficient (|r| ≤ 1): 2–3 decimals, no leading zero."""
+    """Bounded coefficient (|r| ≤ 1): 2–3 decimals, no leading zero.
+
+    Parameters
+    ----------
+    r : float
+        Correlation or cosine value (expected in ``[−1, 1]``).
+    digits : int
+        Decimal places (default 2).
+    signed : bool
+        If ``True``, prefix a ``+`` sign for non-negative values.
+    """
     s = _no_leading_zero(r, digits)
     if signed and not s.startswith(MINUS):
         s = f"+{s}"
@@ -126,10 +136,25 @@ def fmt_table(
 ) -> str:
     """Render a fixed-width table with D11 alignment rules.
 
-    `numeric[i]=True` → right-align; otherwise left-align.
-    `text_truncate` clips any cell whose string form exceeds N characters
-    (applies uniformly, independent of the numeric alignment flag).
-    `max_width` is advisory — we truncate text columns to respect it.
+    Parameters
+    ----------
+    rows : sequence of sequences
+        Row data; each inner sequence must have the same length as ``headers``.
+    headers : sequence of str
+        Column headers.
+    numeric : sequence of bool
+        ``True`` right-aligns the corresponding column; ``False`` left-aligns.
+    gutter : int
+        Number of spaces between columns (default 2).
+    max_width : int or None
+        Advisory total width — currently unused in enforcement but signals intent.
+    text_truncate : int or None
+        If set, clip every cell to this many characters (appending ``…``).
+
+    Returns
+    -------
+    str
+        Multi-line string with a header row followed by data rows.
     """
     if text_truncate is not None:
         rows = [
@@ -146,6 +171,7 @@ def fmt_table(
     gap = " " * gutter
 
     def _fmt_cell(cell: str, width: int, right: bool) -> str:
+        """Pad ``cell`` to ``width`` characters, right- or left-aligned."""
         return cell.rjust(width) if right else cell.ljust(width)
 
     out_lines = [gap.join(_fmt_cell(headers[i], widths[i], numeric[i]) for i in range(len(headers)))]

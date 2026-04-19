@@ -131,6 +131,7 @@ class Corpus:
         """
         from ssdiff.results.lexicon_result import LexiconResult
         from ssdiff.results.schema import Suggestion
+
         from .utils.lexicon import _filter_y, _rank_tokens, _token_sets
 
         docs, y_clean = _filter_y(self.docs, y, var_type=var_type)
@@ -383,6 +384,7 @@ class Corpus:
         """
         from ssdiff.results.lexicon_result import LexiconResult
         from ssdiff.results.schema import Suggestion, Summary
+
         from .utils.lexicon import _filter_y
 
         docs, _ = _filter_y(self.docs, y, var_type=var_type)
@@ -421,10 +423,22 @@ class Corpus:
 
     @property
     def n_texts(self) -> int:
+        """Number of documents in the corpus (alias for ``len(self)``)."""
         return len(self.docs)
 
     def __len__(self) -> int:
         return len(self.docs)
 
     def __repr__(self) -> str:
-        return f"Corpus({len(self.docs)} docs)"
+        header = f"Corpus  n={len(self.docs):,}  lang={self.lang}"
+        arrays = "  arrays:  .docs  .pre_docs"
+        methods = (
+            "  methods: .suggest_lexicon(...)  .evaluate_lexicon(...)  "
+            ".token_stats(...)  .coverage_summary(...)"
+        )
+        return "\n".join([header, arrays, methods])
+
+    def _repr_html_(self) -> str:
+        """Render a plain-text repr inside a ``<pre>`` block for Jupyter."""
+        import html as _html
+        return f"<pre>{_html.escape(repr(self))}</pre>"

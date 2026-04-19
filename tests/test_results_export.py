@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from ssdiff.results.core import ScalarView, View, _require, _validate_cols
+from ssdiff.results.core import ScalarView, View, _validate_cols
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,29 +39,28 @@ def view():
 
 
 # ---------------- cols validation (D9) ----------------
-def test_validate_cols_none_returns_all():
-    keep, warning = _validate_cols(None, ("id", "name", "x"))
+def test_validate_cols_none_returns_all(view):
+    # _ToyView has no DEFAULT_COLS entry → falls through to full _columns.
+    keep, warning = _validate_cols(None, view)
     assert keep == ("id", "name", "x")
     assert warning is None
 
 
-def test_validate_cols_all_valid():
-    keep, warning = _validate_cols(["name", "x"], ("id", "name", "x"))
+def test_validate_cols_all_valid(view):
+    keep, warning = _validate_cols(["name", "x"], view)
     assert keep == ("name", "x")
     assert warning is None
 
 
-def test_validate_cols_partial_unknown():
-    keep, warning = _validate_cols(
-        ["id", "missing", "x"], ("id", "name", "x")
-    )
+def test_validate_cols_partial_unknown(view):
+    keep, warning = _validate_cols(["id", "missing", "x"], view)
     assert keep == ("id", "x")
     assert warning is not None
     assert "missing" in warning
 
 
-def test_validate_cols_all_unknown():
-    keep, warning = _validate_cols(["foo", "bar"], ("id", "name", "x"))
+def test_validate_cols_all_unknown(view):
+    keep, warning = _validate_cols(["foo", "bar"], view)
     assert keep == ("id", "name", "x")
     assert warning is not None
     assert "all cols unknown" in warning.lower()
@@ -141,7 +140,7 @@ def test_to_df_raises_clear_error_without_pandas(monkeypatch, view):
 
 
 def test_to_df_happy_path(view):
-    pd = pytest.importorskip("pandas")
+    pytest.importorskip("pandas")
     df = view.to_df()
     assert list(df.columns) == ["id", "name", "x"]
     assert len(df) == 2
@@ -224,13 +223,6 @@ def test_save_unknown_extension_raises(view, tmp_path):
         view.save(str(tmp_path / "out.xyz"))
 
 
-def test_save_style_only_allowed_for_docx(view, tmp_path):
-    for ext in ("csv", "json", "md", "tex", "txt", "html"):
-        p = tmp_path / f"out.{ext}"
-        with pytest.raises(TypeError, match="docx"):
-            view.save(str(p), style="APA")
-
-
 # ---------------- save(k=...) row cap --------------------
 def test_save_k_caps_rows_on_size_bearing_view(view, tmp_path):
     p = tmp_path / "out.csv"
@@ -259,8 +251,9 @@ class _ToyStats(ScalarView):
 
     def __iter__(self): yield self._row
     def to_dict(self, cols=None):
-        keep, warning = _validate_cols(cols, self._columns)
-        if warning: warnings.warn(warning, UserWarning, stacklevel=2)
+        keep, warning = _validate_cols(cols, self)
+        if warning:
+            warnings.warn(warning, UserWarning, stacklevel=2)
         return {k: self._row[k] for k in keep}
 
 
@@ -284,10 +277,5 @@ def test_scalar_save_k_is_silently_ignored(scalar, tmp_path):
     scalar.save(str(p), k=0)
     rows = list(csv.reader(p.read_text(encoding="utf-8").splitlines()))
     assert len(rows) == 2  # header + the scalar's one row
-
-
-def test_scalar_save_style_rejected_on_non_docx(scalar, tmp_path):
-    with pytest.raises(TypeError, match="docx"):
-        scalar.save(str(tmp_path / "stats.csv"), style="APA")
 
 

@@ -69,7 +69,7 @@ import numpy as np
 
 # 1) Load and normalize embeddings
 emb = Embeddings.load("path/to/embeddings.txt", verbose=True)
-emb.normalize(l2=True, abtt_m=1)
+emb.normalize(l2=True, abtt=1)
 
 # 2) Load your data
 texts = [...]                          # list of raw text strings
@@ -123,7 +123,7 @@ and All-But-The-Top (ABTT) transformation:
 from ssdiff import Embeddings
 
 emb = Embeddings.load("path/to/model.bin", verbose=True)
-emb.normalize(l2=True, abtt_m=1)   # L2 + ABTT (remove top-1 PC)
+emb.normalize(l2=True, abtt=1)   # L2 + ABTT (remove top-1 PC)
 ```
 
 Calling `normalize()` with no arguments applies both L2 and ABTT (m=1) by default.
@@ -255,7 +255,7 @@ The constructor builds document vectors but does **not** fit a model — call `f
 from ssdiff import Embeddings, Corpus, SSD
 
 emb = Embeddings.load("model.ssdembed")
-emb.normalize(l2=True, abtt_m=1)
+emb.normalize(l2=True, abtt=1)
 corpus = Corpus(texts, lang="en")
 
 ssd = SSD(
@@ -303,9 +303,8 @@ result = ssd.fit_pls(
 
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
-| `n_components` | `int \| "auto"` | `1` | Number of PLS components. `"auto"` selects via 10-fold CV |
+| `n_components` | `int \| "auto"` | `1` | Number of PLS components. `"auto"` picks argmax CV R² over 10-fold CV |
 | `cv_folds` | `int` | `10` | CV folds for component selection |
-| `use_1se` | `bool` | `True` | 1-SE rule for parsimonious selection |
 | `pca_preprocess` | `int \| str \| None` | `None` | Optional PCA preprocessing (e.g. `50` or `"var95"`) |
 | `p_method` | `str \| None` | `"auto"` | Significance test method |
 | `n_perm` | `int` | `1000` | Permutation iterations |
@@ -343,7 +342,7 @@ result.beta_norm                # ||beta|| in SD(y) per +1.0 cosine
 result.delta                    # raw y change per +0.10 cosine
 result.iqr_effect               # raw y change across IQR of cosine
 result.y_corr_pred              # |corr(y, y_hat)|
-result.cos_align                # per-doc cosine to beta (array)
+result.alignment_scores         # per-doc cosine to gradient (array)
 ```
 
 For a comprehensive text report:
@@ -364,7 +363,7 @@ For each candidate PCA dimensionality K, the sweep fits SSD and tracks:
 
 1. **Interpretability quality** — based on clustering the nearest neighbors at each pole of the semantic gradient and computing aggregate cluster coherence and alignment with beta.
 
-2. **Stability of the semantic gradient** — measured as the cosine change between consecutive gradients: `beta_delta = 1 - cos(beta_unit(K-1), beta_unit(K))`. Smaller values mean more stable gradients.
+2. **Stability of the semantic gradient** — measured as the cosine change between consecutive gradients: `beta_delta = 1 - cos(gradient(K-1), gradient(K))`. Smaller values mean more stable gradients.
 
 These signals are smoothed using an AUCK window.
 
@@ -450,7 +449,7 @@ The SSD score for each document quantifies how closely its meaning aligns with t
 scores = result.doc_scores()
 # dict with keys:
 #   keep_mask   — bool array (n_raw,), which docs were kept
-#   cos_align   — float array (n_kept,), cosine alignment to beta
+#   alignment_scores — float array (n_kept,), cosine alignment to gradient
 #   score_std   — float array (n_kept,), standardized predicted scores
 #   yhat_raw    — float array (n_kept,), predicted outcome in original scale
 ```
@@ -530,7 +529,7 @@ r = result.filter_groups("A", "B")
 Key attributes:
 - `result.omnibus_T` — mean pairwise cosine distance between centroids
 - `result.omnibus_p` — permutation p-value for omnibus test
-- `result.pairwise` — dict mapping `(g1, g2)` to result dicts with `T`, `p_raw`, `p_corrected`, `beta_unit`, `cohens_d`, etc.
+- `result.pairwise` — dict mapping `(g1, g2)` to result dicts with `T`, `p_raw`, `p_corrected`, `gradient`, `cohens_d`, etc.
 
 ---
 
@@ -545,7 +544,7 @@ from ssdiff import Embeddings, Corpus, SSD
 ### `Embeddings`
 
 - `Embeddings.load(path, verbose=False, parallel=False)` — load `.ssdembed`, `.kv`, `.bin`, `.txt`, `.vec` (and `.gz` variants)
-- `.normalize(l2=True, abtt_m=1, re_normalize=True)` — in-place L2 + ABTT; tracks state, safe to call repeatedly
+- `.normalize(l2=True, abtt=1, re_normalize=True)` — in-place L2 + ABTT; tracks state, safe to call repeatedly
 - `.save(filename=None, fmt="ssdembed")` — save to native, text, binary, or gensim format
 - `emb["word"]` — vector lookup
 - `"word" in emb` — membership check
@@ -569,7 +568,7 @@ from ssdiff import Embeddings, Corpus, SSD
 
 ### `PLSResult` / `PCAOLSResult`
 
-Attributes: `r2`, `r2_adj`, `pvalue`, `n_components`, `beta`, `beta_unit`, `beta_norm`, `delta`, `iqr_effect`, `y_corr_pred`, `cos_align`, `y_mean`, `y_std`.
+Attributes: `r2`, `r2_adj`, `pvalue`, `n_components`, `beta`, `gradient`, `beta_norm`, `delta`, `iqr_effect`, `y_corr_pred`, `alignment_scores`, `y_mean`, `y_std`.
 
 Methods:
 - `.summary()` — human-readable model summary

@@ -3,18 +3,26 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
 import numpy as np
 
 from ssdiff.results.core import Result, ScalarView, TestView, View
 from ssdiff.results.display import _save_hint_enabled
 from ssdiff.results.format import (
-    fmt_count, fmt_d, fmt_p, fmt_pct, fmt_r,
+    fmt_count,
+    fmt_d,
+    fmt_p,
+    fmt_r,
 )
 from ssdiff.results.report import Report, Section
 from ssdiff.results.schema import (
-    Cluster, ClusterWord, Doc, FitInfo, Snippet, Stats, Word,
+    Cluster,
+    ClusterWord,
+    Doc,
+    FitInfo,
+    Snippet,
+    Stats,
+    Word,
 )
 from ssdiff.utils.math import unit_vector
 
@@ -36,6 +44,8 @@ def _rolling_median(x: np.ndarray, window: int = 7) -> np.ndarray:
 
 # ---------- FitInfoView (ScalarView) ----------
 class FitInfoView(ScalarView):
+    """ScalarView exposing backend fit configuration from ``FitInfo``."""
+
     _name = "fit_info"
     _columns = (
         "n_components", "pca_k", "p_method", "n_perm", "n_splits",
@@ -53,6 +63,8 @@ class FitInfoView(ScalarView):
 
 # ---------- StatsView (ScalarView) ----------
 class StatsView(ScalarView):
+    """ScalarView exposing model-quality statistics from ``Stats`` (PLS backend)."""
+
     _name = "stats"
     _columns = (
         "backend", "r2", "pvalue",
@@ -79,6 +91,12 @@ class OLSStatsView(StatsView):
 
 # ---------- WordsView ----------
 class WordsView(View[Word]):
+    """Tabular view of nearest-neighbor words for both β poles.
+
+    By default, display truncates to ``DEFAULT_MAX_ROWS`` split evenly between
+    ``pos`` and ``neg`` sides.  Use ``.pos`` / ``.neg`` for one-sided access.
+    """
+
     _name = "words"
     _columns = ("side", "rank", "word", "cos_beta", "contrast")
 
@@ -95,14 +113,17 @@ class WordsView(View[Word]):
         return self._rows[i]
 
     @property
-    def pos(self) -> "SidedWordsView":
+    def pos(self) -> SidedWordsView:
         return SidedWordsView("pos", self._rows)
 
     @property
-    def neg(self) -> "SidedWordsView":
+    def neg(self) -> SidedWordsView:
         return SidedWordsView("neg", self._rows)
 
-    def to_text(self, max_rows: int = 20, cols=None) -> str:
+    def to_text(self, max_rows: int | None = None, cols=None) -> str:
+        from ssdiff.results.core import DEFAULT_MAX_ROWS
+        if max_rows is None:
+            max_rows = DEFAULT_MAX_ROWS
         if self._no_trunc:
             return super().to_text(max_rows=max_rows, cols=cols)
         pos_rows = [w for w in self._rows if w.side == "pos"]
@@ -143,7 +164,7 @@ class SidedWordsView(WordsView):
         self._all_side_rows = side_rows
         self._k = k
 
-    def __call__(self, k: int | None = 20) -> "SidedWordsView":
+    def __call__(self, k: int | None = 20) -> SidedWordsView:
         return SidedWordsView(self._side_key, self._all_side_rows, k=k)
 
     def _save_hint(self) -> str:
@@ -156,6 +177,8 @@ class SidedWordsView(WordsView):
 
 # ---------- Clusters ----------
 class ClusterWordsView(View[ClusterWord]):
+    """Tabular view of word members for one cluster (obtained via ``clusters.pos.words(id)``)."""
+
     _name = "cluster_words"
     _columns = ("cluster_id", "side", "word", "cos_centroid", "cos_beta", "contrast")
 
@@ -173,10 +196,17 @@ class ClusterWordsView(View[ClusterWord]):
 
 
 class SidedClustersView(View[Cluster]):
+    """Cluster summary view for one β pole.
+
+    Callable to recompute with different parameters, e.g.
+    ``result.clusters.pos(topn=50)``.  Sub-views available via
+    ``.words(cluster_id)`` and ``.snippets``.
+    """
+
     _name = "clusters"
     _columns = ("cluster_id", "side", "size", "coherence", "centroid_cos_beta", "contrast")
 
-    def __init__(self, parent: "ContinuousResult", side: str,
+    def __init__(self, parent: ContinuousResult, side: str,
                  rows: list[Cluster], words_rows: list[ClusterWord],
                  snippets_rows: list[Snippet] | None, params: dict,
                  *, _no_trunc: bool = False):
@@ -204,18 +234,20 @@ class SidedClustersView(View[Cluster]):
     @property
     def params(self): return dict(self._params)
 
-    def __call__(self, **params) -> "SidedClustersView":
+    def __call__(self, **params) -> SidedClustersView:
+        """Recompute clusters with updated parameters (e.g. ``topn=50, k=3``)."""
         merged = {**self._params, **params}
         merged.pop("side", None)
         return self._parent._clusters_for(self._side, **merged)
 
     def words(self, cluster_id: int) -> ClusterWordsView:
+        """Return a ClusterWordsView for the given cluster_id on this side."""
         return ClusterWordsView(
             [w for w in self._words_rows if w.cluster_id == cluster_id]
         )
 
     @property
-    def snippets(self) -> "SidedSnippetsView":
+    def snippets(self) -> SidedSnippetsView:
         """Snippets on this side — callable with a cluster_id to filter further."""
         return SidedSnippetsView(self._side, self._snippets_rows)
 
@@ -236,7 +268,7 @@ class SidedClustersView(View[Cluster]):
 class ClustersIndex:
     """`.pos` / `.neg` accessors that hand back a SidedClustersView."""
 
-    def __init__(self, parent: "ContinuousResult"):
+    def __init__(self, parent: ContinuousResult):
         self._parent = parent
 
     @property
@@ -247,7 +279,7 @@ class ClustersIndex:
     def neg(self) -> SidedClustersView:
         return self._parent._clusters_for("neg")
 
-    def _cached_count(self, side: str) -> "int | None":
+    def _cached_count(self, side: str) -> int | None:
         """Return cached len for `side`, or None if not yet computed."""
         for (name, key), view in self._parent._cache.items():
             if name != "clusters":
@@ -289,6 +321,13 @@ class ClustersIndex:
 
 # ---------- SnippetsView ----------
 class SnippetsView(View[Snippet]):
+    """Tabular view of text snippets extracted near seed words along the gradient.
+
+    Callable to recompute with different parameters, e.g.
+    ``result.snippets(top_per_side=100)``.  Text columns are truncated to 40
+    characters in terminal display; full text is preserved in data exports.
+    """
+
     _name = "snippets"
     _columns = (
         "snippet_id", "side", "doc_id", "cosine", "seed",
@@ -299,7 +338,7 @@ class SnippetsView(View[Snippet]):
     _text_truncate = 40
 
     def __init__(self, rows: list[Snippet], params: dict | None = None,
-                 parent: "ContinuousResult | None" = None,
+                 parent: ContinuousResult | None = None,
                  *, _no_trunc: bool = False):
         super().__init__(_no_trunc=_no_trunc)
         self._rows = rows
@@ -318,7 +357,8 @@ class SnippetsView(View[Snippet]):
     @property
     def params(self): return dict(self._params)
 
-    def __call__(self, **params) -> "SnippetsView":
+    def __call__(self, **params) -> SnippetsView:
+        """Recompute snippets with updated parameters (e.g. ``top_per_side=100``)."""
         if self._parent is None:
             return self
         merged = {**self._params, **params}
@@ -361,10 +401,16 @@ class SidedSnippetsView(SnippetsView):
 
 # ---------- DocsView ----------
 class DocsView(View[Doc]):
-    _name = "docs"
-    _columns = ("doc_id", "y_true", "y_hat", "residual", "cos_align")
+    """Tabular view of per-document predictions and alignment scores.
 
-    def __init__(self, rows: list[Doc], *, parent: "ContinuousResult | None" = None,
+    Supports sorting accessors (``.pos()``, ``.neg()``, ``.misdiagnosed()``)
+    and single-doc detail lookup via ``.id(doc_id)``.
+    """
+
+    _name = "docs"
+    _columns = ("doc_id", "y_true", "y_hat", "residual", "alignment_score")
+
+    def __init__(self, rows: list[Doc], *, parent: ContinuousResult | None = None,
                  _no_trunc: bool = False, _preview: bool = False):
         super().__init__(_no_trunc=_no_trunc)
         self._rows = rows
@@ -379,21 +425,21 @@ class DocsView(View[Doc]):
             return DocsView(self._rows[i], parent=self._parent, _no_trunc=True)
         return self._rows[i]
 
-    def pos(self, k: int = 20) -> "DocsView":
+    def pos(self, k: int = 20) -> DocsView:
         """Docs most aligned with β-pos (highest y_hat)."""
         return DocsView(
             sorted(self._rows, key=lambda d: -d.y_hat)[:k],
             parent=self._parent, _no_trunc=True,
         )
 
-    def neg(self, k: int = 20) -> "DocsView":
+    def neg(self, k: int = 20) -> DocsView:
         """Docs most aligned with β-neg (lowest y_hat)."""
         return DocsView(
             sorted(self._rows, key=lambda d: d.y_hat)[:k],
             parent=self._parent, _no_trunc=True,
         )
 
-    def misdiagnosed(self, k: int = 20, direction: str = "both") -> "DocsView":
+    def misdiagnosed(self, k: int = 20, direction: str = "both") -> DocsView:
         """Docs with largest prediction error.
 
         ``direction`` selects the residual sign:
@@ -413,14 +459,29 @@ class DocsView(View[Doc]):
             )
         return DocsView(rows, parent=self._parent, _no_trunc=True)
 
-    def id(self, doc_id: int) -> "DocDetailView":
+    def id(self, doc_id: int) -> DocDetailView:
+        """Return a DocDetailView for the document with the given ``doc_id``.
+
+        Parameters
+        ----------
+        doc_id : int
+            Document index (aligns with the corpus row index).
+
+        Raises
+        ------
+        KeyError
+            If no document with this ``doc_id`` exists in the view.
+        """
         matches = [d for d in self._rows if d.doc_id == doc_id]
         if not matches:
             raise KeyError(f"No doc with doc_id={doc_id}")
         raw_text = _lookup_raw_text(self._parent, doc_id)
         return DocDetailView(matches[0], raw_text)
 
-    def to_text(self, max_rows: int = 20, cols=None) -> str:
+    def to_text(self, max_rows: int | None = None, cols=None) -> str:
+        from ssdiff.results.core import DEFAULT_MAX_ROWS
+        if max_rows is None:
+            max_rows = DEFAULT_MAX_ROWS
         if self._preview and len(self._rows) > 10:
             sorted_rows = sorted(self._rows, key=lambda d: d.y_hat)
             neg = DocsView(sorted_rows[:5], _no_trunc=True)
@@ -458,7 +519,7 @@ class DocDetailView(ScalarView):
     """Single-doc view: stats + original pre-lemma text (when corpus attached)."""
 
     _name = "doc"
-    _columns = ("doc_id", "y_true", "y_hat", "residual", "cos_align")
+    _columns = ("doc_id", "y_true", "y_hat", "residual", "alignment_score")
 
     def __init__(self, doc: Doc, raw_text):
         super().__init__()
@@ -468,7 +529,7 @@ class DocDetailView(ScalarView):
     def __iter__(self):
         yield {f: getattr(self._doc, f) for f in self._columns}
 
-    def to_text(self, max_rows: int = 20, cols=None) -> str:
+    def to_text(self, max_rows: int | None = None, cols=None) -> str:
         body = super().to_text(max_rows=max_rows, cols=cols)
         if self._raw_text is None:
             return body + "\n\nText:  (attach corpus to see original text)"
@@ -542,6 +603,7 @@ class PLSTestView(TestView):
     }
 
     def _run(self, name, params):
+        """Dispatch to the appropriate PLS test backend and return (name, info_dict)."""
         if name not in self._DEFAULTS:
             raise ValueError(
                 f"Unknown PLS test {name!r}. "
@@ -555,7 +617,7 @@ class PLSTestView(TestView):
         if name == "perm":
             from ssdiff.backends.pls import pls1_permutation_test
             p, _, _null = pls1_permutation_test(
-                parent.x, parent.y_kept, n_comp,
+                parent.x, parent.y, n_comp,
                 n_perm=merged["n_perm"], seed=merged["seed"],
                 verbose=merged["verbose"], pca_k=pca_k,
             )
@@ -567,7 +629,7 @@ class PLSTestView(TestView):
         elif name == "split":
             from ssdiff.backends.pls import pls1_split_test
             p, mean_r = pls1_split_test(
-                parent.x, parent.y_kept, n_comp,
+                parent.x, parent.y, n_comp,
                 n_splits=merged["n_splits"],
                 split_ratio=merged["split_ratio"],
                 seed=merged["seed"], pca_k=pca_k,
@@ -583,7 +645,7 @@ class PLSTestView(TestView):
         else:  # split_cal
             from ssdiff.backends.pls import pls1_split_test_calibrated
             p, mean_r = pls1_split_test_calibrated(
-                parent.x, parent.y_kept, n_comp,
+                parent.x, parent.y, n_comp,
                 n_splits=merged["n_splits"],
                 split_ratio=merged["split_ratio"],
                 n_perm=merged["n_perm"], seed=merged["seed"],
@@ -600,6 +662,7 @@ class PLSTestView(TestView):
         return name, info
 
     def _on_rerun(self):
+        """Propagate the updated p-value back to parent stats after a rerun."""
         self._parent._refresh_stats_pvalue(self.pvalue)
 
     def _rerun_hint(self) -> str:
@@ -613,6 +676,7 @@ class PCAOLSTestView(TestView):
     _default_name = "f_test"
 
     def _run(self, name, params):
+        """Return (name, info_dict) for the F-test; rerun is a no-op (analytic test)."""
         if name != "f_test":
             raise ValueError(
                 f"Unknown PCA+OLS test {name!r}. Available: ('f_test',)"
@@ -631,7 +695,29 @@ class PCAOLSTestView(TestView):
 
 # ---------- ContinuousResult ----------
 class ContinuousResult(Result):
-    """Shared base for continuous-outcome results (PLS / PCA+OLS)."""
+    """Shared base for continuous-outcome results (PLS / PCA+OLS).
+
+    Attributes
+    ----------
+    beta : ndarray of shape (D,)
+        Raw regression direction in embedding space (β_K in Plisiecki et
+        al., 2026). Carries magnitude — use this when scale matters:
+        prediction (``d_i · beta`` ≈ outcome on standardized scale),
+        effect size via ``beta_norm``, regression-style reasoning.
+    gradient : ndarray of shape (D,)
+        Unit-length version of ``beta`` — the **semantic gradient** in
+        Plisiecki et al. (2026). Direction most strongly associated with
+        higher outcome. Use this when only direction matters: cosine
+        similarity, nearest-neighbor lookup, clustering of semantic poles.
+    beta_norm : float
+        Magnitude ‖β_K‖ of the regression direction. Effect-size summary:
+        how much the standardized outcome changes per unit move along
+        ``gradient``.
+    alignment_scores : ndarray of shape (n,)
+        Per-document **SSD alignment score** (s_i = d_i · gradient); cosine
+        similarity between each **personal concept vector (PCV)** and the
+        semantic gradient. Cached on first access.
+    """
 
     _stats_view_cls: type[StatsView] = StatsView
 
@@ -643,7 +729,7 @@ class ContinuousResult(Result):
         beta: np.ndarray,
         keep_mask: np.ndarray,
         n_raw: int, n_kept: int, n_dropped: int,
-        y_kept: np.ndarray,
+        y: np.ndarray,
         _y_mean: np.ndarray, _y_scale: np.ndarray,
         r2: float, pvalue: float, r2_adj: float | None = None,
         embeddings=None, corpus=None,
@@ -651,6 +737,54 @@ class ContinuousResult(Result):
         fit_info: FitInfo | dict | None = None,
         raw_diagnostics: dict | None = None,
     ):
+        """Construct a continuous result from backend outputs.
+
+        Parameters
+        ----------
+        backend : str
+            Backend label (``"PLS"`` or ``"PCA+OLS"``).
+        x : ndarray of shape (n_kept, D)
+            Per-document embedding vectors (personal concept vectors, PCVs) after
+            filtering.
+        beta : ndarray of shape (D,)
+            Raw regression direction in embedding space.
+        keep_mask : ndarray of shape (n_raw,) of bool
+            Boolean mask indicating which of the original ``n_raw`` documents
+            were retained.  Used to align ``doc_id`` with corpus row indices.
+        n_raw, n_kept, n_dropped : int
+            Document counts before and after filtering.
+        y : ndarray of shape (n_kept,)
+            Outcome values on their original scale (after any inverse transform).
+        _y_mean : ndarray of shape (1,)
+            Mean used to standardize ``y`` at fit time (for back-transform).
+        _y_scale : ndarray of shape (1,)
+            Standard deviation used to standardize ``y`` at fit time.
+        r2 : float
+            In-sample R² reported by the backend.
+        pvalue : float
+            P-value from the initial significance test (may be updated later via
+            ``result.test(...)``).
+        r2_adj : float or None
+            Adjusted R² (PCA+OLS only; ``None`` for PLS).
+        embeddings : Embeddings or None
+            Word-embedding model for nearest-neighbor and cluster views.
+        corpus : Corpus or None
+            Text corpus for snippet extraction.
+        lexicon : set or None
+            Optional seed tokens that constrain snippet extraction.
+        window : int
+            Token window size passed to the snippet extractor.
+        sif_a : float
+            SIF smoothing parameter for snippet vector computation.
+        lang : str
+            Language code used for token filtering in neighbor search.
+        fit_info : FitInfo, dict, or None
+            Backend hyperparameters (n_components, pca_k, etc.).  A dict is
+            converted to FitInfo automatically.
+        raw_diagnostics : dict or None
+            Backend-specific extra outputs (PLS X-scores, PCA components, etc.)
+            forwarded to the subclass.
+        """
         super().__init__()
         self.embeddings = embeddings
         self.corpus = corpus
@@ -666,10 +800,10 @@ class ContinuousResult(Result):
             fit_info = FitInfo(**fit_info)
         self.fit_info = FitInfoView(fit_info)
         self._raw_diagnostics = dict(raw_diagnostics or {})
-        self.beta_unit = unit_vector(beta)
+        self.gradient = unit_vector(beta)
         self.beta_norm = float(np.linalg.norm(beta))
-        self.keep_mask = keep_mask
-        self.y_kept = y_kept
+        self._keep_mask = keep_mask
+        self.y = y
         self._y_mean = _y_mean
         self._y_scale = _y_scale
 
@@ -677,12 +811,12 @@ class ContinuousResult(Result):
         y_std = float(_y_scale[0])
         x_norms = np.sqrt(np.einsum("ij,ij->i", x, x))[:, None]
         x_norms = np.maximum(x_norms, 1e-12)
-        cos_align = ((x / x_norms) @ self.beta_unit).ravel()
+        cos_align = ((x / x_norms) @ self.gradient).ravel()
         yhat_std = (x @ self.beta).ravel()
         yhat_raw = y_mean + y_std * yhat_std
 
-        denom = float(np.std(y_kept) * np.std(yhat_std))
-        corr = float(np.corrcoef(y_kept, yhat_std)[0, 1]) if denom > 0 else 0.0
+        denom = float(np.std(y) * np.std(yhat_std))
+        corr = float(np.corrcoef(y, yhat_std)[0, 1]) if denom > 0 else 0.0
         if not np.isfinite(corr):
             corr = 0.0
         delta = 0.10 * self.beta_norm * y_std
@@ -697,16 +831,16 @@ class ContinuousResult(Result):
         )
         self.stats = self._stats_view_cls(stats_row)
 
-        keep_idx = np.where(keep_mask)[0] if keep_mask is not None else np.arange(len(y_kept))
-        residuals = y_kept - yhat_raw
+        keep_idx = np.where(keep_mask)[0] if keep_mask is not None else np.arange(len(y))
+        residuals = y - yhat_raw
         self.docs = DocsView(
             [
                 Doc(doc_id=int(keep_idx[i]),
-                    y_true=float(y_kept[i]),
+                    y_true=float(y[i]),
                     y_hat=float(yhat_raw[i]),
                     residual=float(residuals[i]),
-                    cos_align=float(cos_align[i]))
-                for i in range(len(y_kept))
+                    alignment_score=float(cos_align[i]))
+                for i in range(len(y))
             ],
             parent=self, _preview=True,
         )
@@ -728,6 +862,25 @@ class ContinuousResult(Result):
         new_stats = _replace(self.stats._stats, pvalue=float(new_pvalue))
         self.stats = StatsView(new_stats)
 
+    @property
+    def alignment_scores(self) -> np.ndarray:
+        """Per-document SSD alignment score s_i = d_i · gradient.
+
+        Cosine similarity between each row of ``x`` (personal concept vector,
+        PCV) and the unit-length semantic gradient. Shape: (n_kept,).
+
+        Vectorized form of ``[d.alignment_score for d in self.docs]``.
+        """
+        cached = getattr(self, "_alignment_scores_cache", None)
+        if cached is not None:
+            return cached
+        x = self.x
+        x_norms = np.maximum(np.linalg.norm(x, axis=1, keepdims=True), 1e-12)
+        out = ((x / x_norms) @ self.gradient).ravel()
+        out.setflags(write=False)
+        self._alignment_scores_cache = out
+        return out
+
     # -------- lazy / param views --------------------------------------
     @property
     def words(self) -> WordsView:
@@ -741,17 +894,32 @@ class ContinuousResult(Result):
         return view
 
     def _compute_words_rows(self) -> list[Word]:
+        """Build the raw Word row list using filtered nearest-neighbor lookup.
+
+        ``cos_beta`` is the signed cosine with ``+gradient``. Words whose
+        cosine sign disagrees with the side are dropped so the invariant
+        (pos ⇒ cos_beta ≥ 0, neg ⇒ cos_beta ≤ 0) always holds, even on
+        tiny vocabularies where the raw neighbor list spans both poles.
+        """
         from ssdiff.utils.neighbors import filtered_neighbors
         out: list[Word] = []
-        for side, vec in [("pos", self.beta_unit), ("neg", -self.beta_unit)]:
-            for rank, (word, cos) in enumerate(
-                filtered_neighbors(self.embeddings, vec, topn=100, lang=self.lang), 1
+        for side, vec, sign in [("pos", self.gradient, 1.0),
+                                ("neg", -self.gradient, -1.0)]:
+            rank = 0
+            for word, cos in filtered_neighbors(
+                self.embeddings, vec, topn=100, lang=self.lang,
             ):
+                signed_cos = float(cos) * sign
+                if (side == "pos" and signed_cos < 0) or \
+                   (side == "neg" and signed_cos > 0):
+                    continue
+                rank += 1
                 out.append(Word(side=side, rank=rank, word=word,
-                                cos_beta=float(cos), contrast=None))
+                                cos_beta=signed_cos, contrast=None))
         return out
 
     def _clusters_for(self, side: str, **params) -> SidedClustersView:
+        """Fetch or compute the cluster view for ``side`` with the given params (cached)."""
         defaults = {"topn": 100, "k": None, "k_min": 2, "k_max": 10,
                     "random_state": 2137, "min_cluster_size": 2}
         params = {**defaults, **params, "side": side}
@@ -768,9 +936,10 @@ class ContinuousResult(Result):
     def _compute_clusters_for_side(
         self, *, side, topn, k, k_min, k_max, random_state, min_cluster_size,
     ):
+        """Run the neighbor-clustering algorithm and return (cluster_rows, cluster_words_rows)."""
         from ssdiff.utils.neighbors import cluster_top_neighbors
         raw = cluster_top_neighbors(
-            self.embeddings, self.beta_unit, topn=topn, k=k,
+            self.embeddings, self.gradient, topn=topn, k=k,
             k_min=k_min, k_max=k_max, random_state=random_state,
             min_cluster_size=min_cluster_size, side=side, lang=self.lang,
         )
@@ -799,6 +968,7 @@ class ContinuousResult(Result):
         return self._snippets_for(top_per_side=30)
 
     def _snippets_for(self, **params) -> SnippetsView:
+        """Fetch or compute the snippets view with the given params (cached)."""
         defaults = {"top_per_side": 30}
         params = {**defaults, **params}
 
@@ -812,6 +982,7 @@ class ContinuousResult(Result):
         return self._cache_get("snippets", params, _compute)
 
     def _compute_snippets_rows(self, **params) -> list[Snippet]:
+        """Extract snippet rows from the corpus and enrich with cluster IDs."""
         from ssdiff.utils.snippets import snippets_along_beta
 
         out = snippets_along_beta(
@@ -861,6 +1032,7 @@ class ContinuousResult(Result):
         return rows
 
     def _current_snippets_rows(self):
+        """Return flattened snippet rows from the cache, or None if not yet computed."""
         for (name, _), view in self._cache.items():
             if name == "snippets":
                 return list(view)
@@ -870,6 +1042,7 @@ class ContinuousResult(Result):
         "stats", "fit_info", "words", "clusters", "snippets", "docs", "test",
         "report()", "test(...)", "attach(...)",
     )
+    _arrays = ("x", "y", "beta", "gradient", "alignment_scores")
 
     def _summary(self) -> str:
         s = self.stats
@@ -900,6 +1073,31 @@ class ContinuousResult(Result):
                snippets_per_cluster: int | None = None,
                extreme_docs: int | None = None,
                misdiagnosed: int | None = None) -> Report:
+        """Build a multi-section narrative Report for this result.
+
+        Parameters
+        ----------
+        top_words : int or None
+            Number of words to include per β pole in the words section.
+            ``None`` skips the words section.
+        clusters : int or None
+            ``topn`` value passed to the cluster extractor; controls how many
+            neighbors are clustered per side.  ``None`` skips clusters.
+        snippets_per_cluster : int or None
+            Currently unused — reserved for a future per-cluster snippet table.
+        extreme_docs : int or None
+            Number of most-aligned (pos) and least-aligned (neg) documents to
+            include.  ``None`` skips the extreme-docs section.
+        misdiagnosed : int or None
+            Number of over-predicted and under-predicted documents to include.
+            ``None`` skips the misdiagnosed section.
+
+        Returns
+        -------
+        Report
+            A ``Report`` object that can be rendered with ``.to_text()``,
+            ``.to_html()``, or saved with ``.save('report.md')``.
+        """
         sections = []
         s = self.stats
         stat_rows = [
@@ -977,8 +1175,40 @@ class ContinuousResult(Result):
 
 # ---------- PLSResult ----------
 class PLSResult(ContinuousResult):
+    """PLS1 result.
+
+    Attributes
+    ----------
+    n_components : int
+        Number of PLS latent components fit.
+    component_scores : ndarray of shape (n, A)
+        PLS1 X-scores T — per-document projection onto each of the A
+        latent components.
+    component_weights : ndarray of shape (D, A)
+        PLS1 X-weights W in embedding space (unit-normed).
+    cv_result : PLSCVResult | None
+    cv_scores : dict | None
+    perm_null : ndarray | None
+    """
+
+    _arrays = (
+        "x", "y", "beta", "gradient", "alignment_scores",
+        "component_scores", "component_weights",
+    )
+
     def __init__(self, *, test_name: str | None = None,
                  test_info: dict | None = None, **kw):
+        """Construct a PLS result, pulling extra PLS diagnostics from ``raw_diagnostics``.
+
+        Parameters
+        ----------
+        test_name : str or None
+            Name of the initial test (if one was run at fit time).
+        test_info : dict or None
+            Info dict from the initial test run (must contain ``"pvalue"``).
+        **kw
+            All remaining arguments forwarded to ``ContinuousResult.__init__``.
+        """
         kw.setdefault("backend", "PLS")
         super().__init__(**kw)
         self.test = PLSTestView(
@@ -988,15 +1218,57 @@ class PLSResult(ContinuousResult):
         self.cv_result = raw.get("cv_result")
         self.cv_scores = raw.get("cv_scores")
         self.perm_null = raw.get("perm_null")
+        self.n_components = int(self.fit_info.n_components or 0)
+        self.component_scores = raw.get("component_scores")
+        self.component_weights = raw.get("component_weights")
 
 
 # ---------- PCAOLSResult ----------
 class PCAOLSResult(ContinuousResult):
+    """PCA + OLS result.
+
+    Attributes
+    ----------
+    sweep_result : PCAKSelectionResult | None
+        Full PCA sweep diagnostics. The **PCA sweep** procedure selects K
+        by joint interpretability+stability score (see Plisiecki, Leniarska
+        et al., 2026). ``None`` when ``fit_ols(fixed_k=...)`` was used.
+    pca_k : int
+        Number of PCA components used.
+    pca_components : ndarray of shape (K, D)
+        PCA loadings V_K — the first K principal directions of the
+        standardized PCV matrix.
+    pca_weights : ndarray of shape (K,)
+        OLS regression weights w_K estimated in PCA space;
+        ``β = V_K w_K / x_scale``.
+    """
+
     _stats_view_cls = OLSStatsView
+    _access = (
+        "stats", "fit_info", "words", "clusters", "snippets", "docs", "sweep",
+        "test", "report()", "test(...)", "attach(...)",
+    )
+    _arrays = (
+        "x", "y", "beta", "gradient", "alignment_scores",
+        "pca_components", "pca_weights",
+    )
 
     def __init__(self, *, sweep: list | None = None,
                  test_name: str | None = None,
                  test_info: dict | None = None, **kw):
+        """Construct a PCA+OLS result, pulling sweep data and PCA components from diagnostics.
+
+        Parameters
+        ----------
+        sweep : list of (k, r2, r2_adj, pvalue) tuples or None
+            Per-K sweep table used to populate the ``.sweep`` SweepView.
+        test_name : str or None
+            Name of the initial test; defaults to ``"f_test"``.
+        test_info : dict or None
+            Info dict from the initial test run (must contain ``"pvalue"``).
+        **kw
+            All remaining arguments forwarded to ``ContinuousResult.__init__``.
+        """
         kw.setdefault("backend", "PCA+OLS")
         super().__init__(**kw)
         self.sweep = SweepView(
@@ -1004,6 +1276,9 @@ class PCAOLSResult(ContinuousResult):
              for (k, r2, r2_adj, p) in (sweep or [])]
         )
         self.sweep_result = self._raw_diagnostics.get("sweep_result")
+        self.pca_k = int(self.fit_info.n_components or 0)
+        self.pca_components = self._raw_diagnostics.get("pca_components")
+        self.pca_weights = self._raw_diagnostics.get("pca_weights")
         # Default test = F-test; pvalue is whatever came from fit.
         default_info = test_info or {"pvalue": kw.get("pvalue")}
         self.test = PCAOLSTestView(

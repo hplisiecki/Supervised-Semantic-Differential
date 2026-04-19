@@ -16,7 +16,7 @@ class Embeddings:
     """Stores word vectors and provides lookup / nearest-neighbor search.
 
     >>> emb = Embeddings.load("model.ssdembed")
-    >>> emb.normalize(l2=True, abtt_m=1)
+    >>> emb.normalize(l2=True, abtt=1)
     >>> emb.save("model_norm")          # saves model_norm.ssdembed
     >>> emb.save(fmt="kv")              # saves model.kv  (needs gensim)
     """
@@ -43,10 +43,17 @@ class Embeddings:
         self._normed_vectors: np.ndarray | None = None
         self._is_unit_normed: bool = False
         self.l2_normalized: bool = False
-        self.abtt_m: int = 0
+        self.abtt: int = 0
         self._source_path: str | None = None
 
     def __getstate__(self) -> dict:
+        """Return pickle state, omitting large recomputable attributes.
+
+        Drops ``key_to_index`` (rebuilt from ``index_to_key`` on load),
+        ``_normed_vectors``, and ``_norms`` to keep the pickle small and
+        allow memory-mapped loading of the vector matrix from a sidecar
+        ``.vectors.npy`` file.
+        """
         state = self.__dict__.copy()
         # key_to_index is rebuilt from index_to_key on load — skip it to
         # avoid pickling a ~200 MB dict for large vocabularies.
@@ -56,14 +63,23 @@ class Embeddings:
         return state
 
     def __setstate__(self, state: dict) -> None:
+        """Restore from pickle state, migrating legacy attribute names.
+
+        Handles two legacy renames introduced before v1.0:
+        ``_l2_normalized`` → ``l2_normalized``, ``_abtt_m`` / ``abtt_m``
+        → ``abtt``.  Also re-initialises ``key_to_index`` and cache
+        attributes if they are absent (e.g. loaded from an older pickle).
+        """
+        # Migrate legacy attribute names:
+        #   pre-1.0: _l2_normalized, _abtt_m  (private, leading underscore)
+        #   1.0:     abtt_m                    (renamed to .abtt for v1.x)
+        if "_l2_normalized" in state and "l2_normalized" not in state:
+            state["l2_normalized"] = state.pop("_l2_normalized")
+        if "_abtt_m" in state and "abtt_m" not in state and "abtt" not in state:
+            state["abtt_m"] = state.pop("_abtt_m")
+        if "abtt_m" in state and "abtt" not in state:
+            state["abtt"] = state.pop("abtt_m")
         self.__dict__.update(state)
-        # Migrate old private attribute names from pre-1.0 pickles
-        if hasattr(self, "_l2_normalized") and not hasattr(self, "l2_normalized"):
-            self.l2_normalized = self._l2_normalized
-            del self._l2_normalized
-        if hasattr(self, "_abtt_m") and not hasattr(self, "abtt_m"):
-            self.abtt_m = self._abtt_m
-            del self._abtt_m
         if not hasattr(self, "key_to_index"):
             self.key_to_index = {w: i for i, w in enumerate(self.index_to_key)}
         if not hasattr(self, "_normed_vectors"):
@@ -104,16 +120,17 @@ class Embeddings:
 
     # ---- normalization ----
 
-    def normalize(self, *, l2: bool = True, abtt_m: int = 1, re_normalize: bool = True) -> Embeddings:
+    def normalize(self, *, l2: bool = True, abtt: int = 1, re_normalize: bool = True) -> Embeddings:
         """Normalize embeddings in-place. Returns self for chaining.
 
         Parameters
         ----------
         l2 : L2-normalize rows. Skipped if already applied.
-        abtt_m : Target number of top principal components to remove (ABTT).
-            Absolute: if ABTT was already applied with a smaller m, only the
-            remaining components are removed.  Equal m is a no-op.  Smaller m
-            than already applied raises ValueError (ABTT is irreversible).
+        abtt : Target number of top principal components to remove (ABTT).
+            Absolute: if ABTT was already applied with a smaller value, only
+            the remaining components are removed.  Equal value is a no-op.
+            Smaller value than already applied raises ValueError (ABTT is
+            irreversible).
         re_normalize : L2-normalize again after ABTT.
         """
         V = self.vectors
@@ -130,19 +147,19 @@ class Embeddings:
 
         # --- ABTT ---
         did_abtt = False
-        if abtt_m > 0:
-            if abtt_m < self.abtt_m:
+        if abtt > 0:
+            if abtt < self.abtt:
                 raise ValueError(
-                    f"Cannot reduce ABTT from {self.abtt_m} to {abtt_m}. "
+                    f"Cannot reduce ABTT from {self.abtt} to {abtt}. "
                     "ABTT is irreversible — reload the original embeddings."
                 )
-            if abtt_m == self.abtt_m:
+            if abtt == self.abtt:
                 warnings.warn(
-                    f"ABTT with m={abtt_m} already applied. Skipping.",
+                    f"ABTT with m={abtt} already applied. Skipping.",
                     stacklevel=2,
                 )
             else:
-                delta = abtt_m - self.abtt_m
+                delta = abtt - self.abtt
                 V -= V.mean(axis=0)
                 gram = V.T @ V
                 eigvals, eigvecs = np.linalg.eigh(gram)
@@ -156,7 +173,7 @@ class Embeddings:
                     for s in range(0, len(V), _CHUNK):
                         e = min(s + _CHUNK, len(V))
                         V[s:e] -= c[s:e, None] * top[j]
-                self.abtt_m = abtt_m
+                self.abtt = abtt
                 did_abtt = True
 
         # --- Re-normalize after ABTT ---
@@ -191,6 +208,13 @@ class Embeddings:
 
     @property
     def norms(self) -> np.ndarray:
+        """Per-row L2 norms, computed lazily and cached.
+
+        Returns
+        -------
+        numpy.ndarray, shape (n_words,)
+            Float32 array of L2 norms for each word vector.
+        """
         if self._norms is None:
             self.fill_norms()
         return self._norms  # type: ignore[return-value]
@@ -205,7 +229,7 @@ class Embeddings:
             ``self.vectors`` **in place** on first call to avoid duplicating
             a potentially multi-GB matrix in RAM.  After this call the
             instance is in the same state as if :meth:`normalize` had been
-            invoked with ``l2=True, abtt_m=0``.
+            invoked with ``l2=True, abtt=0``.
         """
         if self._is_unit_normed:
             return self.vectors
@@ -242,7 +266,21 @@ class Embeddings:
         return self.vectors[self.key_to_index[word]]
 
     def __repr__(self) -> str:
-        return f"Embeddings({len(self)} words, {self.vector_size}d)"
+        header = (
+            f"Embeddings  V={len(self):,}  D={self.vector_size}  "
+            f"l2={self.l2_normalized}  abtt={self.abtt}"
+        )
+        arrays = "  arrays:  .vectors  .index_to_key"
+        methods = (
+            "  methods: .load(...)  .save(...)  .normalize(...)  "
+            ".similar_by_vector(...)  .get_vector(...)"
+        )
+        return "\n".join([header, arrays, methods])
+
+    def _repr_html_(self) -> str:
+        """Render a plain-text repr inside a ``<pre>`` block for Jupyter."""
+        import html as _html
+        return f"<pre>{_html.escape(repr(self))}</pre>"
 
     def get_vector(self, word: str, norm: bool = False) -> np.ndarray:
         """Return the vector for a word.
@@ -300,7 +338,7 @@ class Embeddings:
         """
         if fmt not in self._FORMATS:
             raise ValueError(f"Unknown format {fmt!r}; choose from {sorted(self._FORMATS)}")
-        if fmt != "ssdembed" and (self.l2_normalized or self.abtt_m > 0):
+        if fmt != "ssdembed" and (self.l2_normalized or self.abtt > 0):
             warnings.warn(
                 f"Saving as .{fmt} — normalization and ABTT metadata will be lost. "
                 "Use .ssdembed format to preserve processing history.",
@@ -321,6 +359,7 @@ class Embeddings:
             self._save_pickle(path)
 
     def _save_kv(self, path: str) -> None:
+        """Write embeddings to gensim ``KeyedVectors`` pickle format."""
         try:
             from gensim.models import KeyedVectors
         except ImportError:
@@ -333,6 +372,14 @@ class Embeddings:
         kv.save(path)
 
     def _save_pickle(self, path: str) -> None:
+        """Write embeddings to ``.ssdembed`` pickle + ``.vectors.npy`` sidecar.
+
+        The sidecar keeps the pickle small and allows memory-mapped loading.
+        """
+        # Vectors live in a sidecar .vectors.npy so the pickle stays small
+        # and loads mmap-friendly.  We temporarily swap self.vectors for an
+        # empty placeholder, pickle, then restore — avoids copying a multi-GB
+        # array just to exclude it from the dump.
         npy_path = path + ".vectors.npy"
         np.save(npy_path, self.vectors)
         saved_vectors = self.vectors
@@ -351,6 +398,7 @@ class Embeddings:
             self._normed_vectors = None
 
     def _save_binary(self, path: str) -> None:
+        """Write embeddings to word2vec binary format (.bin)."""
         with open(path, "wb") as f:
             header = f"{len(self.index_to_key)} {self.vector_size}\n"
             f.write(header.encode("utf-8"))
@@ -361,6 +409,7 @@ class Embeddings:
                 f.write(b"\n")
 
     def _save_text(self, path: str) -> None:
+        """Write embeddings to word2vec text format (.txt/.vec)."""
         with open(path, "w", encoding="utf-8") as f:
             f.write(f"{len(self.index_to_key)} {self.vector_size}\n")
             for i, word in enumerate(self.index_to_key):
@@ -478,7 +527,13 @@ def _parse_into_shared(args: tuple) -> list[str]:
 
 
 def _load_text(path: str, binary: bool = False, verbose: bool = False, parallel: bool = False) -> Embeddings:
-    """Load word2vec text or binary format."""
+    """Load word2vec text or binary format.
+
+    Dispatches to :func:`_load_word2vec_binary` when *binary* is True.
+    For text files, uses a parallel multi-process path (two-pass: count
+    then parse into shared memory) when ``parallel=True`` and the file is
+    not gzip-compressed.  Falls back to a simple serial reader otherwise.
+    """
     if binary:
         return _load_word2vec_binary(path, is_gz=path.lower().endswith(".gz"), verbose=verbose)
 
@@ -612,7 +667,12 @@ def _load_word2vec_binary(path: str, is_gz: bool = False, verbose: bool = False)
 
 
 class _GensimUnpickler(pickle.Unpickler):
-    """Intercept gensim classes during unpickling."""
+    """Custom unpickler that intercepts gensim class lookups.
+
+    Redirects ``KeyedVectors`` / ``Word2VecKeyedVectors`` and any other
+    gensim class to :class:`_GensimKVShim` so that ``.kv`` files created
+    by gensim can be loaded without gensim installed.
+    """
 
     def find_class(self, module: str, name: str) -> type:
         if "KeyedVectors" in name or "Word2VecKeyedVectors" in name:
@@ -626,7 +686,13 @@ class _GensimUnpickler(pickle.Unpickler):
 
 
 class _GensimKVShim:
-    """Temporary shim for gensim pickle state → Embeddings conversion."""
+    """Temporary shim that absorbs a gensim pickle state and converts it.
+
+    Accepts any gensim ``KeyedVectors`` state dict via ``__setstate__``
+    and normalises legacy attribute names (``index2word``, ``syn0``) so
+    that :meth:`to_embeddings` can always produce a valid
+    :class:`Embeddings` instance.
+    """
 
     def __init__(self, *args, **kwargs):
         pass
@@ -676,13 +742,6 @@ def _load_pickle(path: str) -> Embeddings:
             shim.vector_size = shim.vectors.shape[1]
             shim._norms = None
             shim._normed_vectors = None
-        # Migrate old private attribute name from pre-1.0 pickles
-        if hasattr(shim, "_l2_normalized") and not hasattr(shim, "l2_normalized"):
-            shim.l2_normalized = shim._l2_normalized
-            del shim._l2_normalized
-        if not hasattr(shim, "abtt_m") and hasattr(shim, "_abtt_m"):
-            shim.abtt_m = shim._abtt_m
-            del shim._abtt_m
         return shim
 
     # Duck-type: object from another package (e.g. ssdiff.embeddings.Embeddings)
@@ -696,7 +755,13 @@ def _load_pickle(path: str) -> Embeddings:
 
 
 def _load_embeddings(path: str, *, verbose: bool = False, parallel: bool = False) -> Embeddings:
-    """Load pre-trained word embeddings from file (auto-detect format)."""
+    """Load pre-trained word embeddings from file, auto-detecting format by extension.
+
+    Dispatches to :func:`_load_pickle` for ``.ssdembed``/``.kv`` files,
+    :func:`_load_text` for ``.bin`` (binary word2vec) and ``.txt``/``.vec``
+    (text word2vec), applying gzip decompression transparently for ``.gz``
+    variants.
+    """
     low = path.lower()
     ext = os.path.splitext(low)[1]
 

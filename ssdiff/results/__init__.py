@@ -1,13 +1,23 @@
-"""Public exports of the results package."""
+"""Public API of the ``ssdiff.results`` package.
 
+Re-exports the result classes (``PLSResult``, ``PCAOLSResult``,
+``GroupResult``, ``LexiconResult``), their shared base ``Result``,
+the ``PairView`` contrast view, and the ``set_repr_hints`` display toggle.
+"""
+
+from ssdiff.results.continuous_result import ContinuousResult, PCAOLSResult, PLSResult
 from ssdiff.results.core import Result
 from ssdiff.results.display import set_repr_hints
 from ssdiff.results.group_result import GroupResult, PairView
 from ssdiff.results.lexicon_result import LexiconResult
-from ssdiff.results.continuous_result import ContinuousResult, PCAOLSResult, PLSResult
 
 __all__ = [
-    "Result", "ContinuousResult", "PLSResult", "PCAOLSResult",
-    "GroupResult", "PairView", "LexiconResult",
+    "ContinuousResult",
+    "GroupResult",
+    "LexiconResult",
+    "PCAOLSResult",
+    "PLSResult",
+    "PairView",
+    "Result",
     "set_repr_hints",
 ]

@@ -104,11 +104,10 @@ def pls1_cv_select(
     *,
     n_folds: int = 10,
     seed: int | None = None,
-    use_1se_rule: bool = True,
     verbose: bool = False,
     pca_k: int | None = None,
 ) -> PLSCVResult:
-    """K-fold CV to select optimal n_components for PLS1.
+    """K-fold CV to select optimal n_components for PLS1 by argmax CV R².
 
     Parameters
     ----------
@@ -122,9 +121,6 @@ def pls1_cv_select(
         Number of CV folds.
     seed : int or None
         Random seed for fold assignment.
-    use_1se_rule : bool, default True
-        If True, select the smallest k within 1 SE of the best
-        (parsimonious model selection).
     verbose : bool, default False
         If True, print a diagnostic summary of the selected component.
     pca_k : int or None, default None
@@ -198,11 +194,6 @@ def pls1_cv_select(
     valid = {k: v for k, v in cv_scores.items() if np.isfinite(v)}
     if not valid:
         best_k, best_r2 = 1, float("nan")
-    elif use_1se_rule:
-        k_star = max(valid, key=valid.get)
-        threshold = valid[k_star] - cv_scores_se.get(k_star, 0.0)
-        best_k = min(k for k, v in valid.items() if v >= threshold)
-        best_r2 = valid[best_k]
     else:
         best_k = max(valid, key=valid.get)
         best_r2 = valid[best_k]
@@ -315,8 +306,8 @@ def pls1_permutation_test(
 
     p_perm = float((np.sum(cv_r2_null >= cv_r2_obs) + 1) / (n_perm + 1))
 
-    from ssdiff.utils import _diagnostic
     from ssdiff.results.format import fmt_p
+    from ssdiff.utils import _diagnostic
     _diagnostic(verbose, f"[perm] p={fmt_p(p_perm)} (observed CV R²={cv_r2_obs:.4f}, {n_perm} perms)")
 
     return p_perm, cv_r2_obs, cv_r2_null
@@ -439,8 +430,8 @@ def pls1_split_test(
 
     mean_r = float(np.tanh(z_mean))
 
-    from ssdiff.utils import _diagnostic
     from ssdiff.results.format import fmt_p
+    from ssdiff.utils import _diagnostic
     _diagnostic(verbose, f"[split] p={fmt_p(p_split)}, mean r={mean_r:.4f} ({n_splits} splits)")
 
     return p_split, mean_r
@@ -518,8 +509,8 @@ def pls1_split_test_calibrated(
     # Phipson & Smyth (2010)
     p_cal = float((exceedances + 1) / (m + 1))
 
-    from ssdiff.utils import _diagnostic
     from ssdiff.results.format import fmt_p
+    from ssdiff.utils import _diagnostic
     _diagnostic(verbose, f"[split_cal] p={fmt_p(p_cal)}, mean r={mean_r_obs:.4f} ({m}/{n_perm} perms)")
 
     return p_cal, mean_r_obs

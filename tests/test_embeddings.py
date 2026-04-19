@@ -34,8 +34,13 @@ class TestEmbeddingsConstruction:
 
     def test_repr(self, tiny_kv):
         r = repr(tiny_kv)
-        assert "20" in r
-        assert "8" in r
+        assert r.startswith("Embeddings")
+        assert "V=20" in r
+        assert "D=8" in r
+        assert "l2=" in r
+        assert "abtt=" in r
+        assert ".vectors" in r and ".index_to_key" in r
+        assert ".normalize(...)" in r
 
 
 class TestEmbeddingsNormalize:
@@ -46,7 +51,7 @@ class TestEmbeddingsNormalize:
         # Verify norms are NOT 1.0 before normalizing
         norms_before = np.linalg.norm(emb.vectors, axis=1)
         assert not np.allclose(norms_before, 1.0, atol=1e-5), "Pre-normalization norms should not all be 1.0"
-        result = emb.normalize(l2=True, abtt_m=0)
+        result = emb.normalize(l2=True, abtt=0)
         assert result is emb  # in-place, returns self
         norms_after = np.linalg.norm(emb.vectors, axis=1)
         for i in range(3):
@@ -59,7 +64,7 @@ class TestEmbeddingsNormalize:
         keys = [f"w{i}" for i in range(100)]
         vecs = rng.normal(size=(100, 10)).astype(np.float32)
         emb = Embeddings(keys, vecs)
-        emb.normalize(l2=True, abtt_m=1, re_normalize=True)
+        emb.normalize(l2=True, abtt=1, re_normalize=True)
         # After ABTT, top PC should have lower variance
         centered = emb.vectors - emb.vectors.mean(axis=0)
         _, S, _ = np.linalg.svd(centered, full_matrices=False)

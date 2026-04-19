@@ -45,14 +45,14 @@ class TestFitGroups2Groups:
         assert result.correction == "holm"
 
     def test_no_mutation(self, tiny_kv, large_docs, large_groups_2, lexicon):
-        """fit_groups must not mutate self.x or self.y_kept."""
+        """fit_groups must not mutate self.x or self.y."""
         corpus = Corpus(large_docs, pretokenized=True, lang="pl")
         ssd = SSD(tiny_kv, corpus, large_groups_2, lexicon)
         x_before = ssd.x.copy()
-        y_before = ssd.y_kept.copy()
+        y_before = ssd.y.copy()
         ssd.fit_groups(n_perm=50)
         np.testing.assert_array_equal(ssd.x, x_before)
-        np.testing.assert_array_equal(ssd.y_kept, y_before)
+        np.testing.assert_array_equal(ssd.y, y_before)
 
     def test_repr(self, result):
         r = repr(result)
@@ -285,7 +285,7 @@ class TestSSDReuseFitGroups:
         """Same SSD can fit PLS first and then groups."""
         corpus = Corpus(large_docs, pretokenized=True, lang="pl")
         ssd = SSD(tiny_kv, corpus, large_y, lexicon)
-        pls = ssd.fit_pls(n_components=2, p_method=None)
+        ssd.fit_pls(n_components=2, p_method=None)
         gr = ssd.fit_groups(median_split=True, n_perm=50)
         assert isinstance(gr, GroupResult)
 
@@ -293,7 +293,113 @@ class TestSSDReuseFitGroups:
         """Same SSD can fit PLS and then OLS."""
         corpus = Corpus(large_docs, pretokenized=True, lang="pl")
         ssd = SSD(tiny_kv, corpus, large_y, lexicon)
-        pls = ssd.fit_pls(n_components=2, p_method=None)
+        ssd.fit_pls(n_components=2, p_method=None)
         from ssdiff.results import PCAOLSResult
         ols = ssd.fit_ols(fixed_k=3)
         assert isinstance(ols, PCAOLSResult)
+
+
+class TestMedianSplitTieHandling:
+    """median_split equalizes groups when there are ties at the median."""
+
+    def test_ties_equalize_group_sizes(self):
+        # 10 items, 4 below, 4 tied at median, 2 above → tie loop must
+        # assign all 4 tied to "low" so sizes come out 8/2 vs. without the
+        # loop they would land at 4/6.
+        import numpy as np
+
+        from ssdiff.backends.group import median_split
+        y = np.array([0.0]*4 + [5.0]*4 + [10.0]*2)
+        labels = median_split(y, random_state=42)
+        n_low = int((labels == "low").sum())
+        n_high = int((labels == "high").sum())
+        assert n_low + n_high == len(y)
+        # target = n // 2 = 5; n_below = 4; need 1 tied → low, 3 → high.
+        assert n_low == 5
+        assert n_high == 5
+
+    def test_ties_are_deterministic_with_seed(self):
+        import numpy as np
+
+        from ssdiff.backends.group import median_split
+        y = np.array([0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 2.0, 2.0])
+        labels_a = median_split(y, random_state=123)
+        labels_b = median_split(y, random_state=123)
+        np.testing.assert_array_equal(labels_a, labels_b)
+
+    def test_all_tied_below_split_path(self):
+        """When no values are strictly below median, all `low` slots come from ties."""
+        import numpy as np
+
+        from ssdiff.backends.group import median_split
+        # Median = 1.0; y < 1.0 is empty; all ties.
+        y = np.array([1.0, 1.0, 1.0, 1.0, 2.0, 2.0])
+        labels = median_split(y, random_state=0)
+        assert (labels == "low").sum() == 3
+        assert (labels == "high").sum() == 3
+
+
+class TestHolmStrictInflation:
+    """Holm correction must strictly inflate (not equal) raw p-values for
+    multiple tests when p_raw values differ across pairs."""
+
+    def test_holm_strictly_inflates_at_least_one(
+        self, tiny_kv, large_docs_3x20, large_groups_3x20, lexicon,
+    ):
+        from ssdiff.corpus import Corpus
+        from ssdiff.ssd import SSD
+        corpus = Corpus(large_docs_3x20, pretokenized=True, lang="pl")
+        ssd = SSD(tiny_kv, corpus, large_groups_3x20, lexicon)
+        r = ssd.fit_groups(n_perm=200, correction="holm", random_state=42)
+        raws = [p.p_raw for p in r.pairs]
+        corrs = [p.p_corrected for p in r.pairs]
+        # With 3 pairs and holm, at least one corrected value must be
+        # strictly greater than raw (the largest raw receives ×1 multiplier
+        # and can equal, but the smaller ones get ×m, ×(m-1)).
+        strict_gains = [c > rv + 1e-12 for c, rv in zip(corrs, raws)]
+        assert any(strict_gains), f"Holm produced no inflation: raws={raws}, corrs={corrs}"
+
+
+class TestPairViewContrastFiltering:
+    """PairView.words and .snippets must filter flat rows by contrast."""
+
+    def test_pairview_words_filtered_to_this_contrast(
+        self, tiny_kv, large_docs_3x20, large_groups_3x20, lexicon,
+    ):
+        from ssdiff.corpus import Corpus
+        from ssdiff.ssd import SSD
+        corpus = Corpus(large_docs_3x20, pretokenized=True, lang="pl")
+        ssd = SSD(tiny_kv, corpus, large_groups_3x20, lexicon)
+        r = ssd.fit_groups(n_perm=50, random_state=42)
+        # Each pairview's words (if any rows exist) must all carry this pair's contrast string.
+        # If no words_rows were computed, the view is empty — still a valid invariant.
+        for p in r.pairs:
+            pv = r.pairs[p.g1, p.g2]
+            words = list(pv.words)
+            canonical = p.contrast
+            for w in words:
+                assert w.contrast == canonical, (
+                    f"Word contrast {w.contrast!r} leaked into PairView for {canonical!r}"
+                )
+
+    def test_reversed_pairview_flips_word_sides(
+        self, tiny_kv, large_docs_3x20, large_groups_3x20, lexicon,
+    ):
+        """Reverse-order access swaps pos/neg word sides without losing rows."""
+        from ssdiff.corpus import Corpus
+        from ssdiff.ssd import SSD
+        corpus = Corpus(large_docs_3x20, pretokenized=True, lang="pl")
+        ssd = SSD(tiny_kv, corpus, large_groups_3x20, lexicon)
+        r = ssd.fit_groups(n_perm=50, random_state=42)
+        p = list(r.pairs)[0]
+        forward = list(r.pairs[p.g1, p.g2].words)
+        reverse = list(r.pairs[p.g2, p.g1].words)
+        assert len(forward) == len(reverse)
+        if forward:
+            # same words, side labels inverted, cos_beta flipped
+            forward_by_word = {w.word: w for w in forward}
+            for rw in reverse:
+                fw = forward_by_word[rw.word]
+                expected_side = "neg" if fw.side == "pos" else "pos"
+                assert rw.side == expected_side
+                assert rw.cos_beta == pytest.approx(-fw.cos_beta, abs=1e-12)

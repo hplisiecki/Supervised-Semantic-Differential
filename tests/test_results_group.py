@@ -1,6 +1,5 @@
 """GroupResult + PairView contract."""
 
-import numpy as np
 import pytest
 
 from ssdiff.results.group_result import GroupResult, PairView

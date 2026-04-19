@@ -106,6 +106,7 @@ def _z(v: Iterable) -> np.ndarray:
 
 
 def _validate_var_type(var_type: str) -> None:
+    """Raise ValueError if *var_type* is not 'continuous' or 'categorical'."""
     if var_type not in ("continuous", "categorical"):
         raise ValueError(
             f"var_type must be 'continuous' or 'categorical', got {var_type!r}"

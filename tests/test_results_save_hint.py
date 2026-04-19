@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import ssdiff
-from ssdiff.results.schema import Word
 from ssdiff.results.continuous_result import WordsView
+from ssdiff.results.schema import Word
 
 
 def _words(n: int = 3) -> list[Word]:
@@ -74,8 +74,8 @@ def test_scalar_view_to_text_kv_layout():
     ))
     text = sv.to_text()
     lines = text.splitlines()
-    assert any(l.startswith("backend") for l in lines)
-    backend_line = next(l for l in lines if l.startswith("backend"))
+    assert any(line.startswith("backend") for line in lines)
+    backend_line = next(line for line in lines if line.startswith("backend"))
     assert "PLS" in backend_line
 
 
@@ -227,6 +227,7 @@ def test_pairs_list_view_save_hint_includes_lookup_line():
 def _make_pls_result():
     """Build a PLSResult from synthetic arrays (no embeddings, no corpus)."""
     import numpy as np
+
     from ssdiff.results.continuous_result import PLSResult
     rng = np.random.default_rng(0)
     n, d = 30, 4
@@ -237,7 +238,7 @@ def _make_pls_result():
     return PLSResult(
         x=x, beta=beta, keep_mask=keep_mask,
         n_raw=n, n_kept=n, n_dropped=0,
-        y_kept=y, _y_mean=np.array([y.mean()]),
+        y=y, _y_mean=np.array([y.mean()]),
         _y_scale=np.array([y.std() or 1.0]),
         r2=0.30, r2_adj=0.29, pvalue=4.83e-08,
         test_name="split", test_info={"pvalue": 4.83e-08, "split_r2": 0.33,
@@ -287,7 +288,6 @@ def test_pls_result_access_hint_shows_views_and_methods():
 
 
 def _make_group_result():
-    import numpy as np
     from ssdiff.results.group_result import GroupResult
     from ssdiff.results.schema import Pair
     return GroupResult(

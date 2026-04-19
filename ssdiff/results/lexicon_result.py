@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
-from typing import Iterator
+from collections.abc import Iterator
 
 from ssdiff.results.core import Result, ScalarView, View
 from ssdiff.results.format import fmt_count, fmt_d, fmt_p, fmt_pct, fmt_r
 from ssdiff.results.report import Report, Section
 from ssdiff.results.schema import Suggestion, Summary
 
-
 # ---------- LexiconStatsView (ScalarView) ----------
 
 class LexiconStatsView(ScalarView):
+    """ScalarView exposing basic dataset metadata for a LexiconResult."""
+
     _name = "stats"
     _columns = ("var_type", "n_docs", "n_tokens")
 
@@ -33,6 +34,8 @@ class LexiconStatsView(ScalarView):
 # ---------- SummaryView (ScalarView) ----------
 
 class SummaryView(ScalarView):
+    """ScalarView exposing aggregate coverage statistics from ``evaluate_lexicon``."""
+
     _name = "summary"
     _columns = (
         "docs_any", "cov_all", "q1", "q4", "corr_any",
@@ -51,6 +54,8 @@ class SummaryView(ScalarView):
 # ---------- SuggestionsView ----------
 
 class SuggestionsView(View[Suggestion]):
+    """Tabular view of candidate lexicon tokens sorted by the combined ranking score."""
+
     _name = "suggestions"
     _columns = ("token", "freq", "cov_all", "cov_bal", "corr", "pvalue", "direction", "rank")
 
@@ -137,6 +142,19 @@ class LexiconResult(Result):
     # -------- report ------------------------------------------------------
 
     def report(self, top: int = 20) -> Report:
+        """Build a narrative Report for this lexicon result.
+
+        Parameters
+        ----------
+        top : int
+            Maximum number of suggestions to include in the table.
+
+        Returns
+        -------
+        Report
+            A ``Report`` with a stats section, a suggestions table, and (when
+            available) a coverage-summary section from ``evaluate_lexicon``.
+        """
         sections = []
 
         # Stats section
@@ -191,4 +209,5 @@ class LexiconResult(Result):
             title="LexiconResult",
             subtitle=f"(n_docs = {fmt_count(self.stats.n_docs)})",
             sections=sections,
+            cite=False,
         )

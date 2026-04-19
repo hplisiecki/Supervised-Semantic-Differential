@@ -70,6 +70,7 @@ markers = [
 [tool.ruff]
 target-version = "py310"
 line-length = 120
+extend-exclude = ["docs"]
 
 [tool.ruff.lint]
 select = [
@@ -88,6 +89,8 @@ ignore = [
   "B905",   # zip strict (3.10 compat)
   "UP007",  # X | Y union syntax in annotations (already used, but keep flexible)
   "RUF001", # ambiguous unicode — Polish text has special chars
+  "RUF002", # ambiguous unicode in docstrings — math notation (−, ×, –)
+  "RUF003", # ambiguous unicode in comments — math notation (−, ×, –)
   "RUF005", # collection-literal-concatenation (style preference)
   "RUF012", # mutable-class-default (dataclass fields)
   "RUF007", # zip-instead-of-pairwise (pairwise is 3.10+ only, zip is clearer here)

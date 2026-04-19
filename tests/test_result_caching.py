@@ -11,13 +11,11 @@ constructing a fresh ClustersIndex pointing at the right parent.
 
 from __future__ import annotations
 
-import copy
 import pickle
 
 import numpy as np
 import pytest
 
-from ssdiff.results import PLSResult, PCAOLSResult, GroupResult
 from ssdiff.results.continuous_result import ClustersIndex
 
 
@@ -190,7 +188,7 @@ class TestSnippetsCache:
         r = _make_fresh_pls(ssd_instance)
         r._cache = {}
         s30 = r.snippets               # top_per_side=30 default
-        s10 = r._snippets_for(top_per_side=10)
+        r._snippets_for(top_per_side=10)
         # Must be different views (different params → different entries)
         snip_keys = [k for k in r._cache if k[0] == "snippets"]
         assert len(snip_keys) == 2, f"Expected 2 snippet entries, got {snip_keys}"
@@ -247,7 +245,7 @@ class TestPickleRoundTrip:
 
         # Core arrays preserved
         np.testing.assert_array_equal(loaded.x, r.x)
-        np.testing.assert_array_equal(loaded.y_kept, r.y_kept)
+        np.testing.assert_array_equal(loaded.y, r.y)
         np.testing.assert_array_equal(loaded.beta, r.beta)
 
         # Cache preserved
