@@ -1,66 +1,68 @@
-"""Demo of ssdiff API.
+"""End-to-end demo of the ssdiff API (SSD + lexicon)."""
 
-    python demo_new_api.py
-    python demo_new_api.py --path /path/to/embeddings.ssdembed
-"""
-
-import argparse
 import csv
 import os
 import sys
+
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from ssdiff import Corpus, Embeddings, SSD
 
-from ssdiff import Embeddings, Corpus, SSD
+embeddings_path = "Models/glove_800_normalized.ssdembed"
+corpus_path = "Corpuses/Kalibra/kalibra_szczepienie.csv"
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--path", default="Models/glove_800_normalized.ssdembed")
-parser.add_argument("--corpus", default="Corpuses/Kalibra/kalibra_szczepienie.csv")
-args = parser.parse_args()
+emb = Embeddings.load(embeddings_path)
 
-# ── Load data ────────────────────────────────────────────────────
-emb = Embeddings.load(args.path)
-print(emb)
-
-with open(args.corpus, "r", encoding="utf-8-sig") as f:
+with open(corpus_path, "r", encoding="utf-8-sig") as f:
     rows = list(csv.DictReader(f))
-
 texts = [r["szczepienie_open"] for r in rows]
 scores = np.array([float(r["szczepienie_closed"]) for r in rows])
 lexicon = {"szczepienie", "szczepić", "szczepionka"}
 
 corpus = Corpus(texts, lang="pl")
-print(corpus)
-
-# ── Continuous SSD ───────────────────────────────────────────────
 ssd = SSD(emb, corpus, scores, lexicon)
-print(ssd)
 
-# PLS
+print("======= PLS =======")
 pls = ssd.fit_pls(verbose=True)
-print(pls)
-print()
-print(pls.summary())
-print()
-pls.report(top_words=10, clusters=50, extreme_docs=5, misdiagnosed=5)
-print()
-pls.split_test(n_splits=30)  # mutates in place
-print(f"split p={pls.pvalue:.4g}, mean_r={pls.split_mean_r:.4f}")
+pls.stats
+pls.words
+pls.clusters.pos
+pls.snippets(side="pos")
+pls.docs.pos(5)
 
-# ── Group (median split) ────────────────────────────────────────
+print("======= PLS: rerun split test =======")
+pls.test(n_splits=30)
+
+print("======= PLS report =======")
+pls.report(top_words=10, clusters=50)
+# pls.report(top_words=10, clusters=50).save("report_pls.md")
+
+print("======= Groups (median split) =======")
 gr = ssd.fit_groups(median_split=True, verbose=True)
-print(gr)
-print()
-print(gr.summary())
-print()
+gr.test
+gr.pairs
 gr.report(top_words=10, clusters=50)
+# gr.report(top_words=10, clusters=50).save("report_groups.md")
 
-# ── PCA+OLS sweep ───────────────────────────────────────────────
+print("======= PCA+OLS =======")
 ols = ssd.fit_ols(verbose=True)
-print(ols)
-print()
-print(ols.summary())
-print()
-ols.report(top_words=10, clusters=50, extreme_docs=5, misdiagnosed=5)
-ols.plot_sweep(path="sweep_plot.png")
+ols.stats
+ols.report(top_words=10, clusters=50)
+# ols.report(top_words=10, clusters=50).save("report_ols.md")
+# ols.plot_sweep(path="sweep_plot.png")
+
+print("======= Suggest lexicon (continuous) =======")
+lex = corpus.suggest_lexicon(scores, top_k=15, min_docs=5)
+lex.stats
+lex.tokens[:10]
+lex.suggestions
+lex.report()
+# lex.report().save("lexicon_suggestions.md")
+
+print("======= Evaluate lexicon (continuous) =======")
+eval_lexicon = lex.tokens[:5]
+result = corpus.evaluate_lexicon(scores, eval_lexicon)
+result.stats
+result.summary
+result.report()
+# result.report().save("lexicon_eval.md")

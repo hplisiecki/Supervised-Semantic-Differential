@@ -204,10 +204,10 @@ class TestTopPerGroup:
 
 class _MockFittedSSD:
     """Minimal duck-typed stand-in for a fitted SSD result."""
-    def __init__(self, kv, beta, lexicon):
-        self.embeddings = kv
+    def __init__(self, embeddings, beta, lexicon):
+        self.embeddings = embeddings
         self.beta = beta
-        self.beta_unit = beta / np.linalg.norm(beta)
+        self.gradient = beta / np.linalg.norm(beta)
         self.lexicon = lexicon
         self.window = 3
         self.sif_a = 1e-3
@@ -254,6 +254,20 @@ class TestSnippetsAlongBeta:
         for side in ("pos", "neg"):
             for row in result[side]:
                 assert set(row.keys()) == expected_keys
+                # cosine must be a finite number in [-1, 1]
+                assert isinstance(row["cosine"], float)
+                assert -1.0 - 1e-9 <= row["cosine"] <= 1.0 + 1e-9
+                # token indices are non-negative and ordered
+                assert row["start_token_idx"] >= 0
+                assert row["end_token_idx"] >= row["start_token_idx"]
+                assert row["start_sent_idx"] >= 0
+                assert row["end_sent_idx"] >= row["start_sent_idx"]
+                # anchor / surface / lemmas must be non-empty strings
+                assert isinstance(row["snippet_anchor"], str) and row["snippet_anchor"] != ""
+                assert isinstance(row["essay_text_surface"], str)
+                assert isinstance(row["essay_text_lemmas"], str)
+                # side label must match the key we pulled it from
+                assert row["side"] == side
 
     def test_pos_sorted_by_cosine_desc(self, mock_ssd, sample_preprocessed_docs):
         result = snippets_along_beta(

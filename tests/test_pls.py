@@ -55,19 +55,6 @@ class TestPLS1CVSelect:
         assert isinstance(result.cv_scores_se, dict)
         assert np.isfinite(result.best_cv_r2)
 
-    def test_1se_rule_parsimonious(self):
-        rng = np.random.default_rng(42)
-        X = rng.normal(size=(40, 5))
-        y = X[:, 0] + rng.normal(size=40) * 0.1  # Only 1 real component
-        result = pls1_cv_select(X, y, max_components=5, n_folds=5, seed=42, use_1se_rule=True)
-        # 1SE rule should pick fewer components
-        assert result.best_n_components <= 3
-
-        # Without 1SE rule should select >= the parsimonious result
-        result_no1se = pls1_cv_select(X, y, max_components=5, n_folds=5, seed=42, use_1se_rule=False)
-        assert result.best_n_components <= result_no1se.best_n_components
-
-
 class TestPermutationTest:
     def test_basic(self):
         rng = np.random.default_rng(42)

@@ -1,23 +1,35 @@
-"""ssdiff — Supervised Semantic Differential."""
+"""ssdiff — Supervised Semantic Differential.
 
-from ssdiff.utils.diagnostics import progress_hook
+Top-level package: re-exports the primary public API (``SSD``, ``Corpus``,
+``Embeddings``, result classes) so users can do ``from ssdiff import SSD``
+without knowing the internal module structure.
+"""
+
 from ssdiff.corpus import Corpus
 from ssdiff.embeddings import Embeddings
-from ssdiff.ssd import SSD
 from ssdiff.results import (
-    Result,
-    PLSResult,
-    PCAOLSResult,
     GroupResult,
-    PairView,
     LexiconResult,
+    PairView,
+    PCAOLSResult,
+    PLSResult,
+    Result,
     set_repr_hints,
 )
+from ssdiff.ssd import SSD
+from ssdiff.utils.diagnostics import progress_hook
 
 __all__ = [
-    "SSD", "Corpus", "Embeddings", "progress_hook",
-    "Result", "PLSResult", "PCAOLSResult",
-    "GroupResult", "PairView", "LexiconResult",
+    "SSD",
+    "Corpus",
+    "Embeddings",
+    "GroupResult",
+    "LexiconResult",
+    "PCAOLSResult",
+    "PLSResult",
+    "PairView",
+    "Result",
+    "progress_hook",
     "set_repr_hints",
 ]
 

@@ -79,10 +79,12 @@ class TestKMeans:
         assert purity_b > 0.9, f"Cluster 1 purity too low: {purity_b}"
         # Inertia should be reasonably low for 40 points with std 0.3
         assert inertia < 20
-        # Centers should be near the true means [0,0] and [3,3]
+        # Centers should be near the true means [0,0] and [3,3].
+        # With std=0.3 and 20 points per cluster, the sample mean has std
+        # ~0.3/sqrt(20) ≈ 0.067; 0.2 is a comfortable 3-sigma envelope.
         sorted_centers = centers[np.argsort(centers[:, 0])]
-        assert np.allclose(sorted_centers[0], [0, 0], atol=1.0)
-        assert np.allclose(sorted_centers[1], [3, 3], atol=1.0)
+        assert np.allclose(sorted_centers[0], [0, 0], atol=0.2)
+        assert np.allclose(sorted_centers[1], [3, 3], atol=0.2)
 
     def test_auto_k(self):
         rng = np.random.default_rng(0)

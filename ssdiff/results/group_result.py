@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Iterator
+from collections.abc import Iterator
 
 import numpy as np
 
@@ -10,13 +10,18 @@ from ssdiff.results.core import Result, ScalarView, TestView, View
 from ssdiff.results.format import fmt_count, fmt_d, fmt_p
 from ssdiff.results.report import Report, Section
 from ssdiff.results.schema import (
-    Cluster, ClusterWord, Pair, Snippet, Word,
+    Cluster,
+    ClusterWord,
+    Pair,
+    Snippet,
+    Word,
 )
-
 
 # ---------- GroupStatsView (ScalarView) ----------
 
 class GroupStatsView(ScalarView):
+    """ScalarView exposing omnibus-test metadata for a GroupResult."""
+
     _name = "stats"
     _columns = ("G", "n_kept", "n_perm", "correction", "random_state", "pvalue")
 
@@ -44,10 +49,12 @@ class GroupStatsView(ScalarView):
 # ---------- PairStatsView (ScalarView) ----------
 
 class PairStatsView(ScalarView):
+    """ScalarView exposing per-pair contrast statistics from a ``Pair`` dataclass."""
+
     _name = "stats"
     _columns = ("T", "p_raw", "p_corrected", "cohens_d", "n_g1", "n_g2", "contrast_norm")
 
-    def __init__(self, pair: "Pair"):
+    def __init__(self, pair: Pair):
         super().__init__()
         self._pair = pair
 
@@ -79,6 +86,7 @@ class GroupTestView(TestView):
     }
 
     def _run(self, name, params):
+        """Run the unified permutation test and return (name, info_dict) with rebuilt pairs."""
         if name not in self._DEFAULTS:
             raise ValueError(
                 f"Unknown group test {name!r}. "
@@ -86,7 +94,7 @@ class GroupTestView(TestView):
             )
         merged = {**self._DEFAULTS[name], **params}
         parent = self._parent
-        if parent._x is None or parent._groups is None:
+        if parent.x is None or parent.groups is None:
             raise RuntimeError(
                 "gr.test() requires the original x / groups arrays; "
                 "were they discarded by un-pickling or detach()?"
@@ -94,9 +102,9 @@ class GroupTestView(TestView):
 
         from ssdiff.backends.group import unified_permutation_test
 
-        group_labels = sorted(set(parent._groups), key=str)
+        group_labels = sorted(set(parent.groups), key=str)
         test_result = unified_permutation_test(
-            parent._x, parent._groups, group_labels,
+            parent.x, parent.groups, group_labels,
             n_perm=merged["n_perm"],
             correction=merged["correction"],
             random_state=merged["random_state"],
@@ -127,7 +135,7 @@ class GroupTestView(TestView):
             "omnibus_T": float(test_result["omnibus_T"]),
             "omnibus_p": float(test_result["omnibus_p"]),
             "G": int(test_result["G"]),
-            "n_kept": int(len(parent._x)),
+            "n_kept": len(parent.x),
             "n_perm": merged["n_perm"],
             "correction": merged["correction"],
             "random_state": merged["random_state"],
@@ -135,13 +143,15 @@ class GroupTestView(TestView):
         return name, info
 
     def _on_rerun(self):
+        """No-op: GroupStatsView is refreshed inside ``_run`` via ``parent._update_pairs``."""
         # GroupStatsView pvalue is already refreshed via parent._update_pairs.
         pass
 
     def _rerun_hint(self) -> str:
         return "Rerun: .test(n_perm=..., correction=...)"
 
-    def to_text(self, max_rows: int = 20, cols=None) -> str:
+    def to_text(self, max_rows: int | None = None, cols=None) -> str:
+        """Render the omnibus row plus a pairwise summary block below it."""
         base = super().to_text(max_rows=max_rows, cols=cols)
         if not self._info or self._parent is None:
             return base
@@ -193,7 +203,8 @@ class PairsListView(View[Pair]):
                 raise KeyError(f"no pair ({g1!r}, {g2!r})")
             pair = self._index[canonical]
             reversed_order = (g1, g2) != (pair.g1, pair.g2)
-            return PairView(pair=pair, reversed=reversed_order)
+            return PairView(pair=pair, reversed=reversed_order,
+                            parent=getattr(self, "_parent", None))
         raise KeyError(key)
 
     def _save_hint(self) -> str:
@@ -220,13 +231,16 @@ class PairView:
                  words_rows: list[Word] | None = None,
                  cluster_rows: list[Cluster] | None = None,
                  cluster_words_rows: list[ClusterWord] | None = None,
-                 snippets_rows: list[Snippet] | None = None):
+                 snippets_rows: list[Snippet] | None = None,
+                 parent: GroupResult | None = None):
         self._canonical_pair = pair
         self._reversed = reversed
         self._words_rows = words_rows or []
         self._cluster_rows = cluster_rows or []
         self._cluster_words_rows = cluster_words_rows or []
         self._snippets_rows = snippets_rows or []
+        self._parent = parent
+        self._canonical_cache: tuple[np.ndarray, np.ndarray, float] | None = None
 
     @property
     def pair(self) -> Pair:
@@ -251,16 +265,88 @@ class PairView:
         )
 
     @property
-    def stats(self) -> "PairStatsView":
+    def stats(self) -> PairStatsView:
         """ScalarView exposing per-pair stats (sign-flipped when reversed)."""
         return PairStatsView(self.pair)
 
+    def _compute_canonical(self) -> tuple[np.ndarray, np.ndarray, float]:
+        """Compute (beta, gradient, beta_norm) for the canonical g1 → g2 order.
+
+        Cached on first access. Callers apply ``_reversed`` sign flip at the
+        public property boundary.
+        """
+        if self._canonical_cache is not None:
+            return self._canonical_cache
+        parent = self._parent
+        if parent is None or parent.x is None or parent.groups is None:
+            raise RuntimeError(
+                "PairView requires the original x / groups arrays on its "
+                "parent; were they discarded by un-pickling or detach()?"
+            )
+        p = self._canonical_pair
+        x = parent.x
+        g = parent.groups
+        beta = x[g == p.g1].mean(axis=0) - x[g == p.g2].mean(axis=0)
+        beta = np.asarray(beta, dtype=float).copy()
+        beta.setflags(write=False)
+        beta_norm = float(np.linalg.norm(beta))
+        gradient = (beta / max(beta_norm, 1e-12)).copy()
+        gradient.setflags(write=False)
+        self._canonical_cache = (beta, gradient, beta_norm)
+        return self._canonical_cache
+
+    @property
+    def beta(self) -> np.ndarray:
+        """Pair contrast vector ``c_g1 − c_g2`` in embedding space.
+
+        Carries magnitude — parallels ``ContinuousResult.beta``. Sign-flipped
+        when accessed in reverse pair order.
+        """
+        beta, _, _ = self._compute_canonical()
+        return -beta if self._reversed else beta
+
+    @property
+    def gradient(self) -> np.ndarray:
+        """Unit-length pair direction ``beta / ‖beta‖``.
+
+        Parallels ``ContinuousResult.gradient``. Sign-flipped on reverse access.
+        """
+        _, gradient, _ = self._compute_canonical()
+        return -gradient if self._reversed else gradient
+
+    @property
+    def beta_norm(self) -> float:
+        """Magnitude ``‖beta‖`` of the pair contrast direction.
+
+        Scalar magnitude — invariant under reverse access.
+        """
+        _, _, beta_norm = self._compute_canonical()
+        return beta_norm
+
+    @property
+    def alignment_scores(self) -> np.ndarray:
+        """Per-document projection onto this pair's unit contrast direction.
+
+        Computed as ``x @ gradient``, parallel to
+        ``ContinuousResult.alignment_scores``. Sign flips when the pair is
+        accessed in reverse order (via ``self.gradient``).
+        """
+        parent = self._parent
+        if parent is None or parent.x is None or parent.groups is None:
+            raise RuntimeError(
+                "pair.alignment_scores requires the original x / groups arrays; "
+                "were they discarded by un-pickling or detach()?"
+            )
+        return (parent.x @ self.gradient).ravel()
+
     @property
     def contrast(self) -> str:
+        """Contrast label (e.g. ``"A_vs_B"``), sign-aware on reverse access."""
         return self.pair.contrast
 
     @property
     def words(self):
+        """WordsView for this contrast, with side and sign flipped when reversed."""
         from ssdiff.results.continuous_result import WordsView
         contrast = self._canonical_pair.contrast
         rows = [w for w in self._words_rows if w.contrast == contrast]
@@ -275,7 +361,7 @@ class PairView:
 
     @property
     def clusters(self):
-        from ssdiff.results.continuous_result import ClustersIndex
+        """ClustersIndex-like object backed by pre-computed rows for this contrast."""
         # Return a lightweight index backed by filtered rows.
         return _PairClustersIndex(
             pair_view=self,
@@ -285,6 +371,7 @@ class PairView:
 
     @property
     def snippets(self):
+        """SnippetsView for this contrast, with side flipped when reversed."""
         from ssdiff.results.continuous_result import SnippetsView
         contrast = self._canonical_pair.contrast
         rows = [s for s in self._snippets_rows if s.contrast == contrast]
@@ -318,12 +405,13 @@ class PairView:
         from ssdiff.results.format import fmt_p, fmt_r
         p = self.pair
         return (
-            f"PairView  {p.g1} \u2192 {p.g2}\n"
-            f"  stats:     T={fmt_r(p.T, signed=True)}  "
+            f"PairView  {p.g1} \u2192 {p.g2}  "
+            f"T={fmt_r(p.T, signed=True)}  "
             f"p_corr={fmt_p(p.p_corrected)}  "
             f"d={fmt_r(p.cohens_d, signed=True)}  "
             f"n={p.n_g1}/{p.n_g2}\n"
-            f"  views:     .stats  .words  .snippets"
+            f"  arrays:  .beta  .gradient  .alignment_scores\n"
+            f"  views:   .stats  .words  .clusters  .snippets"
         )
 
     def to_html(self) -> str:
@@ -351,12 +439,12 @@ class _PairClustersIndex:
     def __init__(self, pair_view: PairView,
                  cluster_rows: list[Cluster],
                  cluster_words_rows: list[ClusterWord]):
-        from ssdiff.results.continuous_result import SidedClustersView
         self._pair_view = pair_view
         self._cluster_rows = cluster_rows
         self._cluster_words_rows = cluster_words_rows
 
     def _sided(self, side: str):
+        """Build a SidedClustersView for ``side``, applying sign-flip when the pair is reversed."""
         from ssdiff.results.continuous_result import SidedClustersView
         contrast = self._pair_view._canonical_pair.contrast
         # If reversed, flip side label used for filtering canonical rows
@@ -389,17 +477,23 @@ class _PairClustersIndex:
 
     @property
     def pos(self):
+        """SidedClustersView for the positive pole of this contrast."""
         return self._sided("pos")
 
     @property
     def neg(self):
+        """SidedClustersView for the negative pole of this contrast."""
         return self._sided("neg")
 
 
 # ---------- GroupResult ----------
 
 class GroupResult(Result):
-    """Result from SSD.fit_groups().
+    """Result from ``SSD.fit_groups()``.
+
+    Each group centroid is computed from the **personal concept vectors
+    (PCVs)** of the documents in that group; pairwise contrasts
+    β = c_{g1} − c_{g2} are tested by permuting group labels.
 
     Attributes
     ----------
@@ -421,6 +515,13 @@ class GroupResult(Result):
         P-value correction method applied.
     random_state : int
         Random seed used.
+    x : ndarray of shape (n_kept, D)
+        Per-document vectors retained after ``filter_small_groups``.
+        Load-bearing for ``gr.test(...)`` reruns and contrast recomputation.
+    groups : ndarray of shape (n_kept,)
+        Group labels aligned with ``x``. For continuous ``y`` passed to
+        ``fit_groups(median_split=True)`` these are the median-split bins;
+        otherwise they are the raw categorical labels cast to ``object``.
     """
 
     def __init__(
@@ -443,6 +544,45 @@ class GroupResult(Result):
         x: np.ndarray | None = None,
         groups: np.ndarray | None = None,
     ):
+        """Construct a GroupResult from backend outputs.
+
+        Parameters
+        ----------
+        G : int
+            Number of groups.
+        n_kept : int
+            Documents retained after ``filter_small_groups``.
+        n_perm : int
+            Permutations used in the omnibus + pairwise tests.
+        correction : str
+            P-value correction method (``"holm"``, ``"bonferroni"``,
+            ``"fdr_bh"``, or ``"none"``).
+        random_state : int
+            Random seed used for permutation shuffling.
+        omnibus_T : float
+            Observed omnibus test statistic (mean pairwise cosine distance).
+        omnibus_p : float
+            Omnibus permutation p-value.
+        pairs : list of Pair
+            Per-contrast statistics from the permutation test.
+        words_rows : list of Word
+            Flat list of neighbor words for all contrasts (filtered by
+            ``contrast`` field in PairView).
+        cluster_rows : list of Cluster
+            Flat list of cluster summaries for all contrasts.
+        cluster_words_rows : list of ClusterWord
+            Flat list of cluster-word memberships for all contrasts.
+        snippets_rows : list of Snippet
+            Flat list of extracted text snippets for all contrasts.
+        embeddings : Embeddings or None
+            Word-embedding model (forwarded to sub-views).
+        corpus : Corpus or None
+            Text corpus (forwarded to sub-views).
+        x : ndarray of shape (n_kept, D) or None
+            Document vectors retained after filtering; required for test reruns.
+        groups : ndarray of shape (n_kept,) or None
+            Group labels aligned with ``x``; required for test reruns.
+        """
         super().__init__()
         self.embeddings = embeddings
         self.corpus = corpus
@@ -455,8 +595,8 @@ class GroupResult(Result):
 
         # Stored for gr.test(...) rerun. May be None when reconstructed
         # without the source arrays (e.g. synthetic test fixtures).
-        self._x = x
-        self._groups = groups
+        self.x = x
+        self.groups = groups
 
         self.stats = GroupStatsView(
             G=G, n_kept=n_kept, n_perm=n_perm,
@@ -494,6 +634,7 @@ class GroupResult(Result):
             cluster_rows=self._cluster_rows,
             cluster_words_rows=self._cluster_words_rows,
             snippets_rows=self._snippets_rows,
+            parent=self,
         )
 
     def _update_pairs(self, new_pairs: list[Pair], *, n_perm: int,
@@ -508,6 +649,7 @@ class GroupResult(Result):
             cluster_rows=self._cluster_rows,
             cluster_words_rows=self._cluster_words_rows,
             snippets_rows=self._snippets_rows,
+            parent=self,
         )
         self.stats = GroupStatsView(
             G=self.G, n_kept=self.n_kept, n_perm=n_perm,
@@ -519,6 +661,7 @@ class GroupResult(Result):
         "stats", "test", "pairs",
         "report()", "test(...)", "attach(...)",
     )
+    _arrays = ("x", "groups")
 
     def _summary(self) -> str:
         return (f"GroupResult  G={self.G}  n={fmt_count(self.n_kept)}  "
@@ -543,6 +686,24 @@ class GroupResult(Result):
     def report(self, *, top_words: int | None = 5,
                clusters: int | None = None,
                snippets_per_cluster: int | None = None) -> Report:
+        """Build a multi-section narrative Report for this group result.
+
+        Parameters
+        ----------
+        top_words : int or None
+            Words per pole per contrast to include. ``None`` skips the words
+            section. Currently unused — words are not included in the group
+            report by default.
+        clusters : int or None
+            Reserved; not yet implemented in the group report.
+        snippets_per_cluster : int or None
+            Reserved; not yet implemented in the group report.
+
+        Returns
+        -------
+        Report
+            A ``Report`` with an omnibus section and a pairwise-contrasts table.
+        """
         sections = []
 
         # Omnibus section
@@ -589,14 +750,17 @@ class _GroupPairsListView(PairsListView):
                  words_rows: list[Word],
                  cluster_rows: list[Cluster],
                  cluster_words_rows: list[ClusterWord],
-                 snippets_rows: list[Snippet]):
+                 snippets_rows: list[Snippet],
+                 parent: GroupResult):
         super().__init__(pairs)
         self._words_rows = words_rows
         self._cluster_rows = cluster_rows
         self._cluster_words_rows = cluster_words_rows
         self._snippets_rows = snippets_rows
+        self._parent = parent
 
     def __getitem__(self, key):
+        """Return a PairView (or sliced _GroupPairsListView) with sub-view rows injected."""
         if isinstance(key, slice):
             return _GroupPairsListView(
                 pairs=self._pairs[key],
@@ -604,6 +768,7 @@ class _GroupPairsListView(PairsListView):
                 cluster_rows=self._cluster_rows,
                 cluster_words_rows=self._cluster_words_rows,
                 snippets_rows=self._snippets_rows,
+                parent=self._parent,
             )
         result = super().__getitem__(key)
         if isinstance(result, PairView):
@@ -615,5 +780,6 @@ class _GroupPairsListView(PairsListView):
                 cluster_rows=self._cluster_rows,
                 cluster_words_rows=self._cluster_words_rows,
                 snippets_rows=self._snippets_rows,
+                parent=self._parent,
             )
         return result

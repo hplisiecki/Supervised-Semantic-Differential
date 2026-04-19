@@ -34,7 +34,7 @@ from ssdiff.utils.neighbors import cluster_top_neighbors
 
 
 def _cluster_both_sides(
-    kv,
+    embeddings,
     beta: np.ndarray,
     *,
     topn: int = 100,
@@ -56,7 +56,7 @@ def _cluster_both_sides(
     for side in ("pos", "neg"):
         try:
             clusters = cluster_top_neighbors(
-                kv, beta,
+                embeddings, beta,
                 topn=topn,
                 k=None,
                 k_min=k_min,
@@ -87,7 +87,7 @@ def pca_sweep(
     X_scale: np.ndarray,
     x: np.ndarray,
     ys: np.ndarray,
-    kv,
+    embeddings,
     pca_k_values: Sequence[int] | None = None,
     cluster_topn: int = 100,
     cluster_k_min: int = 2,
@@ -117,7 +117,7 @@ def pca_sweep(
         Raw (un-standardized) document vectors — used for beta orientation.
     ys : (n,) array
         Standardized outcome variable.
-    kv : Embeddings
+    embeddings : Embeddings
         Word embeddings for neighbor lookup and clustering.
     pca_k_values : sequence of int, optional
         PCA_K values to try.  Default ``range(20, 121, 2)``.
@@ -194,18 +194,18 @@ def pca_sweep(
             if corr < 0:
                 beta = -beta
 
-            beta_unit = unit_vector(beta)
+            gradient = unit_vector(beta)
 
             # Beta stability
             if beta_prev is not None:
-                beta_delta = 1.0 - _cosine(beta_prev, beta_unit)
+                beta_delta = 1.0 - _cosine(beta_prev, gradient)
             else:
                 beta_delta = np.nan
-            beta_prev = beta_unit
+            beta_prev = gradient
 
             # Interpretability via clustering BOTH sides (matches official)
             clusters = _cluster_both_sides(
-                kv, beta,
+                embeddings, beta,
                 topn=cluster_topn,
                 k_min=cluster_k_min,
                 k_max=cluster_k_max,
@@ -264,7 +264,18 @@ def pca_sweep(
     stab_auck_raw = _compute_auck(stab_z_raw, radius=auck_radius)
 
     # --- Joint score ---
-    joint_score = 0.5 * (interp_auck + stab_auck_raw)
+    # Interpretability is the parsimony-aware channel; stability alone rises
+    # with K and would pick the ceiling if used on its own. If interp is
+    # fully unavailable (e.g., clustering failed on a tiny vocab), leave
+    # joint_score all-NaN and let the selector fall back to k_min.
+    interp_any = np.any(np.isfinite(interp_auck))
+    stab_any = np.any(np.isfinite(stab_auck_raw))
+    if interp_any and stab_any:
+        joint_score = 0.5 * (interp_auck + stab_auck_raw)
+    elif interp_any:
+        joint_score = interp_auck
+    else:
+        joint_score = np.full_like(var_explained, np.nan)
 
     # Enrich row dicts with computed columns
     for i, r in enumerate(rows):
@@ -279,17 +290,19 @@ def pca_sweep(
 
     # --- Choose best K ---
     finite_mask = np.isfinite(joint_score)
-    if not finite_mask.any():
-        raise RuntimeError("No finite joint_score values; cannot select best PCA_K.")
-
-    joint_vals = joint_score[finite_mask]
-    ks = pca_ks[finite_mask]
-
-    best_val = float(np.nanmax(joint_vals))
-    tied = ks[np.isclose(joint_vals, best_val, rtol=0, atol=1e-12)]
-    best_k = int(np.min(tied))
-
-    _diagnostic(verbose, f"[sweep] best PCA_K={best_k} (joint={best_val:.4f})")
+    if finite_mask.any():
+        joint_vals = joint_score[finite_mask]
+        ks = pca_ks[finite_mask]
+        best_val = float(np.nanmax(joint_vals))
+        tied = ks[np.isclose(joint_vals, best_val, rtol=0, atol=1e-12)]
+        best_k = int(np.min(tied))
+        _diagnostic(verbose, f"[sweep] best PCA_K={best_k} (joint={best_val:.4f})")
+    else:
+        # No differentiating signal (tiny corpus, degenerate clustering AND
+        # no stability gradient). Fall back to the most parsimonious K.
+        best_k = int(pca_ks.min())
+        _diagnostic(verbose,
+                    f"[sweep] no finite joint_score; falling back to k_min={best_k}")
 
     # --- Optional table output ---
     if save_tables and out_dir is not None:

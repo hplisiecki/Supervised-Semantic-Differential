@@ -8,31 +8,27 @@ with synthetic small inputs.
 import numpy as np
 import pytest
 
+from ssdiff.results.continuous_result import PCAOLSResult, PLSResult
 from ssdiff.results.schema import (
     Cluster,
-    ClusterWord,
-    Doc,
-    Snippet,
-    Stats,
     Word,
 )
-from ssdiff.results.continuous_result import ContinuousResult, PCAOLSResult, PLSResult
 
 
 def _make_continuous(n=50, d=8, seed=0):
     rng = np.random.default_rng(seed)
     beta = rng.standard_normal(d)
     x = rng.standard_normal((n, d))
-    y_kept = x @ beta + 0.1 * rng.standard_normal(n)
+    y = x @ beta + 0.1 * rng.standard_normal(n)
     return {
         "backend": "PLS",
         "x": x.astype(np.float64),
         "beta": beta.astype(np.float64),
         "keep_mask": np.ones(n, dtype=bool),
         "n_raw": n, "n_kept": n, "n_dropped": 0,
-        "y_kept": y_kept.astype(np.float64),
-        "_y_mean": np.array([y_kept.mean()]),
-        "_y_scale": np.array([y_kept.std() + 1e-12]),
+        "y": y.astype(np.float64),
+        "_y_mean": np.array([y.mean()]),
+        "_y_scale": np.array([y.std() + 1e-12]),
         "r2": 0.47, "r2_adj": 0.46, "pvalue": 1e-5,
         "embeddings": None, "lexicon": set(), "window": 3, "sif_a": 1e-3, "lang": "pl",
     }

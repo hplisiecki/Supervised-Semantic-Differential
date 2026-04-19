@@ -1,7 +1,6 @@
 """Direct assertions on each of the 17 spec acceptance criteria."""
 
 import pickle
-import warnings
 
 import numpy as np
 import pytest
@@ -18,7 +17,7 @@ def _mk():
     return PLSResult(
         x=x, beta=beta, keep_mask=np.ones(n, dtype=bool),
         n_raw=n, n_kept=n, n_dropped=0,
-        y_kept=y, _y_mean=np.array([y.mean()]), _y_scale=np.array([y.std() + 1e-12]),
+        y=y, _y_mean=np.array([y.mean()]), _y_scale=np.array([y.std() + 1e-12]),
         r2=0.47, r2_adj=0.46, pvalue=1e-4,
     )
 

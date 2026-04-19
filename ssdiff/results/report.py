@@ -4,10 +4,8 @@ A ``Report`` is a multi-section builder. Public surface:
 
 - ``repr(report)`` / ``report._repr_html_()`` — console rendering
 - ``report.to_text()`` / ``report.to_html()`` — return strings
-- ``report.save(path, *, style=None)`` — file output, extension dispatch
+- ``report.save(path)`` — file output, extension dispatch
   (``.md .txt .html .tex .docx .json``)
-
-``style=`` is only valid for ``.docx``; any other extension raises ``TypeError``.
 """
 
 from __future__ import annotations
@@ -32,6 +30,24 @@ SectionKind = Literal["kv", "table", "list"]
 
 @dataclass
 class Section:
+    """One logical section within a Report.
+
+    Fields
+    ------
+    title : str
+        Section heading rendered as ``<h2>`` in HTML / ``## `` in Markdown.
+    kind : SectionKind
+        Layout type: ``"kv"`` for key-value pairs, ``"table"`` for a
+        multi-column table, ``"list"`` for a bullet list.
+    rows : list
+        Row data.  For ``"kv"``: list of ``(key, value)`` tuples.
+        For ``"table"``: list of lists (one per row).
+        For ``"list"``: list of strings.
+    headers : list of str or None
+        Column headers for ``"table"`` sections; unused otherwise.
+    numeric : list of bool or None
+        Column alignment for ``"table"`` sections — ``True`` right-aligns.
+    """
     title: str
     kind: SectionKind
     rows: list = field(default_factory=list)
@@ -41,11 +57,27 @@ class Section:
 
 @dataclass
 class Report:
+    """Multi-section report builder with format-agnostic rendering.
+
+    Use the ``save(path)`` method to write to disk; format is inferred from
+    the file extension.  ``to_text()`` / ``to_html()`` return strings directly.
+    Pass ``cite=False`` to suppress the standard citation footer.
+
+    Fields
+    ------
+    title : str
+        Main report heading.
+    sections : list of Section
+        Ordered content sections.
+    subtitle : str or None
+        Optional subtitle rendered below the title.
+    cite : bool
+        If ``True`` (default), append the Plisiecki et al. (2025) citation.
+    """
     title: str
     sections: list[Section]
     subtitle: str | None = None
-
-    _DOCX_STYLES: ClassVar[tuple[str, ...]] = ("APA",)
+    cite: bool = True
 
     _SUPPORTED_EXTS: ClassVar[tuple[str, ...]] = (
         "md", "txt", "html", "tex", "docx", "json",
@@ -54,7 +86,7 @@ class Report:
     # -------- repr dunders ----------------------------------------------
     def _save_hint(self) -> str:
         return ("Save:  .save('report.md')       "
-                "# extensions: md txt html tex docx json  (style= for .docx)")
+                "# extensions: md txt html tex docx json")
 
     def _save_hint_html(self) -> str:
         return f"<pre class='ssd-save-hint'>{_html.escape(self._save_hint())}</pre>"
@@ -75,14 +107,17 @@ class Report:
 
     # -------- string renderers (used by repr + save) --------------------
     def to_text(self) -> str:
+        """Render the report as a fixed-width text string."""
         parts = [self._text_header()]
         for s in self.sections:
             parts.append(self._text_section(s))
-        parts.append("─" * 80)
-        parts.append(CITATION)
+        if self.cite:
+            parts.append("─" * 80)
+            parts.append(CITATION)
         return "\n\n".join(parts)
 
     def to_html(self) -> str:
+        """Render the report as an HTML string."""
         parts = ['<div class="ssd-report">']
         parts.append(f"<h1>{_html.escape(self.title)}</h1>")
         if self.subtitle:
@@ -90,36 +125,42 @@ class Report:
         for s in self.sections:
             parts.append(f"<h2>{_html.escape(s.title)}</h2>")
             parts.append(self._html_section_body(s))
-        parts.append("<hr/>")
-        parts.append(f"<p class='citation'>{_html.escape(CITATION)}</p>")
+        if self.cite:
+            parts.append("<hr/>")
+            parts.append(f"<p class='citation'>{_html.escape(CITATION)}</p>")
         parts.append("</div>")
         return "\n".join(parts)
 
     def _to_markdown(self) -> str:
+        """Render the report as a GitHub-flavoured Markdown string."""
         lines = [f"# {self.title}"]
         if self.subtitle:
             lines.append(self.subtitle)
         for s in self.sections:
             lines.append(f"## {s.title}")
             lines.append(self._md_section_body(s))
-        lines.append("")
-        lines.append("---")
-        lines.append("")
-        lines.append(CITATION.replace("\n  ", "\n> "))
+        if self.cite:
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+            lines.append(CITATION.replace("\n  ", "\n> "))
         return "\n\n".join(lines)
 
     def _to_latex(self) -> str:
+        """Render the report as a LaTeX fragment (booktabs-style tables)."""
         parts = [f"\\section*{{{self.title}}}"]
         if self.subtitle:
             parts.append(self.subtitle)
         for s in self.sections:
             parts.append(f"\\subsection*{{{s.title}}}")
             parts.append(self._latex_section_body(s))
-        parts.append("\\vspace{1em}\\hrule\\vspace{0.5em}")
-        parts.append(CITATION.replace("\n", "\\\\\n"))
+        if self.cite:
+            parts.append("\\vspace{1em}\\hrule\\vspace{0.5em}")
+            parts.append(CITATION.replace("\n", "\\\\\n"))
         return "\n\n".join(parts)
 
     def _to_json(self) -> str:
+        """Render the report as a JSON string (title + sections array)."""
         import json
         payload = {
             "title": self.title,
@@ -132,13 +173,8 @@ class Report:
         }
         return json.dumps(payload, ensure_ascii=False, default=str, indent=2)
 
-    def _write_docx(self, path: str, *, style: str | None = None) -> None:
-        if style is not None and style not in self._DOCX_STYLES:
-            raise ValueError(
-                f"unknown docx style {style!r}. "
-                f"Supported: {self._DOCX_STYLES}"
-            )
-        # style is currently a no-op — arg shape locked in for future styling.
+    def _write_docx(self, path: str) -> None:
+        """Write the report as a .docx file using python-docx."""
         docx = _require("docx", extra="results")
         doc = docx.Document()
         doc.add_heading(self.title, level=1)
@@ -147,16 +183,16 @@ class Report:
         for s in self.sections:
             doc.add_heading(s.title, level=2)
             self._docx_section_body(doc, s)
-        doc.add_paragraph("—" * 40)
-        doc.add_paragraph(CITATION)
+        if self.cite:
+            doc.add_paragraph("—" * 40)
+            doc.add_paragraph(CITATION)
         doc.save(path)
 
     # -------- unified save() --------------------------------------------
-    def save(self, path: str, *, style: str | None = None) -> None:
+    def save(self, path: str) -> None:
         """Write the report to ``path``; format inferred from the extension.
 
         Supported: ``.md .txt .html .tex .docx .json``.
-        ``style=`` only valid for ``.docx``.
         """
         ext = path.lower().rsplit(".", 1)[-1] if "." in path else ""
         if ext not in self._SUPPORTED_EXTS:
@@ -164,13 +200,9 @@ class Report:
                 f"Unsupported extension .{ext} for Report.save(). "
                 f"Supported: {self._SUPPORTED_EXTS}"
             )
-        if style is not None and ext != "docx":
-            raise TypeError(
-                f"style= is only supported for .docx output; got .{ext}"
-            )
 
         if ext == "docx":
-            self._write_docx(path, style=style)
+            self._write_docx(path)
             return
 
         renderer = {
@@ -185,6 +217,7 @@ class Report:
 
     # -------- section helpers -------------------------------------------
     def _text_header(self) -> str:
+        """Return the title/subtitle/separator header for text output."""
         h = self.title
         if self.subtitle:
             h += f"\n{self.subtitle}"
@@ -192,6 +225,7 @@ class Report:
         return h
 
     def _text_section(self, s: Section) -> str:
+        """Render a single Section as plain text (kv / table / list)."""
         lines = [s.title]
         if s.kind == "kv":
             kv = [[k, v] for k, v in s.rows]
@@ -208,6 +242,7 @@ class Report:
         return "\n".join(lines)
 
     def _md_section_body(self, s: Section) -> str:
+        """Render the body of one Section as Markdown."""
         if s.kind == "kv":
             rows = "\n".join(f"| {k} | {v} |" for k, v in s.rows)
             return f"| Metric | Value |\n|:-------|------:|\n{rows}"
@@ -221,6 +256,7 @@ class Report:
         return ""
 
     def _html_section_body(self, s: Section) -> str:
+        """Render the body of one Section as an HTML fragment."""
         if s.kind == "kv":
             rows = "".join(
                 f"<tr><th>{_html.escape(str(k))}</th>"
@@ -241,6 +277,7 @@ class Report:
         return ""
 
     def _latex_section_body(self, s: Section) -> str:
+        """Render the body of one Section as a LaTeX tabular / list fragment."""
         if s.kind == "kv":
             body = "\n".join(f"{k} & {v} \\\\" for k, v in s.rows)
             return ("\\begin{tabular}{ll}\n\\toprule\nMetric & Value \\\\\n"
@@ -257,6 +294,7 @@ class Report:
         return ""
 
     def _docx_section_body(self, doc, s: Section) -> None:
+        """Append the body of one Section to a python-docx Document object."""
         if s.kind == "kv":
             t = doc.add_table(rows=len(s.rows), cols=2)
             for i, (k, v) in enumerate(s.rows):
@@ -276,6 +314,7 @@ class Report:
 
     @staticmethod
     def _warn_if_cols(cols) -> None:
+        """Emit a UserWarning if ``cols`` is not None (Report renderers ignore it)."""
         if cols is not None:
             warnings.warn(
                 "Report renderers ignore `cols`; rendering all content.",

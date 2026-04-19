@@ -29,10 +29,10 @@ def compute_global_sif(sentences: list[list[str]]) -> tuple[dict[str, int], int]
     return wc, sum(wc.values())
 
 
-def _occ_vectors_in_doc(doc, kv, lexicon, wc, tot, window, sif_a):
+def _occ_vectors_in_doc(doc, embeddings, lexicon, wc, tot, window, sif_a):
     """SIF-averaged context vectors for each seed occurrence in a doc."""
     occ = []
-    D = kv.vector_size
+    D = embeddings.vector_size
     for i, token in enumerate(doc):
         if token not in lexicon:
             continue
@@ -43,26 +43,26 @@ def _occ_vectors_in_doc(doc, kv, lexicon, wc, tot, window, sif_a):
             if j == i:
                 continue
             c = doc[j]
-            if c not in kv:
+            if c not in embeddings:
                 continue
             a = sif_a / (sif_a + wc.get(c, 0) / max(tot, 1))
-            sum_v += a * kv[c]
+            sum_v += a * embeddings[c]
             w_sum += a
         if w_sum > 0:
             occ.append(sum_v / w_sum)
     return occ
 
 
-def _full_doc_vector(tokens, kv, wc, tot, sif_a) -> np.ndarray | None:
+def _full_doc_vector(tokens, embeddings, wc, tot, sif_a) -> np.ndarray | None:
     """SIF-weighted mean of all tokens in a doc (no lexicon filtering)."""
-    D = kv.vector_size
+    D = embeddings.vector_size
     sum_v = np.zeros(D, dtype=np.float64)
     w_sum = 0.0
     for c in tokens:
-        if c not in kv:
+        if c not in embeddings:
             continue
         a = sif_a / (sif_a + wc.get(c, 0) / max(tot, 1))
-        sum_v += a * kv[c]
+        sum_v += a * embeddings[c]
         w_sum += a
     if w_sum == 0.0:
         return None
@@ -71,7 +71,7 @@ def _full_doc_vector(tokens, kv, wc, tot, sif_a) -> np.ndarray | None:
 
 def build_doc_vectors(
     docs,
-    kv,
+    embeddings,
     lexicon,
     global_wc,
     total_tokens,
@@ -86,7 +86,7 @@ def build_doc_vectors(
     ----------
     docs : list[list[str]] or list[list[list[str]]]
         Flat token lists or grouped profiles.
-    kv : Embeddings
+    embeddings : Embeddings
         Word embeddings.
     lexicon : set[str]
         Seed words.
@@ -117,7 +117,7 @@ def build_doc_vectors(
             is_flat = isinstance(item[0], str)
             break
     if is_flat is None:
-        return np.zeros((0, kv.vector_size), dtype=np.float64), np.zeros(0, dtype=bool)
+        return np.zeros((0, embeddings.vector_size), dtype=np.float64), np.zeros(0, dtype=bool)
 
     if is_flat:
         for d in docs:
@@ -125,14 +125,14 @@ def build_doc_vectors(
                 keep_mask.append(False)
                 continue
             if use_seeds:
-                occ = _occ_vectors_in_doc(d, kv, lexicon, global_wc, total_tokens, window, sif_a)
+                occ = _occ_vectors_in_doc(d, embeddings, lexicon, global_wc, total_tokens, window, sif_a)
                 if not occ:
                     keep_mask.append(False)
                 else:
                     keep_mask.append(True)
                     X_list.append(np.mean(occ, axis=0).astype(np.float64))
             else:
-                v = _full_doc_vector(d, kv, global_wc, total_tokens, sif_a)
+                v = _full_doc_vector(d, embeddings, global_wc, total_tokens, sif_a)
                 if v is None:
                     keep_mask.append(False)
                 else:
@@ -148,7 +148,7 @@ def build_doc_vectors(
                 for p in posts:
                     if p:
                         occ_all.extend(
-                            _occ_vectors_in_doc(p, kv, lexicon, global_wc, total_tokens, window, sif_a)
+                            _occ_vectors_in_doc(p, embeddings, lexicon, global_wc, total_tokens, window, sif_a)
                         )
                 if not occ_all:
                     keep_mask.append(False)
@@ -157,20 +157,20 @@ def build_doc_vectors(
                     X_list.append(np.mean(occ_all, axis=0).astype(np.float64))
             else:
                 tokens_all = [t for p in posts for t in p]
-                v = _full_doc_vector(tokens_all, kv, global_wc, total_tokens, sif_a)
+                v = _full_doc_vector(tokens_all, embeddings, global_wc, total_tokens, sif_a)
                 if v is None:
                     keep_mask.append(False)
                 else:
                     keep_mask.append(True)
                     X_list.append(v)
 
-    X = np.vstack(X_list) if X_list else np.zeros((0, kv.vector_size), dtype=np.float64)
+    X = np.vstack(X_list) if X_list else np.zeros((0, embeddings.vector_size), dtype=np.float64)
     return X, np.array(keep_mask, dtype=bool)
 
 
 def build_and_normalize_doc_vectors(
     docs,
-    kv,
+    embeddings,
     lexicon,
     window: int = 3,
     sif_a: float = 1e-3,
@@ -187,7 +187,7 @@ def build_and_normalize_doc_vectors(
     docs : list[list[str]] or list[list[list[str]]]
         Tokenized documents. Either flat token lists or grouped profiles
         (list of posts per document).
-    kv : Embeddings
+    embeddings : Embeddings
         Word embedding model providing vector lookups.
     lexicon : set[str]
         Seed words used for context-window extraction in "seed" mode.
@@ -225,7 +225,7 @@ def build_and_normalize_doc_vectors(
     mode = "full" if use_full_doc else "seed"
 
     X, keep_mask = build_doc_vectors(
-        docs, kv, lexicon, global_wc, total_tokens, window, sif_a, mode=mode,
+        docs, embeddings, lexicon, global_wc, total_tokens, window, sif_a, mode=mode,
     )
 
     if l2_normalize and X.shape[0] > 0:

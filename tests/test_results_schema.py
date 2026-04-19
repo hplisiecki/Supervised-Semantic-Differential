@@ -1,6 +1,7 @@
 """Frozen-dataclass contract for all domain rows."""
 
 import pickle
+from dataclasses import FrozenInstanceError
 
 import pytest
 
@@ -35,7 +36,7 @@ def test_word_fields():
     w = Word(side="pos", rank=1, word="excellent", cos_beta=0.42, contrast=None)
     assert w.side == "pos"
     assert w.word == "excellent"
-    with pytest.raises(Exception):  # dataclasses.FrozenInstanceError
+    with pytest.raises(FrozenInstanceError):
         w.side = "neg"  # type: ignore
 
 

@@ -1,384 +1,288 @@
-# Architecture Comparison: `ssdiff` v1.0 vs Official `ssdiff` v0.2
+# ssdiff — Architecture
 
-Side-by-side comparison of the two implementations of the Supervised Semantic Differential method.
+Internals of the `ssdiff` package: module layout, pipeline flow, and how the results layer composes.
 
----
-
-## Overview
-
-| | **Official `ssdiff` v0.2** | **`ssdiff` v1.0 (this package)** |
-|--|--|--|
-| PyPI | `ssdiff` (v0.2.2) | `ssdiff` (v1.0.0) |
-| Design | Monolithic, base-class inheritance | Modular, composition + strategy pattern |
-| Regression | PCA+OLS only (fits in `__init__`) | PLS (default) or PCA+OLS (deferred `fit_*()`) |
-| Results | Attributes on SSD instance | Separate result classes (`PLSResult`, `PCAOLSResult`) |
-| Embeddings | Gensim `KeyedVectors` | Custom `Embeddings` class (gensim optional) |
-| Text processing | Utility functions | `Corpus` class |
-| Core deps | numpy, pandas, scikit-learn, gensim, spacy | numpy, spacy, matplotlib |
-| Optional deps | requests, matplotlib | gensim (saving .kv only) |
+For the public API see [`api_reference.md`](api_reference.md).
+For the results surface see [`results.md`](results.md).
 
 ---
 
-## Class Hierarchy
-
-### Official `ssdiff` v0.2
+## Top-level pieces
 
 ```
-_SSDBase (abstract)
-  ├── SSD            → fits OLS in __init__, result attrs on self
-  └── SSDGroup       → permutation tests in __init__
-        └── .get_contrast() → SSDContrast (duck-types with SSD)
+SSD                          — driver; prepares PCVs, dispatches to backends
+  ├── .fit_pls()    → PLSResult       (ContinuousResult → Result)
+  ├── .fit_ols()    → PCAOLSResult    (ContinuousResult → Result)
+  └── .fit_groups() → GroupResult     (Result)
+
+Embeddings                   — word-vector store + normalization, no gensim dep
+Corpus                       — spaCy tokenize/lemmatize + lexicon helpers
 ```
 
-`_SSDBase._build_pcvs()` is a monolithic method that runs the full pipeline in sequence:
-1. Load embeddings (KeyedVectors or path string)
-2. Filter NaN y / invalid groups
-3. Build SIF-weighted document vectors
-4. L2-normalize
-5. `StandardScaler.fit_transform()`
-6. `PCA.fit_transform()`
-
-Both `SSD` and `SSDGroup` inherit this pipeline. SSD then immediately runs OLS regression and sets `self.beta`, `self.r2`, etc.
-
-### `ssdiff` v1.0 (this package)
-
-```
-SSD                          → builds doc vectors in __init__, defers fitting
-  ├── .fit_pls()    → PLSResult (ContinuousResult → Result)
-  ├── .fit_ols()    → PCAOLSResult (ContinuousResult → Result)
-  └── .fit_groups() → GroupResult (Result)
-
-Embeddings                   → standalone, no Gensim dependency
-Corpus                       → standalone, wraps spaCy + suggest_lexicon()
-```
-
-Key differences:
-- **Unified SSD class** — one class for continuous and group analysis
-- **Deferred fitting** — `SSD.__init__()` prepares data; `fit_pls()`, `fit_ols()`, or `fit_groups()` runs the analysis
-- **Result objects** — fitting returns `PLSResult`, `PCAOLSResult`, or `GroupResult` with shared view / export / report API via the `Result` base class
-- **First-class input wrappers** — `Embeddings` and `Corpus` are proper classes, not utility functions
+Composition, not inheritance — `SSD.__init__` only builds per-document vectors (PCVs). Each `fit_*` is a separate, explicit step and returns its own immutable result object, so multiple backends can be run on the same `SSD` instance without rebuilding doc vectors.
 
 ---
 
-## Pipeline Flow
-
-### Official `ssdiff` v0.2
-
-```
-KeyedVectors + list[list[str]] + y
-        │
-        ▼
-   SSD.__init__()
-        │
-        ├─ _build_pcvs()  [inherited from _SSDBase]
-        │     ├─ load_embeddings(path_or_kv)
-        │     ├─ build_doc_vectors() → X
-        │     ├─ L2-normalize X
-        │     ├─ StandardScaler → Xs
-        │     └─ PCA(N_PCA) → z
-        │
-        ├─ OLS: w = solve(z'z, z'ys)
-        ├─ beta = pca.components_.T @ w / scaler.scale_
-        ├─ r2, r2_adj, f_stat, f_pvalue
-        └─ calibrate effect sizes
-        │
-        ▼
-   ssd.beta, ssd.r2, ssd.top_words(), ...
-```
-
-Everything happens in the constructor. There is one pipeline, one backend, one result.
-
-### `ssdiff` v1.0
-
-```
-Embeddings + Corpus + y
-        │
-        ▼
-   SSD.__init__()
-        │
-        ├─ build_and_normalize_doc_vectors() → X, keep_mask
-        ├─ standardize y
-        └─ store: x, y_kept, keep_mask
-        │
-        ├───────────────┬──────────────────┐
-        ▼               ▼                  │
-   fit_pls()       fit_ols()              │
-        │               │                  │
-        ├─ standardize X├─ standardize X    (numerically equivalent; both use ddof=0)  │
-        ├─ [PCA preproc]├─ PCA (SVD)       │
-        ├─ PLS1 NIPALS  ├─ OLS             │
-        ├─ p-value test ├─ F-test          │
-        └─ → PLSResult  └─ → PCAOLSResult  │
-              │                │            │
-              └───────┬────────┘            │
-                      ▼                     │
-              Shared API:                   │
-              .stats, .words,               │
-              .clusters.pos/neg,            │
-              .docs, .snippets, .report()   │
-```
-
-Construction prepares data. Fitting is a separate, explicit step. Multiple backends can be used on the same `SSD` instance.
-
----
-
-## Key Architectural Differences
-
-### 1. Fitting Strategy
-
-**`ssdiff`**: OLS runs inside `__init__`. The SSD instance *is* the result — `ssd.r2`, `ssd.beta`, `ssd.top_words()` all live on the same object. There is no way to try a different backend without creating a new instance.
-
-**`ssdiff`**: `__init__` only prepares document vectors. You call `ssd.fit_pls()` or `ssd.fit_ols()` explicitly, and each returns a separate result object. You can fit both backends on the same data for comparison without rebuilding doc vectors.
-
-### 2. Backend Options
-
-**`ssdiff`**: PCA(N_PCA) → OLS. Always. N_PCA is fixed at construction (default 20).
-
-**`ssdiff`**: Two backends:
-- **PLS** (default): Pure-numpy NIPALS PLS1. Supports cross-validated component selection, three significance tests (permutation, split-half, permutation-calibrated split-half), and optional PCA preprocessing.
-- **PCA+OLS**: Matches official algorithm exactly (standardize + PCA + normal equations, all pure numpy). Supports auto-sweep for optimal K.
-
-### 3. Embedding Handling
-
-**`ssdiff`**: Requires Gensim `KeyedVectors`. Accepts either a pre-loaded KV object or a file path. Normalization via utility function `normalize_kv()`.
-
-```python
-from gensim.models import KeyedVectors
-kv = KeyedVectors.load_word2vec_format("model.bin")
-ssd = SSD(kv, docs, y, lexicon)
-# or
-ssd = SSD("model.bin", docs, y, lexicon)  # loads internally
-```
-
-**`ssdiff`**: Custom `Embeddings` class. Gensim is optional (only needed for `.kv` format). Normalization is a method on the object.
-
-```python
-emb = Embeddings.load("model.ssdembed")  # or .bin, .txt, .vec, .kv
-emb.normalize(l2=True, abtt_m=1)
-ssd = SSD(emb, corpus, y, lexicon)
-```
-
-### 4. Text Processing
-
-**`ssdiff`**: Utility functions (`load_spacy()`, `preprocess_texts()`, `build_docs_from_preprocessed()`). User must call them manually and pass `list[list[str]]` to SSD.
-
-```python
-nlp = load_spacy("pl_core_news_lg")
-stopwords = load_stopwords("pl")
-pre_docs = preprocess_texts(texts, nlp, stopwords)
-docs = build_docs_from_preprocessed(pre_docs)
-ssd = SSD(kv, docs, y, lexicon)
-```
-
-**`ssdiff`**: `Corpus` class encapsulates the full preprocessing pipeline.
-
-```python
-corpus = Corpus(texts, lang="pl")  # handles spaCy loading, tokenization, lemmatization
-ssd = SSD(emb, corpus, y, lexicon)
-```
-
-### 5. Result Representation
-
-**`ssdiff`**: All results are attributes on the SSD instance itself.
-
-```python
-ssd = SSD(kv, docs, y, lexicon)
-ssd.r2          # float
-ssd.beta        # ndarray
-ssd.f_pvalue    # float
-ssd.top_words() # pd.DataFrame (requires pandas)
-```
-
-**`ssdiff`**: Results are separate objects with a shared base class and view-based API.
-
-```python
-ssd = SSD(emb, corpus, y, lexicon)
-result = ssd.fit_pls()
-result.stats.r2         # float
-result.stats.pvalue     # float
-list(result.words)[:20] # list[Word] dataclasses (no pandas needed)
-result.clusters.pos     # SidedClustersView
-result.report().save("report.md")
-```
-
-### 6. Significance Testing
-
-**`ssdiff`**: F-test p-value from OLS regression (`scipy.stats.f.cdf`). This tests the null that *all PCA-space regression coefficients are zero* — not a direct test of the semantic dimension's meaningfulness.
-
-**`ssdiff`**: Both backends include significance testing:
-
-**PCA+OLS** (`fit_ols()`): F-test p-value (same null hypothesis as `ssdiff` — all PCA-space regression coefficients are zero). Always computed.
-
-**PLS** (`fit_pls()`): Three purpose-built significance tests for the SSD context:
-- **Permutation test** (`"perm"`): Shuffles y, refits PLS with CV, compares observed CV-R² to null distribution.
-- **Split-half test** (`"split"`): Splits data into train/test halves repeatedly, correlates predictions, applies overlap-corrected t-test.
-- **Calibrated split-half** (`"split_cal"`): Builds an exact null distribution by running the full split procedure on permuted y. Exact FPR control.
-
-### 7. Dependency Model
-
-**`ssdiff`**: All dependencies required at install time.
-- numpy, pandas, scikit-learn, gensim, spacy, requests, matplotlib
-
-**`ssdiff`**: Minimal core.
-- **Required**: numpy, spacy, matplotlib
-- **Optional**: gensim (only for saving `.kv` format; loading `.kv` works without gensim via an internal unpickler shim)
-
-### 8. Output Format
-
-**`ssdiff`**: Returns pandas DataFrames from `top_words()`, `results_table()`. Requires pandas as a dependency.
-
-**`ssdiff`**: Returns `list[dict]` from all methods. No pandas dependency. Easy to convert to DataFrame if needed:
-
-```python
-import pandas as pd
-df = pd.DataFrame(result.top_words(20))
-```
-
----
-
-## Constructor Parameters
-
-### SSD (continuous outcomes)
-
-| Parameter | `ssdiff` | `ssdiff` | Notes |
-|-----------|----------|-----------|-------|
-| embeddings | `kv: KeyedVectors \| str` | `embeddings: Embeddings` | ssdiff accepts path strings |
-| texts | `docs: list[list[str]]` | `corpus: Corpus` | ssdiff wraps preprocessing |
-| outcome | `y: ndarray` | `y: array-like` | Same |
-| lexicon | `lexicon` | `lexicon: Sequence \| set` | Same |
-| PCA components | `N_PCA: int = 20` | — | ssdiff: set in `fit_ols()` |
-| L2 normalize | `l2_normalize_docs: bool = True` | — | ssdiff: always normalizes |
-| unit beta | `use_unit_beta: bool = True` | — | ssdiff: always unit-normalizes beta |
-| window | `window: int = 3` | `window: int = 3` | Same |
-| SIF param | `sif_a: float = 1e-3` | `sif_a: float = 1e-3` | Same |
-| full doc | `use_full_doc: bool = False` | `use_full_doc: bool = False` | Same |
-
-### Group Analysis (categorical)
-
-| Parameter | `ssdiff` | `ssdiff` | Notes |
-|-----------|----------|-----------|-------|
-| class | `SSDGroup` (standalone) | `SSD.fit_groups()` | Unified into SSD |
-| groups | `groups: Sequence` (constructor) | `y` (SSD constructor) | y serves as group labels |
-| median split | N/A | `median_split: bool = False` | New in ssdiff |
-| permutations | `n_perm: int = 5000` | `n_perm: int = 5000` | Same |
-| p-correction | Bonferroni only | `correction: str = "holm"` | Holm/Bonf/FDR-BH/none |
-| random state | `random_state: int = 42` | `random_state: int = 2137` | |
-| min group size | N/A | 20 docs (auto-drop with warning) | New in ssdiff |
-| result type | `SSDGroup` + `SSDContrast` | `GroupResult` | Unified result |
-
----
-
-## Module Structure
-
-### Official `ssdiff` v0.2
+## Module layout
 
 ```
 ssdiff/
-├── __init__.py        # Exports all public API
-├── core.py            # _SSDBase, SSD
-├── crossgroup.py      # SSDGroup, SSDContrast
-├── clusters.py        # cluster_top_neighbors
-├── snippets.py        # Snippet extraction
-├── utils.py           # load_embeddings, normalize_kv, build_doc_vectors, filtered_neighbors
-├── preprocess.py      # load_spacy, load_stopwords, preprocess_texts
-├── lexicon.py         # suggest_lexicon, coverage_by_lexicon
-├── io_utils.py        # File I/O helpers
-└── sweep.py           # PCA parameter sweep
-```
-
-### `ssdiff` v1.0
-
-```
-ssdiff/
-├── __init__.py        # Exports: Embeddings, Corpus, SSD, result classes
-├── embeddings.py      # Embeddings class (load/normalize/save/lookup)
-├── corpus.py          # Corpus class (spaCy tokenization + suggest_lexicon/evaluate_lexicon)
-├── ssd.py             # SSD class (doc vectors + fit_pls/fit_ols/fit_groups)
-├── lang_config.py     # Language → spaCy model mapping
+├── __init__.py        — public exports
+├── ssd.py             — SSD class (doc-vector construction + fit dispatchers)
+├── embeddings.py      — Embeddings class (load / normalize / save / lookup)
+├── corpus.py          — Corpus class (spaCy pipeline + suggest/evaluate_lexicon)
+├── lang_config.py     — language → spaCy model mapping (23 languages)
+├── py.typed           — PEP 561 marker
 ├── backends/
-│   ├── pls.py         # PLS1 NIPALS, CV, permutation/split tests
-│   ├── pca_sweep.py   # PCA+OLS sweep
-│   └── group.py       # Group permutation tests (fit_groups backend)
+│   ├── pls.py         — PLS1 NIPALS, CV selection, perm / split / split_cal tests
+│   ├── pca_sweep.py   — PCA + OLS; joint interpretability/stability sweep
+│   ├── _sweep_math.py — sweep scoring primitives
+│   └── group.py       — unified permutation test (omnibus + pairwise)
 ├── results/
-│   ├── __init__.py    # Public exports: Result, PLSResult, PCAOLSResult, GroupResult, PairView, LexiconResult
-│   ├── base.py        # Result ABC, View/ScalarView contract, param-keyed cache
-│   ├── schema.py      # Frozen domain dataclasses (Word, Cluster, Snippet, Doc, Pair, Suggestion, …)
-│   ├── format.py      # APA-inspired formatting primitives
-│   ├── report.py      # Report builder + text/md/html/docx renderers
-│   ├── ssd.py         # ContinuousResult, PLSResult, PCAOLSResult
-│   ├── group.py       # GroupResult, PairView
-│   └── lexicon.py     # LexiconResult
+│   ├── __init__.py       — public result exports
+│   ├── core.py           — Result ABC, View / ScalarView / TestView, save()/to_* helpers, parameter-keyed cache
+│   ├── schema.py         — frozen dataclasses: Word, Cluster, ClusterWord, Snippet, Doc, Pair, Suggestion, Stats, FitInfo, Summary
+│   ├── continuous_result.py  — ContinuousResult, PLSResult, PCAOLSResult, and their views
+│   ├── group_result.py       — GroupResult, PairView, _GroupPairsListView
+│   ├── lexicon_result.py     — LexiconResult + lexicon views
+│   ├── report.py             — Report / Section builders + text/md/html/tex/docx/json renderers
+│   ├── format.py             — APA-style numeric formatting primitives (fmt_p, fmt_r, fmt_table, …)
+│   └── display.py            — set_repr_hints, DEFAULT_COLS registry, DEFAULT_MAX_ROWS
 └── utils/
-    ├── math.py        # standardize, PCA, KMeans, f_sf, t_sf, chi2_sf
-    ├── text.py        # spaCy wrappers, PreprocessedDoc
-    ├── vectors.py     # SIF doc vector construction
-    ├── neighbors.py   # Filtered neighbors, clustering
-    ├── snippets.py    # Snippet extraction
-    └── lexicon.py     # Lexicon suggestion, coverage
+    ├── math.py         — standardize, PCA, KMeans, f_sf / t_sf / chi2_sf (pure numpy)
+    ├── text.py         — spaCy wrappers, PreprocessedDoc dataclass
+    ├── vectors.py      — SIF-weighted doc-vector construction
+    ├── neighbors.py    — filtered nearest-neighbor lookup + cluster_top_neighbors
+    ├── snippets.py     — snippets_along_beta (context-window extraction)
+    ├── lexicon.py      — suggest_lexicon, coverage_by_lexicon
+    └── diagnostics.py  — progress_hook, runtime counters
 ```
 
-#### Results layer architecture
-
-The results layer uses a **View / ScalarView / Result** pattern:
-
-- `Result` (in `base.py`) is an abstract base class providing `.stats`, `.report()`, `.save()`, `.load()`, and `.clear_cache()`. It holds no mutable state after construction.
-- Views (`WordsView`, `ClustersIndex`, `SnippetsView`, `DocsView`, etc.) are lazy, cacheable, iterable objects that expose domain dataclasses. They implement a uniform contract: `len`, `iter`, `__getitem__`, `.where(...)`, `.df()`, `.to_dict()`, `.to_csv()`, etc. Parameter-keyed views (clusters, snippets) are cached on first access and can be recomputed with `.recompute(**params)`.
-- `ScalarView` handles `.stats` — a dict-like bag of scalar metrics with attribute access.
-- Domain objects (`Word`, `Cluster`, `Snippet`, `Doc`, `Pair`, `Suggestion`) are frozen dataclasses defined in `schema.py`.
-
-All three result types (`ContinuousResult`, `GroupResult`, `LexiconResult`) share the same view / export / report machinery. See [`results.md`](results.md) for the full user-facing surface.
-
-Key structural differences from v0.2:
-- **`ssdiff` separates backends** into their own subpackage (`backends/`)
-- **`ssdiff` results are a package** (`results/`) — eight focused files vs a single 1,260-line monolith
-- **`ssdiff` has first-class input classes** (`embeddings.py`, `corpus.py`) instead of utility functions
-- **`ssdiff` implements math internally** (`utils/math.py`) — pure numpy, no scipy dependency
+Core runtime deps: **numpy + spaCy + matplotlib**. Gensim is optional (only to write `.kv`; loading `.kv` works via an internal unpickler shim). Pandas / openpyxl / python-docx are behind the `[results]` extra and gated at call sites.
 
 ---
 
-## Numerical Equivalence
+## Pipeline flow
 
-When `ssdiff` uses `fit_ols()`, the pipeline matches the official `ssdiff` algorithm exactly:
-- Same standardize + PCA (SVD) + normal equations
-- Same beta back-projection: `components.T @ w / X_scale`
-- Same orientation logic (beta flipped to correlate positively with y)
+### Construction
 
-The `fit_pls()` backend is a different algorithm (NIPALS PLS1 vs PCA+OLS) and produces different results by design.
+```
+Embeddings + Corpus + y + lexicon
+        │
+        ▼
+   SSD.__init__()
+        │
+        ├─ build_and_normalize_doc_vectors()   # SIF-weighted averages near seeds
+        │    ├─ compute global SIF weights (word_freq / total_tokens)
+        │    ├─ seed mode: per-doc = mean of SIF-weighted context-window vectors
+        │    │   (full-doc mode when use_full_doc=True: SIF over all tokens)
+        │    └─ L2-normalize rows → x  (n × D)
+        ├─ standardize y (kept raw; backends standardize internally)
+        └─ store: x, y, _keep_mask, lexicon, window, sif_a, lang
+```
+
+No fitting runs at construction — just doc-vector preparation.
+
+### `fit_pls()`
+
+```
+ssd.x (n × D), ssd.y (n)
+        │
+        ├─ standardize X  (columns, ddof=0)
+        ├─ optional PCA preprocess  (var95 or fixed k) → Z
+        ├─ optional auto-select n_components  (K-fold CV, argmax R²)
+        ├─ NIPALS PLS1:
+        │    for each component:
+        │      w = X'y / ‖X'y‖
+        │      t = Xw           (score)
+        │      p = X't / t't    (loading)
+        │      q = y't / t't    (y-loading)
+        │      deflate X and y
+        ├─ β = W (P'W)⁻¹ Q
+        ├─ back-project through PCA preprocess (if any)  →  β in embedding space
+        ├─ unscale: β / X_scale
+        ├─ orient β: flip if corr(ŷ, y) < 0
+        └─ p-value (optional):
+             "perm"       → full permutation on CV-R²
+             "split"      → repeated train/test split, overlap-corrected t
+             "split_cal"  → split procedure on permuted y → exact null
+             "auto"       → "split" for n_components=1, "perm" otherwise
+                                │
+                                ▼
+                          PLSResult
+```
+
+### `fit_ols()`
+
+```
+ssd.x (n × D), ssd.y (n)
+        │
+        ├─ standardize X  (columns, ddof=0)
+        ├─ if fixed_k given → PCA(K) + OLS; else:
+        │    PCA sweep K=k_min..k_max, step=k_step
+        │    for each K:
+        │      PCA(K) → Z → OLS → β
+        │      cluster both β-poles → coherence
+        │      track stability as 1 − cos(β, β_prev)
+        │    score each K:
+        │      interp = detrend coherence by var%
+        │      stab   = −Δβ
+        │      joint  = 0.5 · (AUC_interp + AUC_stab)
+        │    → best_k
+        ├─ β = V_K w_K / X_scale    (back-project)
+        ├─ orient β: flip if corr(ŷ, y) < 0
+        └─ F-test p-value
+                │
+                ▼
+         PCAOLSResult
+```
+
+### `fit_groups()`
+
+```
+ssd.x (n × D), ssd.y (group labels or continuous if median_split=True)
+        │
+        ├─ (optional) median-split y into "low" / "high"
+        ├─ filter_small_groups (n < 20 dropped with warning)
+        ├─ backends.group.unified_permutation_test:
+        │    observed omnibus T = mean pairwise cosine distance between group centroids
+        │    for each permutation: shuffle labels, recompute T → null
+        │    pairwise: per-contrast T, p_raw, Cohen's d, contrast_norm
+        │    correct pairwise p-values (holm / bonferroni / fdr_bh / none)
+        └─ build per-contrast sub-view rows:
+             words  = nearest neighbors to ±β̂_pair
+             clusters, cluster_words = KMeans over neighbors
+             snippets = SIF-scored context windows along ±β̂_pair
+                │
+                ▼
+          GroupResult  (keeps x, groups around for gr.test() reruns)
+```
 
 ---
 
-## Summary
+## Results layer
 
-`ssdiff` v1.0 is a ground-up rewrite that keeps the same core idea (SIF doc vectors → regression → interpret beta as a semantic dimension) but changes *how* the code is organized:
+The results layer is a small set of composable primitives in `results/core.py`, extended by the four concrete result modules.
 
-1. **Composition over inheritance** — no shared base class, explicit fit calls
-2. **Multiple backends** — PLS (new, default) alongside PCA+OLS (matches official)
-3. **Proper input abstractions** — `Embeddings` and `Corpus` classes
-4. **Separate result objects** — clean separation of data prep, fitting, and interpretation
-5. **Minimal dependencies** — numpy, spacy, matplotlib (no scikit-learn, no pandas)
-6. **Purpose-built significance tests** — permutation, split-half, calibrated split-half
+### `Result` (ABC, in `core.py`)
+
+```python
+class Result:
+    corpus: Corpus | None
+    embeddings: Embeddings | None
+    _cache: dict[(str, tuple), View]      # parameter-keyed
+    _access: tuple[str, ...]              # repr discoverability — views / methods
+    _arrays: tuple[str, ...]              # repr discoverability — numpy arrays
+
+    def attach(corpus=None, embeddings=None) -> Self
+    def clear_cache(view: str | None = None) -> None
+    def _cache_get(name, params, compute) -> View
+    def _require_resource(resource, view_name) -> None   # raises with fix hint
+    def __repr__(self) / _repr_html_(self)               # summary + access hint + save hint
+```
+
+`_access` entries with `(...)` render as methods; bare names render as views. Prefixing every entry with `.` turns the repr into a copy-paste prompt (`result.clusters`, `result.test(...)`).
+
+### `View[T]`, `ScalarView`, `TestView` (in `core.py`)
+
+Every view is a thin iterable over frozen dataclasses that gains a uniform export surface by inheritance:
+
+```
+View[T]                  — tabular; __iter__ yields T (a dataclass)
+ ├─ ScalarView          — single-row; attribute + __getitem__ access to fields
+ │   └─ TestView        — callable; reruns a statistical test, mutates parent
+ └─ …                   — WordsView, DocsView, SnippetsView, SidedClustersView, …
+```
+
+Uniform methods defined on `View` / `ScalarView`:
+
+| Method | What it does |
+|---|---|
+| `to_dict`, `to_records`, `to_df`, `to_html`, `to_text` | in-memory export; `cols=None\|"all"\|sequence` |
+| `save(path, *, cols=None, k=None)` | disk export; extension dispatch |
+| `_resized(k)` | trim to first k rows (default: slicing) |
+| `_save_hint()` / `_save_hint_html()` | one-line repr footer |
+| `_default_cols()` | per-class default column subset (looked up via `DEFAULT_COLS`) |
+
+`TestView.__call__(name=None, **params)` dispatches to a subclass-implemented `_run(name, params)`, updates `self._info`, and runs an `_on_rerun()` hook so the parent's `stats.pvalue` stays in sync with `test.pvalue`.
+
+### Parameter-keyed cache
+
+Views computed from parameters live in `Result._cache` keyed by `(view_name, frozen_params)` where `frozen_params = tuple(sorted(params.items()))`. Each distinct parameter set gets its own entry:
+
+```python
+result.clusters.pos                # cache key ("clusters", (("side", "pos"), ("topn", 100), …))
+result.clusters.pos(topn=50)       # cache key ("clusters", (("side", "pos"), ("topn", 50),  …))
+result.clusters.pos                # still hits the topn=100 entry
+```
+
+`clear_cache()` drops the whole dict; `clear_cache("clusters")` drops every entry whose first key matches. There is no by-params form by design — users who need that should call the view with the specific params they want to rebuild.
+
+### Column defaults (`results/display.py`)
+
+A single registry maps view **class names** (not `_name`s) to their default column subset:
+
+```python
+DEFAULT_COLS: dict[str, tuple[str, ...]] = {
+    "WordsView":          ("side", "rank", "word", "cos_beta"),
+    "SnippetsView":       ("side", "doc_id", "cosine", "seed", "text_window"),
+    "StatsView":          ("backend", "r2", "pvalue", "n_kept", "iqr_effect"),
+    "OLSStatsView":       ("backend", "r2", "r2_adj", "pvalue", "n_kept", "iqr_effect"),
+    …
+}
+```
+
+Keying by `__name__` (not `_name`) lets sibling views with the same `_name` — e.g. `StatsView` vs `OLSStatsView` — diverge. Views without an entry fall through to full `_columns` via `View._default_cols()`.
+
+`_validate_cols(cols, view)` in `core.py` resolves `cols=` on every output call: `None → _default_cols()`, `"all" → _columns`, explicit sequence → validated (unknown names warn, dropped).
+
+### Numeric formatting (`results/format.py`)
+
+APA-style primitives used by every renderer:
+
+| helper | behavior |
+|---|---|
+| `fmt_p(x)` | `<.001` / three decimals (`.007`) — never scientific |
+| `fmt_r(x, signed=False)` | two-decimal correlation-scale number |
+| `fmt_d(x)` | three-decimal effect size |
+| `fmt_pct(x)` | percentage |
+| `fmt_count(x)` | thousands-separated integer |
+| `fmt_cell(v, col)` | dispatch on column name + value type |
+| `fmt_table(rows, headers, numeric, …)` | aligned plain-text table (used by every `to_text`) |
+
+Consistent formatting means repr, `to_text`, `to_html`, markdown, and LaTeX outputs all show p-values as `.007` (never `7.3e-03`) and correlations to two decimals.
+
+### Report builder (`results/report.py`)
+
+A `Report` is a multi-section builder (title + optional subtitle + list of `Section`s). Three `Section.kind`s:
+
+| kind | row shape | rendered as |
+|---|---|---|
+| `"kv"` | `list[(key, value)]` | 2-col table (terminal), `<table class="kv">` (HTML), `| Metric | Value |` (MD), `\begin{tabular}{ll}` (TeX) |
+| `"table"` | `list[list]` + headers | multi-col table in every format |
+| `"list"` | `list[str]` | bullet list |
+
+`Report.save(path)` dispatches on extension: `.md .txt .html .tex .docx .json`. The Plisiecki et al. (2025) citation appends unless `cite=False`.
 
 ---
 
-## Pipeline Flow Diagram
+## Pipeline flow diagram
 
 ```mermaid
 flowchart TD
-    %% ── 1. INPUT ───────────────────────────────────────
     subgraph INPUT["1. Input"]
         direction LR
-        texts["Texts\n(list[str])"]
-        y["Outcome y\n(numeric array)"]
-        emb["Embeddings\n(.ssdembed/.kv/.bin/.txt)"]
-        lex["Lexicon\n(seed words)"]
+        texts["Texts (list[str])"]
+        y["Outcome y"]
+        emb["Embeddings (.ssdembed/.kv/.bin/.txt)"]
+        lex["Lexicon (seed words)"]
     end
 
-    %% ── 2. PREPROCESSING ──────────────────────────────
     subgraph PREPROCESS["2. Preprocessing"]
         direction LR
-        load_emb["Embeddings.load()\nL2 normalize\noptional ABTT denoising"]
-        corpus["Corpus(texts, lang)\nspaCy tokenize\n→ lemmatize\n→ remove stopwords"]
-        filter["Filter NaN/Inf\nalign docs ↔ y\npass lexicon through"]
+        load_emb["Embeddings.load()\nL2 + optional ABTT"]
+        corpus["Corpus(texts, lang)\nspaCy → lemma → stopwords"]
+        filter["filter NaN/Inf\nalign docs ↔ y"]
     end
 
     texts --> corpus
@@ -386,13 +290,12 @@ flowchart TD
     y --> filter
     lex --> filter
 
-    %% ── 3. DOC VECTORS ────────────────────────────────
-    subgraph DOCVEC["3. Document Vector Construction (shared)"]
-        sif["Compute global SIF weights\nword_freq / total_tokens"]
+    subgraph DOCVEC["3. PCV construction"]
+        sif["global SIF weights"]
         sif --> mode{"use_full_doc?"}
-        mode -- "False (default)" --> seed_mode["SEED mode\nFor each doc: find lexicon hits →\nextract context window →\nSIF-weighted avg of context embeddings →\nmean of all occurrences"]
-        mode -- "True" --> full_mode["FULL mode\nSIF-weighted average of\nALL token embeddings"]
-        seed_mode --> l2["L2-normalize rows → X (n × D)"]
+        mode -- "False" --> seed_mode["SEED: per-seed context window\nSIF-weighted mean of neighbors"]
+        mode -- "True" --> full_mode["FULL: SIF-weighted mean of all tokens"]
+        seed_mode --> l2["L2-normalize → X (n × D)"]
         full_mode --> l2
     end
 
@@ -400,85 +303,118 @@ flowchart TD
     corpus --> sif
     filter --> sif
 
-    %% ── 4. STANDARDIZE + SPLIT ─────────────────────────
-    subgraph STD["4. Standardize & Split"]
-        std_xy["Z-score X (columns) and y"]
-        std_xy --> split{{"Choose backend"}}
+    subgraph STD["4. Standardize + dispatch"]
+        std_xy["z-score X (columns) and y"]
+        std_xy --> split{{"backend"}}
     end
 
     l2 --> std_xy
 
-    %% ── 5A. PLS ────────────────────────────────────────
-    subgraph PLS["5A. PLS Backend"]
+    subgraph PLS["5A. PLS backend"]
         pca_pre{"PCA preprocess?"}
-        pca_pre -- "Yes" --> pca_reduce["PCA reduction\n(var95 or fixed k)\nXs → Z (n × k)"]
-        pca_pre -- "No" --> cv_select
-        pca_reduce --> cv_select["Auto-select n_components\n10-fold CV, k=1..15\n1-SE rule → best_k"]
-        cv_select --> nipals["NIPALS PLS1\nFor each component:\n  w = X'y / ‖X'y‖\n  t = Xw  (score)\n  p = X't/t't  (loading)\n  q = y't/t't  (y-loading)\n  deflate X and y"]
-        nipals --> pls_coef["β = W(P'W)⁻¹Q\nback-project if PCA used\nunscale: β / X_scale"]
-        pls_coef --> pls_orient["Orient β\ncorr(ŷ,y) < 0 → flip"]
-        pls_orient --> pls_perm["Permutation test (opt.)\n1000× shuffle y\n→ null CV-R² → p_perm"]
-        pls_perm --> pls_stats["R², R²_adj, F p-value"]
+        pca_pre -- "yes" --> pca_reduce["PCA reduce"]
+        pca_pre -- "no" --> cv_select
+        pca_reduce --> cv_select["auto-select n_components\n(K-fold CV, argmax R²)"]
+        cv_select --> nipals["NIPALS PLS1"]
+        nipals --> pls_coef["β = W(P'W)⁻¹Q\nback-project + unscale"]
+        pls_coef --> pls_orient["orient β  (corr(ŷ,y) > 0)"]
+        pls_orient --> pls_test["perm / split / split_cal p-value"]
+        pls_test --> pls_done["PLSResult"]
     end
 
-    split -- ".fit_pls()" --> pca_pre
-
-    %% ── 5B. PCA/OLS ───────────────────────────────────
-    subgraph PCAOLS["5B. PCA/OLS Backend"]
-        sweep{"fixed_k given?"}
-        sweep -- "No (auto)" --> pca_sweep["PCA Sweep k=2,4,...,120\nFor each K:\n  PCA(K) → Z → OLS → β\n  Cluster both poles\n  → coherence + cos(β)\n  Track stability Δ(β)"]
-        pca_sweep --> score_k["Score each K\ninterp = detrend coherence by var%\nstab = −Δ(β)\njoint = 0.5×(AUCK_interp + AUCK_stab)\n→ best_k"]
+    subgraph PCAOLS["5B. PCA+OLS backend"]
+        sweep{"fixed_k?"}
+        sweep -- "no" --> pca_sweep["PCA sweep K=k_min..k_max\ncluster both poles per K"]
+        pca_sweep --> score_k["joint AUC(interp, stab) → best_k"]
         score_k --> final_pca
-        sweep -- "Yes (fixed)" --> final_pca["PCA(best_k) + OLS\nw = (Z'Z)⁻¹Z'y"]
-        final_pca --> backproj["Back-project\nβ = V'w / X_scale"]
-        backproj --> ols_orient["Orient β\ncorr(ŷ,y) < 0 → flip"]
-        ols_orient --> ols_stats["R², R²_adj, F p-value"]
+        sweep -- "yes" --> final_pca["PCA(K) + OLS"]
+        final_pca --> backproj["β = V'w / X_scale"]
+        backproj --> ols_orient["orient β"]
+        ols_orient --> ols_test["F-test p-value"]
+        ols_test --> ols_done["PCAOLSResult"]
     end
 
-    split -- ".fit_ols()" --> sweep
+    subgraph GROUP["5C. Group backend"]
+        med{"median_split?"}
+        med -- "yes" --> bins["low / high bins"]
+        med -- "no" --> labels["use raw labels"]
+        bins --> small
+        labels --> small["drop groups with n<20"]
+        small --> perm["unified permutation test\nomnibus + pairwise\ncorrect p-values"]
+        perm --> gr_done["GroupResult"]
+    end
 
-    %% ── 6. RESULTS ─────────────────────────────────────
+    split -- ".fit_pls()"    --> pca_pre
+    split -- ".fit_ols()"    --> sweep
+    split -- ".fit_groups()" --> med
+
     subgraph RESULT["6. Interpretation (shared)"]
-        beta["β vector (D,)\nSemantic dimension in embedding space"]
-        beta --> topw["result.words\nNearest neighbors to ±β̂\n→ pos & neg poles"]
-        beta --> cluster["result.clusters.pos/neg\nK-means on top neighbors\nauto-k via silhouette\n→ thematic clusters"]
-        beta --> effects["result.docs\ncosine alignment per doc\nΔy per +0.10 cos"]
-        beta --> snip["result.snippets\nSentences scored by\nalignment to β̂"]
+        beta["β / gradient (D,)"]
+        beta --> topw["result.words\nnearest neighbors to ±β"]
+        beta --> cluster["result.clusters.pos/neg\nKMeans over neighbors"]
+        beta --> effects["result.docs\nalignment + prediction"]
+        beta --> snip["result.snippets\ncontext windows along β"]
     end
 
-    pls_stats --> beta
-    ols_stats --> beta
+    pls_done --> beta
+    ols_done --> beta
+    gr_done  --> beta
 
-    %% ── STYLING ────────────────────────────────────────
     classDef input fill:#e8f4f8,stroke:#2196F3,stroke-width:2px
     classDef shared fill:#f3e5f5,stroke:#9C27B0,stroke-width:2px
     classDef pls fill:#e8f5e9,stroke:#4CAF50,stroke-width:2px
     classDef pcaols fill:#fff3e0,stroke:#FF9800,stroke-width:2px
+    classDef group fill:#fde7e7,stroke:#D32F2F,stroke-width:2px
     classDef result fill:#fce4ec,stroke:#E91E63,stroke-width:2px
 
     class INPUT input
     class PREPROCESS,DOCVEC,STD shared
     class PLS pls
     class PCAOLS pcaols
+    class GROUP group
     class RESULT result
 ```
 
-### Diagram Legend
+---
 
-| Color | Phase |
-|-------|-------|
-| Blue | Input data |
-| Purple | Shared preprocessing (both backends) |
-| Green | PLS backend path |
-| Orange | PCA/OLS backend path |
-| Pink | Shared interpretation output |
+## Significance testing
 
-### Key Differences
+### `fit_ols()` — F-test
 
-| Aspect | PLS | PCA/OLS |
-|--------|-----|---------|
-| **Dimensionality** | No mandatory reduction (optional PCA preprocess) | Mandatory PCA sweep |
-| **Fitting** | Iterative NIPALS: extracts latent components sequentially, deflating X and y | Two-step: PCA projection → closed-form OLS |
-| **Component selection** | 10-fold CV on residual R², 1-SE parsimony rule | Grid search scoring interpretability (cluster coherence) + stability (Δβ) |
-| **Significance** | Permutation test on CV-R² (null distribution) | F-test from OLS regression |
-| **Output** | Same β vector, same interpretation API | Same β vector, same interpretation API |
+Analytic F-test from OLS in PCA space. Tests the null that all PCA-space regression coefficients are zero. Cheap, always computed, returned as `result.stats.pvalue` and echoed on `result.test`.
+
+### `fit_pls()` — three options
+
+| name | idea | cost | control |
+|---|---|---|---|
+| `"perm"` | shuffle y, refit PLS with CV, compare observed CV-R² to null | `n_perm` PLS refits | exact under permutation |
+| `"split"` | repeated train/test split, correlate predictions, overlap-corrected t | `n_splits` PLS fits | asymptotic |
+| `"split_cal"` | run the full split procedure on permuted y → exact null | `n_splits × n_perm` PLS fits | exact |
+| `"auto"` | `"split"` for `n_components=1`, `"perm"` otherwise | — | — |
+
+All three are exposed as `result.test(name, **params)` for reruns; `result.stats.pvalue` is propagated by the `_on_rerun` hook.
+
+### `fit_groups()` — permutation omnibus + pairwise
+
+Observed omnibus statistic: mean pairwise cosine distance between group centroids. Null: shuffle group labels `n_perm` times. Pairwise contrasts get their own permutation p-values with multiple-comparison correction (Holm, Bonferroni, FDR-BH, or none).
+
+---
+
+## Pure-numpy math (`utils/math.py`)
+
+`ssdiff` avoids scipy/scikit-learn at runtime. Primitives implemented from scratch:
+
+- `standardize(X)` — z-score with `ddof=0` (matches sklearn's `StandardScaler`).
+- `pca(X, k)` — SVD-based PCA returning components + explained variance.
+- `kmeans(X, k)` — used for cluster_top_neighbors.
+- `f_sf / t_sf / chi2_sf` — survival functions for analytic tests.
+
+This keeps the wheel slim and avoids version pinning for transitive scipy / sklearn dependencies in the SSD_APP GUI build.
+
+---
+
+## See also
+
+- [`api_reference.md`](api_reference.md) — user-facing API.
+- [`results.md`](results.md) — results surface (views, reports, cache, reruns).
+- [`results_tables.md`](results_tables.md) — per-view column listings and defaults.

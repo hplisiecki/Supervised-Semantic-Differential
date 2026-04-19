@@ -3,37 +3,40 @@
 import numpy as np
 import pytest
 
-from ssdiff.results import PLSResult, PCAOLSResult
 from ssdiff.results.report import Report
 
 
 class TestPLSResultAttributes:
     def test_has_fit_stats(self, pls_result):
-        assert pls_result.stats.r2 is not None
-        assert pls_result.stats.pvalue is not None
-        assert 0 <= pls_result.stats.r2 <= 1
+        import math
+        assert isinstance(pls_result.stats.r2, float)
+        assert 0.0 <= pls_result.stats.r2 <= 1.0
+        assert math.isfinite(pls_result.stats.r2)
+        assert isinstance(pls_result.stats.pvalue, float)
+        assert 0.0 <= pls_result.stats.pvalue <= 1.0
 
     def test_has_beta(self, pls_result):
         assert pls_result.beta.ndim == 1
-        assert pls_result.beta_unit.ndim == 1
+        assert pls_result.gradient.ndim == 1
 
     def test_has_pls_specific(self, pls_result):
-        # fit_info carries PLS hyperparams
-        assert pls_result.fit_info.n_components is not None
-        # perm_null set when p_method='perm'
+        assert isinstance(pls_result.fit_info.n_components, int)
+        assert pls_result.fit_info.n_components >= 1
         assert pls_result.perm_null is not None
+        assert pls_result.perm_null.shape == (pls_result.fit_info.n_perm,)
 
     def test_has_doc_info(self, pls_result):
         assert pls_result.stats.n_kept > 0
-        n = pls_result.stats.n_kept
         assert pls_result.stats.n_kept + pls_result.stats.n_dropped == pls_result.stats.n_raw
 
 
 class TestPCAOLSResultAttributes:
     def test_has_fit_stats(self, pcaols_result):
-        assert pcaols_result.stats.r2 is not None
-        assert pcaols_result.stats.pvalue is not None
-        assert 0 <= pcaols_result.stats.r2 <= 1
+        import math
+        assert isinstance(pcaols_result.stats.r2, float)
+        assert 0.0 <= pcaols_result.stats.r2 <= 1.0
+        assert math.isfinite(pcaols_result.stats.r2)
+        assert 0.0 <= pcaols_result.stats.pvalue <= 1.0
 
     def test_has_pcaols_specific(self, pcaols_result):
         # sweep_result is None when fixed_k is explicit
@@ -49,14 +52,25 @@ class TestResultInterpretation:
     def test_words_view(self, pls_result):
         words = list(pls_result.words)
         assert len(words) > 0
-        # Words have side/rank/word/cos_beta
         w = words[0]
         assert w.side in ("pos", "neg")
-        assert isinstance(w.word, str)
+        assert isinstance(w.word, str) and len(w.word) > 0
         assert isinstance(w.cos_beta, float)
-        # Both sides present
         sides = {w.side for w in words}
         assert sides == {"pos", "neg"}
+        # cos_beta is cosine with a unit gradient → must be in [-1, 1]
+        assert all(-1.0 - 1e-9 <= x.cos_beta <= 1.0 + 1e-9 for x in words)
+        # Pos words have positive cos_beta; neg words have negative cos_beta.
+        for x in words:
+            if x.side == "pos":
+                assert x.cos_beta >= 0, x
+            else:
+                assert x.cos_beta <= 0, x
+        # Within each side, words must be sorted by |cos_beta| descending.
+        pos = [x.cos_beta for x in words if x.side == "pos"]
+        neg = [abs(x.cos_beta) for x in words if x.side == "neg"]
+        assert pos == sorted(pos, reverse=True), "pos words not sorted desc"
+        assert neg == sorted(neg, reverse=True), "neg words not sorted desc"
 
     def test_words_sliced_by_side(self, pls_result):
         """Top-N words per side via list comprehension."""
@@ -73,7 +87,7 @@ class TestResultInterpretation:
         assert hasattr(d, "doc_id")
         assert hasattr(d, "y_true")
         assert hasattr(d, "y_hat")
-        assert hasattr(d, "cos_align")
+        assert hasattr(d, "alignment_score")
 
 
 class TestResultRepr:
@@ -94,12 +108,12 @@ class TestEffectSizes:
         assert isinstance(pls_result.stats.y_std, float)
         assert pls_result.stats.y_std > 0
 
-    def test_cos_align_on_docs(self, pls_result):
-        """cos_align is per-doc, accessed via docs view."""
-        cos_aligns = np.array([d.cos_align for d in pls_result.docs])
-        assert cos_aligns.shape == (pls_result.stats.n_kept,)
-        assert np.all(cos_aligns >= -1.0 - 1e-10)
-        assert np.all(cos_aligns <= 1.0 + 1e-10)
+    def test_alignment_score_on_docs(self, pls_result):
+        """alignment_score is per-doc, accessed via docs view."""
+        scores = np.array([d.alignment_score for d in pls_result.docs])
+        assert scores.shape == (pls_result.stats.n_kept,)
+        assert np.all(scores >= -1.0 - 1e-10)
+        assert np.all(scores <= 1.0 + 1e-10)
 
     def test_y_corr_pred(self, pls_result):
         assert 0 <= pls_result.stats.y_corr_pred <= 1
@@ -188,7 +202,7 @@ class TestR2AdjPlacement:
     def test_pls_stats_has_no_r2_adj(self, pls_result):
         """PLS stats must not expose r2_adj — adjusted R² is OLS-only."""
         with pytest.raises(AttributeError):
-            pls_result.stats.r2_adj
+            _ = pls_result.stats.r2_adj
         assert "r2_adj" not in pls_result.stats.columns
 
     def test_pcaols_has_r2_adj(self, pcaols_result):

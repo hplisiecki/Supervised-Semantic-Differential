@@ -220,7 +220,7 @@ class TestSaveRoundTrip:
             nkjp_ssdembed.vectors[:n].copy(),
         )
         small.l2_normalized = nkjp_ssdembed.l2_normalized
-        small.abtt_m = nkjp_ssdembed.abtt_m
+        small.abtt = nkjp_ssdembed.abtt
         with tempfile.TemporaryDirectory() as td:
             stem = os.path.join(td, "rt")
             with pytest.warns(UserWarning, match="normalization and ABTT metadata will be lost"):
@@ -241,7 +241,7 @@ class TestNormalizeReal:
     def test_l2_normalize(self, nkjp_txt_seq):
         """L2 normalization should make all row norms ~1.0."""
         emb = Embeddings(list(nkjp_txt_seq.index_to_key), nkjp_txt_seq.vectors.copy())
-        emb.normalize(l2=True, abtt_m=0, re_normalize=False)
+        emb.normalize(l2=True, abtt=0, re_normalize=False)
         norms = np.linalg.norm(emb.vectors, axis=1)
         assert np.allclose(norms, 1.0, atol=1e-5), (
             f"Row norms not 1.0: min={norms.min():.6f} max={norms.max():.6f}"
@@ -256,7 +256,7 @@ class TestNormalizeReal:
         _, S_before, _ = np.linalg.svd(centered_before[:5000], full_matrices=False)
         var_before = S_before[0] ** 2 / np.sum(S_before[:10] ** 2)
 
-        emb.normalize(l2=True, abtt_m=1, re_normalize=True)
+        emb.normalize(l2=True, abtt=1, re_normalize=True)
 
         # Measure top PC variance after
         centered_after = emb.vectors - emb.vectors.mean(axis=0)
@@ -269,7 +269,7 @@ class TestNormalizeReal:
     def test_normalize_matches_pre_normalized(self, nkjp_txt_seq, nkjp_ssdembed):
         """Normalizing raw .txt should match the pre-normalized .ssdembed on common vocab."""
         emb = Embeddings(list(nkjp_txt_seq.index_to_key), nkjp_txt_seq.vectors.copy())
-        emb.normalize(l2=True, abtt_m=1, re_normalize=True)
+        emb.normalize(l2=True, abtt=1, re_normalize=True)
 
         # Compare on common vocab (may differ by 1-2 words)
         common = set(emb.key_to_index) & set(nkjp_ssdembed.key_to_index)
@@ -300,7 +300,7 @@ class TestNormalizeReal:
             nkjp_ssdembed.vectors.copy(),
         )
         keys_before = list(emb.index_to_key)
-        emb.normalize(l2=True, abtt_m=1)
+        emb.normalize(l2=True, abtt=1)
         assert emb.index_to_key == keys_before
         assert len(emb) == len(keys_before)
 

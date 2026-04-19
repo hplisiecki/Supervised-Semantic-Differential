@@ -5,7 +5,6 @@ import sys
 
 import pytest
 
-
 CORE_IMPORTS = [
     "ssdiff.embeddings",
     "ssdiff.ssd",

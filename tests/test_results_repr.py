@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 import ssdiff
+from ssdiff.results.continuous_result import WordsView
 from ssdiff.results.display import _save_hint_enabled
+from ssdiff.results.group_result import PairsListView
+from ssdiff.results.schema import Pair, Word
 
 
 def test_set_repr_hints_default_true():
@@ -27,14 +31,6 @@ def test_set_repr_hints_returns_none():
 def test_set_repr_hints_validates_bool():
     with pytest.raises(TypeError):
         ssdiff.set_repr_hints("yes")  # type: ignore[arg-type]
-
-
-import numpy as np
-
-from ssdiff.results.schema import Word, Doc, Pair, Suggestion
-from ssdiff.results.continuous_result import WordsView, DocsView
-from ssdiff.results.group_result import PairsListView
-from ssdiff.results.lexicon_result import SuggestionsView
 
 
 def _make_words(n: int) -> list[Word]:
@@ -257,7 +253,6 @@ def test_result_repr_html_symmetric_with_repr():
 
 def test_continuous_result_drops_formatted_export_methods():
     """Result has no bundle-save or file-export methods — save() lives per-view."""
-    import numpy as np
     from ssdiff.results.continuous_result import PLSResult
     rng = np.random.default_rng(0)
     x = rng.normal(size=(10, 3))
@@ -266,7 +261,7 @@ def test_continuous_result_drops_formatted_export_methods():
     pls = PLSResult(
         x=x, beta=beta, keep_mask=np.ones(10, dtype=bool),
         n_raw=10, n_kept=10, n_dropped=0,
-        y_kept=y, _y_mean=np.array([y.mean()]),
+        y=y, _y_mean=np.array([y.mean()]),
         _y_scale=np.array([y.std() or 1.0]),
         r2=0.5, pvalue=0.01,
     )
@@ -283,7 +278,6 @@ def test_continuous_result_drops_formatted_export_methods():
 
 def test_continuous_result_to_text_is_compact_not_full_report():
     """Result.to_text returns the compact summary, not the full report."""
-    import numpy as np
     from ssdiff.results.continuous_result import PLSResult
     rng = np.random.default_rng(0)
     x = rng.normal(size=(10, 3))
@@ -292,7 +286,7 @@ def test_continuous_result_to_text_is_compact_not_full_report():
     pls = PLSResult(
         x=x, beta=beta, keep_mask=np.ones(10, dtype=bool),
         n_raw=10, n_kept=10, n_dropped=0,
-        y_kept=y, _y_mean=np.array([y.mean()]),
+        y=y, _y_mean=np.array([y.mean()]),
         _y_scale=np.array([y.std() or 1.0]),
         r2=0.5, r2_adj=0.4, pvalue=0.01,
     )
@@ -303,8 +297,7 @@ def test_continuous_result_to_text_is_compact_not_full_report():
 
 def test_clusters_index_repr_when_uncached():
     """If clusters not yet computed, repr says '(call to compute)' — never trigger compute."""
-    import numpy as np
-    from ssdiff.results.continuous_result import PLSResult, ClustersIndex
+    from ssdiff.results.continuous_result import PLSResult
     rng = np.random.default_rng(0)
     x = rng.normal(size=(10, 3))
     beta = rng.normal(size=3)
@@ -312,7 +305,7 @@ def test_clusters_index_repr_when_uncached():
     pls = PLSResult(
         x=x, beta=beta, keep_mask=np.ones(10, dtype=bool),
         n_raw=10, n_kept=10, n_dropped=0,
-        y_kept=y, _y_mean=np.array([y.mean()]),
+        y=y, _y_mean=np.array([y.mean()]),
         _y_scale=np.array([y.std() or 1.0]),
         r2=0.5, r2_adj=0.4, pvalue=0.01,
     )
@@ -325,7 +318,6 @@ def test_clusters_index_repr_when_uncached():
 
 
 def test_clusters_index_save_hint_present():
-    import numpy as np
     from ssdiff.results.continuous_result import PLSResult
     rng = np.random.default_rng(0)
     x = rng.normal(size=(10, 3))
@@ -334,7 +326,7 @@ def test_clusters_index_save_hint_present():
     pls = PLSResult(
         x=x, beta=beta, keep_mask=np.ones(10, dtype=bool),
         n_raw=10, n_kept=10, n_dropped=0,
-        y_kept=y, _y_mean=np.array([y.mean()]),
+        y=y, _y_mean=np.array([y.mean()]),
         _y_scale=np.array([y.std() or 1.0]),
         r2=0.5, r2_adj=0.4, pvalue=0.01,
     )
@@ -362,61 +354,22 @@ def test_pair_view_repr_includes_contrast_and_stats():
     assert "pair_snippets.csv" in text
 
 
-def test_report_save_docx_accepts_style_apa(tmp_path):
+def test_report_save_docx_writes_file(tmp_path):
     pytest.importorskip("docx")
     from ssdiff.results.report import Report, Section
     rep = Report(title="T", subtitle=None,
                  sections=[Section(title="S", kind="kv", rows=[("k", "v")])])
     out = tmp_path / "r.docx"
-    rep.save(str(out), style="APA")
+    rep.save(str(out))
     assert out.exists()
-
-
-def test_report_save_docx_rejects_unknown_style(tmp_path):
-    pytest.importorskip("docx")
-    from ssdiff.results.report import Report, Section
-    rep = Report(title="T", subtitle=None,
-                 sections=[Section(title="S", kind="kv", rows=[("k", "v")])])
-    out = tmp_path / "r.docx"
-    with pytest.raises(ValueError, match="APA"):
-        rep.save(str(out), style="MLA")
-
-
-def test_report_save_style_rejected_for_non_docx(tmp_path):
-    from ssdiff.results.report import Report
-    rep = Report(title="T", sections=[])
-    with pytest.raises(TypeError, match="docx"):
-        rep.save(str(tmp_path / "r.md"), style="APA")
-
-
-def test_report_save_passes_style_through(tmp_path):
-    pytest.importorskip("docx")
-    from ssdiff.results.report import Report, Section
-    rep = Report(title="T", subtitle=None,
-                 sections=[Section(title="S", kind="kv", rows=[("k", "v")])])
-    out = tmp_path / "r.docx"
-    rep.save(str(out), style="APA")
-    assert out.exists()
-
-
-def test_report_save_rejects_style_for_non_docx(tmp_path):
-    """style= is only meaningful for .docx today; passing for .md/.tex raises."""
-    from ssdiff.results.report import Report, Section
-    rep = Report(title="T", subtitle=None,
-                 sections=[Section(title="S", kind="kv", rows=[("k", "v")])])
-    out = tmp_path / "r.md"
-    with pytest.raises(TypeError, match="style"):
-        rep.save(str(out), style="APA")
 
 
 # ---------- spec acceptance tests (Examples 1-12 from spec_console_repr.md) ----------
 
-import pytest
 
 
 def _shared_pls():
     """Reuse the same builder as save-hint tests."""
-    import numpy as np
     from ssdiff.results.continuous_result import PLSResult
     rng = np.random.default_rng(0)
     n, d = 30, 4
@@ -426,7 +379,7 @@ def _shared_pls():
     return PLSResult(
         x=x, beta=beta, keep_mask=np.ones(n, dtype=bool),
         n_raw=n, n_kept=n, n_dropped=0,
-        y_kept=y, _y_mean=np.array([y.mean()]),
+        y=y, _y_mean=np.array([y.mean()]),
         _y_scale=np.array([y.std() or 1.0]),
         r2=0.30, r2_adj=0.29, pvalue=4.83e-08,
         test_name="split", test_info={"pvalue": 4.83e-08, "split_r2": 0.33,
@@ -458,28 +411,33 @@ def test_spec_example_1_pls_repr_shape():
 
 
 def test_spec_example_2_pls_stats_repr_shape():
-    """Example 2: `pls.stats`"""
+    """Example 2: `pls.stats` — narrowed defaults."""
     pls = _shared_pls()
     text = repr(pls.stats)
-    # K/V layout — these key labels must show
-    for k in ("backend", "r2", "pvalue",
-             "n_raw", "n_kept", "n_dropped",
-             "y_mean", "y_std", "beta_norm",
-             "delta", "iqr_effect", "y_corr_pred"):
-        assert k in text
+    body = text.split("Save:")[0]
+    # Default columns for StatsView per docs/results_tables.md
+    for k in ("backend", "r2", "pvalue", "n_kept", "iqr_effect"):
+        assert k in body
     # PLS: no r2_adj (OLS-only statistic)
-    assert "r2_adj" not in text
+    assert "r2_adj" not in body
+    # Non-default columns must not appear in narrowed repr body
+    for k in ("n_raw", "n_dropped", "y_mean", "y_std",
+             "beta_norm", "delta", "y_corr_pred"):
+        assert k not in body
     assert "Save:" in text
     assert ".to_dict()" in text
     assert ".to_df()" in text
 
 
 def test_spec_example_3_pls_test_repr_shape():
-    """Example 3: `pls.test`"""
+    """Example 3: `pls.test` — narrowed defaults."""
     pls = _shared_pls()
     text = repr(pls.test)
-    for k in ("name", "pvalue", "split_r2", "n_splits", "split_ratio"):
-        assert k in text
+    body = text.split("Save:")[0]
+    for k in ("name", "pvalue", "split_r2"):
+        assert k in body
+    for k in ("n_splits", "split_ratio", "random_state"):
+        assert k not in body
     assert "Save:" in text
     assert "Rerun:" in text
     assert "n_perm=" in text
@@ -542,14 +500,13 @@ def test_spec_example_7_docs_view_pos_repr_includes_slice_hint():
     """`pls.docs.pos(3)` renders with slice hint."""
     pls = _shared_pls()
     text = repr(pls.docs.pos(3))
-    for h in ("doc_id", "y_true", "y_hat", "residual", "cos_align"):
+    for h in ("doc_id", "y_true", "y_hat", "residual", "alignment_score"):
         assert h in text
     assert ".pos()" in text
     assert ".neg()" in text
 
 
 def _shared_group():
-    import numpy as np
     from ssdiff.results.group_result import GroupResult
     from ssdiff.results.schema import Pair
     return GroupResult(
@@ -576,12 +533,14 @@ def test_spec_example_8_group_result_repr_shape():
 
 
 def test_spec_example_9_group_test_view_pairwise():
-    """Example 9: `gr.test`."""
+    """Example 9: `gr.test` — narrowed defaults."""
     gr = _shared_group()
     text = repr(gr.test)
-    for k in ("name", "pvalue", "omnibus_T", "omnibus_p",
-             "G", "n_kept", "n_perm", "correction"):
-        assert k in text
+    body = text.split("Save:")[0]
+    for k in ("name", "pvalue", "omnibus_T"):
+        assert k in body
+    for k in ("omnibus_p", "G", "n_kept", "n_perm", "correction"):
+        assert k not in body
     assert "pairwise:" in text
     assert "low_vs_high" in text
     assert "Rerun:" in text

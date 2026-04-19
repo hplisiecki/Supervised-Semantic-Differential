@@ -16,6 +16,16 @@ from ssdiff.utils.vectors import build_and_normalize_doc_vectors
 class SSD:
     """Supervised Semantic Differential — continuous outcome.
 
+    Attributes
+    ----------
+    x : ndarray of shape (n, D)
+        Matrix of per-document vectors. In the standard SSD pipeline each
+        row is a **personal concept vector (PCV)**; in the lexical-norm mode
+        each row is a single word embedding.
+    y : ndarray of shape (n,)
+        Outcome values, numeric (continuous case) or object (group case),
+        with NaN / empty entries dropped.
+
     Builds document vectors from corpus + lexicon, then fit with a backend:
 
     >>> emb = Embeddings.load("model.ssdembed")
@@ -43,8 +53,9 @@ class SSD:
         sif_a: float = 1e-3,
         use_full_doc: bool = False,
     ) -> None:
-        """Build document vectors from corpus and lexicon, preparing data for
-        PLS or PCA+OLS fitting.
+        """Build a **personal concept vector (PCV)** for each document via
+        SIF-weighted aggregation of local contexts around lexicon occurrences,
+        preparing data for PLS or PCA+OLS fitting.
 
         Parameters
         ----------
@@ -120,14 +131,13 @@ class SSD:
             window=window, sif_a=sif_a, use_full_doc=use_full_doc,
         )
 
-        self.keep_mask = keep
+        self._keep_mask = keep
         self.n_raw = len(keep)
         self.n_kept = int(keep.sum())
         self.n_dropped = self.n_raw - self.n_kept
 
-        y_kept = y_clean[keep]
         self.x = np.asarray(X, dtype=np.float64)
-        self.y_kept = y_kept
+        self.y = y_clean[keep]
         self.is_numeric = is_numeric
 
     # ── Shared helpers ─────────────────────────────────────────
@@ -190,11 +200,11 @@ class SSD:
             "sif_a": self.sif_a,
             "lang": self.lang,
             "x": self.x,
-            "keep_mask": self.keep_mask,
+            "keep_mask": self._keep_mask,
             "n_raw": self.n_raw,
             "n_kept": self.n_kept,
             "n_dropped": self.n_dropped,
-            "y_kept": self.y_kept,
+            "y": self.y,
         }
 
     # ── PLS backend ────────────────────────────────────────────
@@ -204,7 +214,6 @@ class SSD:
         *,
         n_components: int | str = 1,
         cv_folds: int = 10,
-        use_1se: bool = True,
         pca_preprocess: int | str | None = None,
         p_method: Literal["auto", "split", "perm", "split_cal"] | None = "auto",
         n_perm: int = 1000,
@@ -218,11 +227,10 @@ class SSD:
         Parameters
         ----------
         n_components : int or "auto"
-            Number of PLS components. Default 1. "auto" = select via CV.
+            Number of PLS components. Default 1. "auto" = select via CV
+            (argmax mean CV R²).
         cv_folds : int
             Number of CV folds for component selection.
-        use_1se : bool
-            Use 1-SE rule for parsimonious component selection.
         pca_preprocess : int or str or None
             Optional PCA dim reduction before PLS (e.g., 50 or "var95").
         p_method : str or None, default "auto"
@@ -260,7 +268,7 @@ class SSD:
             )
 
         # Standardize y (deferred from __init__)
-        ys_2d, _y_mean, _y_scale = standardize(self.y_kept.reshape(-1, 1))
+        ys_2d, _y_mean, _y_scale = standardize(self.y.reshape(-1, 1))
         ys = ys_2d.ravel()
 
         # Standardize X
@@ -295,11 +303,10 @@ class SSD:
         # Component selection
         if n_components is None or n_components == "auto":
             cv_result = pls1_cv_select(
-                self.x, self.y_kept,
+                self.x, self.y,
                 max_components=15,
                 n_folds=cv_folds,
                 seed=random_state,
-                use_1se_rule=use_1se,
                 verbose=verbose,
                 pca_k=pca_k,
             )
@@ -347,7 +354,7 @@ class SSD:
         if resolved == "perm":
             from ssdiff.backends.pls import pls1_permutation_test
             p_val, _, cv_r2_null = pls1_permutation_test(
-                self.x, self.y_kept, n_comp,
+                self.x, self.y, n_comp,
                 n_perm=n_perm, seed=random_state, verbose=verbose,
                 pca_k=pca_k,
             )
@@ -356,7 +363,7 @@ class SSD:
         elif resolved == "split":
             from ssdiff.backends.pls import pls1_split_test
             pvalue, split_mean_r = pls1_split_test(
-                self.x, self.y_kept, n_comp,
+                self.x, self.y, n_comp,
                 n_splits=n_splits, split_ratio=split_ratio,
                 seed=random_state, pca_k=pca_k,
                 verbose=verbose,
@@ -364,7 +371,7 @@ class SSD:
         elif resolved == "split_cal":
             from ssdiff.backends.pls import pls1_split_test_calibrated
             pvalue, split_mean_r = pls1_split_test_calibrated(
-                self.x, self.y_kept, n_comp,
+                self.x, self.y, n_comp,
                 n_splits=n_splits, split_ratio=split_ratio,
                 n_perm=n_perm, seed=random_state, pca_k=pca_k,
                 verbose=verbose,
@@ -408,6 +415,12 @@ class SSD:
                 "random_state": random_state,
             }
 
+        if pca_preprocess_components is not None:
+            W_out = pca_preprocess_components.T @ W
+        else:
+            W_out = W
+        T_out = T
+
         return PLSResult(
             beta=beta,
             pvalue=pvalue,
@@ -426,6 +439,8 @@ class SSD:
                 "cv_result": cv_result,
                 "cv_scores": cv_scores,
                 "perm_null": perm_null,
+                "component_scores": T_out,
+                "component_weights": W_out,
             },
             test_name=test_name,
             test_info=test_info,
@@ -467,7 +482,7 @@ class SSD:
             )
 
         # Standardize y (deferred from __init__)
-        ys_2d, _y_mean, _y_scale = standardize(self.y_kept.reshape(-1, 1))
+        ys_2d, _y_mean, _y_scale = standardize(self.y.reshape(-1, 1))
         ys = ys_2d.ravel()
 
         # Standardize X
@@ -480,7 +495,7 @@ class SSD:
                 X_scale=X_scale,
                 x=self.x,
                 ys=ys,
-                kv=self.embeddings,
+                embeddings=self.embeddings,
                 pca_k_values=list(range(k_min, k_max + 1, k_step)),
                 verbose=verbose,
                 lang=self.lang,
@@ -533,6 +548,8 @@ class SSD:
             },
             raw_diagnostics={
                 "sweep_result": sweep_result,
+                "pca_components": components,
+                "pca_weights": w_reg,
             },
             sweep=_sweep_rows,
             test_name="f_test",
@@ -551,7 +568,7 @@ class SSD:
         random_state: int = 2137,
         verbose: bool = False,
     ):
-        """Fit group comparison using y_kept as group labels.
+        """Fit group comparison using y as group labels.
 
         Parameters
         ----------
@@ -587,13 +604,13 @@ class SSD:
         from ssdiff.results.group_result import GroupResult
         from ssdiff.results.schema import Pair
 
-        # Local copies — never mutate self.x or self.y_kept
+        # Local copies — never mutate self.x or self.y
         x_local = self.x.copy()
 
         if median_split:
-            groups_local = _median_split(self.y_kept, random_state=random_state)
+            groups_local = _median_split(self.y, random_state=random_state)
         else:
-            groups_local = np.asarray(self.y_kept, dtype=object)
+            groups_local = np.asarray(self.y, dtype=object)
 
         # Small-group filtering (only when not median_split)
         n_group_dropped = 0
@@ -656,4 +673,16 @@ class SSD:
         )
 
     def __repr__(self) -> str:
-        return f"SSD(n_kept={self.n_kept}, n_dropped={self.n_dropped})"
+        dim = self.x.shape[1] if self.x.ndim == 2 else 0
+        header = (
+            f"SSD  n={self.n_kept:,}/{self.n_raw:,}  "
+            f"D={dim}  |L|={len(self.lexicon)}  lang={self.lang}"
+        )
+        arrays = "  arrays:  .x  .y"
+        methods = "  methods: .fit_pls()  .fit_ols()  .fit_groups()"
+        return "\n".join([header, arrays, methods])
+
+    def _repr_html_(self) -> str:
+        """Render a plain-text repr inside a ``<pre>`` block for Jupyter."""
+        import html as _html
+        return f"<pre>{_html.escape(repr(self))}</pre>"

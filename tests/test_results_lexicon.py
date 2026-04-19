@@ -1,6 +1,5 @@
 """LexiconResult view contract."""
 
-import pytest
 
 from ssdiff.results.lexicon_result import LexiconResult
 from ssdiff.results.schema import Suggestion

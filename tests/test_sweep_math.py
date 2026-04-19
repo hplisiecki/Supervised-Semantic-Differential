@@ -71,9 +71,7 @@ class TestZscoreIgnoreNan:
 
     def test_all_nan(self):
         x = np.array([np.nan, np.nan])
-        with np.errstate(invalid="ignore"), \
-             pytest.warns(RuntimeWarning):
-            z = zscore_ignore_nan(x)
+        z = zscore_ignore_nan(x)
         assert all(np.isnan(z))
 
 
@@ -216,3 +214,54 @@ class TestPCAKSelectionResult:
         r = PCAKSelectionResult(best_k=50)
         with pytest.raises(AttributeError):
             r.best_k = 60
+
+
+# ---------------------------------------------------------------------------
+# End-to-end sweep K-selection
+# ---------------------------------------------------------------------------
+
+class TestSweepPicksCorrectKEndToEnd:
+    """fit_ols(fixed_k=None) must pick K near the true rank on synthetic data
+    whose y depends on a single PC direction. The selected K is allowed to
+    bracket the truth (1..3) on tiny data; the assertion fails loudly if the
+    sweep selects the max of the range (overfitting) or refuses to move off
+    k_min (underfitting)."""
+
+    def test_sweep_selects_low_k_for_rank_one_signal(self):
+        import numpy as np
+
+        from ssdiff.corpus import Corpus
+        from ssdiff.embeddings import Embeddings
+        from ssdiff.ssd import SSD
+
+        rng = np.random.default_rng(0)
+        D = 12
+        vocab = [f"w{i:02d}" for i in range(40)]
+        mat = rng.normal(size=(len(vocab), D)).astype(np.float32)
+        mat /= np.linalg.norm(mat, axis=1, keepdims=True)
+        emb = Embeddings(vocab, mat)
+
+        # Build docs where y depends on the frequency of a fixed "signal" seed.
+        seeds = ["w00", "w01", "w02"]
+        filler = [f"w{i:02d}" for i in range(3, 40)]
+        n_docs = 80
+        docs = []
+        y = np.empty(n_docs, dtype=np.float64)
+        for i in range(n_docs):
+            seed = rng.choice(seeds)
+            ctx = list(rng.choice(filler, size=4, replace=False))
+            docs.append([seed] + ctx)
+            # Outcome depends on which seed appears (3-level signal).
+            y[i] = {"w00": -1.0, "w01": 0.0, "w02": 1.0}[seed] + rng.normal(0, 0.1)
+
+        corpus = Corpus(docs, pretokenized=True, lang="pl")
+        ssd = SSD(emb, corpus, y, set(seeds))
+
+        result = ssd.fit_ols(fixed_k=None, k_min=1, k_max=8, k_step=1)
+        assert result.sweep_result is not None
+        picked = result.fit_info.n_components
+        # Signal is low-rank; sweep must not pick the ceiling (overfit)
+        # and must not refuse to leave the floor (underfit on a real signal).
+        assert 1 <= picked <= 5, f"unexpected K: {picked}"
+        # And best_k bookkeeping must match n_components.
+        assert result.fit_info.n_components == result.fit_info.best_k

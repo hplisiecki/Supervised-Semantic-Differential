@@ -87,6 +87,11 @@ _AT = re.compile(r"@\S+")
 
 
 def _keep_token(tok, stopset: set[str]) -> bool:
+    """Return True if *tok* should be retained after filtering.
+
+    Rejects whitespace, punctuation, quotes, currency symbols, URLs (@-prefixed
+    handles), digits, empty lemmas, and stopwords.
+    """
     if tok.is_space or tok.is_punct or tok.is_quote or tok.is_currency:
         return False
     if _URL.match(tok.text) or _AT.match(tok.text):
@@ -168,12 +173,18 @@ class PreprocessedProfile:
 # ---------- Helpers ----------
 
 def _pipe(nlp, texts: Sequence[str], batch_size: int, n_process: int):
+    """Run *texts* through *nlp.pipe*, ensuring a sentencizer is attached first."""
     if "parser" not in nlp.pipe_names and "sentencizer" not in nlp.pipe_names:
         nlp.add_pipe("sentencizer")
     return nlp.pipe(texts, batch_size=batch_size, n_process=n_process)
 
 
 def _extract_from_doc(doc, stopset: set[str]):
+    """Extract sentence-level and flat token data from a spaCy *doc*.
+
+    Returns a 6-tuple: (sents_surface, sents_lemmas, doc_lemmas,
+    sent_char_spans, token_to_sent, sents_kept_idx).
+    """
     s_surface, s_lemmas, s_spans, s_kept_idx = [], [], [], []
     doc_lemmas, token_to_sent = [], []
     for si, sent in enumerate(doc.sents):
@@ -193,6 +204,7 @@ def _extract_from_doc(doc, stopset: set[str]):
 
 
 def _is_profile_input(texts) -> bool:
+    """Return True if *texts* looks like profile input (each element is a list of posts)."""
     for x in texts:
         if x is None:
             continue
@@ -201,6 +213,7 @@ def _is_profile_input(texts) -> bool:
 
 
 def _sanitize_posts(posts) -> list[str]:
+    """Decode bytes, strip whitespace, and drop empty strings from a post list."""
     out: list[str] = []
     for p in posts or []:
         if isinstance(p, bytes):
@@ -348,7 +361,25 @@ def preprocess_texts(
 def build_docs_from_preprocessed(
     pre_docs: list[Union[PreprocessedDoc, PreprocessedProfile]],
 ) -> list:
-    """Extract flat token lists from preprocessed docs/profiles."""
+    """Extract flat token lists from preprocessed docs or profiles.
+
+    Bridges the gap between :func:`preprocess_texts` output and downstream
+    consumers that expect plain ``list[list[str]]`` token lists.
+
+    Parameters
+    ----------
+    pre_docs : list[PreprocessedDoc] or list[PreprocessedProfile]
+        Output of :func:`preprocess_texts`.  All elements must be the same
+        type (mixing is not supported).
+
+    Returns
+    -------
+    list[list[str]] or list[list[list[str]]]
+        For ``PreprocessedDoc`` inputs: a flat list where each element is
+        ``doc_lemmas`` (``list[str]``).
+        For ``PreprocessedProfile`` inputs: a nested list where each element
+        is ``post_doc_lemmas`` (``list[list[str]]``).
+    """
     if not pre_docs:
         return []
     first = pre_docs[0]

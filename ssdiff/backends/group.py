@@ -190,7 +190,7 @@ def unified_permutation_test(
     dict with keys:
         omnibus_T, omnibus_p,
         pairwise: dict[(g1,g2)] -> {
-            beta_unit, T, p_raw, p_corrected, cohens_d,
+            gradient, T, p_raw, p_corrected, cohens_d,
             n_g1, n_g2, contrast_norm
         },
         group_labels, G, correction
@@ -240,8 +240,8 @@ def unified_permutation_test(
         null_omnibus[p] = float(null_pairwise[p].mean()) if n_pairs > 0 else 0.0
 
     # --- P-values ---
-    from ssdiff.utils import _diagnostic
     from ssdiff.results.format import fmt_p
+    from ssdiff.utils import _diagnostic
 
     omnibus_p = float((np.sum(null_omnibus >= T_omnibus_obs) + 1) / (n_perm + 1))
     _diagnostic(verbose, f"[groups] omnibus p={fmt_p(omnibus_p)} ({G} groups, {n_perm} perms)")
@@ -280,7 +280,7 @@ def unified_permutation_test(
         )
 
         pairwise[(g1, g2)] = {
-            "beta_unit": contrast_unit,
+            "gradient": contrast_unit,
             "T": float(T_pairwise_obs[k]),
             "p_raw": float(p_raw_arr[k]),
             "p_corrected": float(p_corrected_arr[k]),
