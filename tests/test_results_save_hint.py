@@ -175,8 +175,8 @@ def test_group_test_view_to_text_appends_pairwise_section():
 
 
 def test_sided_clusters_view_save_hint_includes_words_line():
-    from ssdiff.results.continuous_result import SidedClustersView
-    v = SidedClustersView(parent=None, side="pos", rows=[],
+    from ssdiff.results.continuous_result import ClustersViewSided
+    v = ClustersViewSided(parent=None, side="pos", rows=[],
                           words_rows=[], snippets_rows=None, params={})
     hint = v._save_hint()
     assert "Save:" in hint
@@ -213,7 +213,7 @@ def test_pairs_list_view_save_hint_includes_lookup_line():
     hint = v._save_hint()
     assert "Save:" in hint
     assert "Lookup:" in hint
-    assert "PairView" in hint
+    assert "Pair" in hint
     assert "<group1>" in hint and "<group2>" in hint
 
     # Populated case: hint substitutes real group names so copy-paste works.

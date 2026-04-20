@@ -50,7 +50,7 @@ class FitInfoView(ScalarView):
     _columns = (
         "n_components", "pca_k", "p_method", "n_perm", "n_splits",
         "split_ratio", "split_mean_r", "random_state",
-        "k_min", "k_max", "k_step", "best_k",
+        "k_min", "k_max", "k_step", "best_k", "pca_k_source",
     )
 
     def __init__(self, info: FitInfo):
@@ -113,12 +113,12 @@ class WordsView(View[Word]):
         return self._rows[i]
 
     @property
-    def pos(self) -> SidedWordsView:
-        return SidedWordsView("pos", self._rows)
+    def pos(self) -> WordsViewSided:
+        return WordsViewSided("pos", self._rows)
 
     @property
-    def neg(self) -> SidedWordsView:
-        return SidedWordsView("neg", self._rows)
+    def neg(self) -> WordsViewSided:
+        return WordsViewSided("neg", self._rows)
 
     def to_text(self, max_rows: int | None = None, cols=None) -> str:
         from ssdiff.results.core import DEFAULT_MAX_ROWS
@@ -140,18 +140,18 @@ class WordsView(View[Word]):
 
     def _save_hint(self) -> str:
         return (super()._save_hint()
-                + "\nSides: .pos   .neg → SidedWordsView (top 20; .pos(50) for more)")
+                + "\nSides: .pos   .neg → WordsViewSided (top 20; .pos(50) for more)")
 
 
-class SidedWordsView(WordsView):
+class WordsViewSided(WordsView):
     """Words filtered to one β side.
 
     Defaults to 20 rows (by rank) for display AND export — iterating,
     saving to CSV, or rendering in the terminal all stop at 20. Call with
     a different ``k`` to resize:
 
-        words.pos          → SidedWordsView, 20 rows
-        words.pos(50)      → SidedWordsView, 50 rows (or fewer, if fewer available)
+        words.pos          → WordsViewSided, 20 rows
+        words.pos(50)      → WordsViewSided, 50 rows (or fewer, if fewer available)
         words.pos(None)    → all available rows on this side
     """
 
@@ -164,8 +164,11 @@ class SidedWordsView(WordsView):
         self._all_side_rows = side_rows
         self._k = k
 
-    def __call__(self, k: int | None = 20) -> SidedWordsView:
-        return SidedWordsView(self._side_key, self._all_side_rows, k=k)
+    def __call__(self, k: int | None = 20) -> WordsViewSided:
+        return WordsViewSided(self._side_key, self._all_side_rows, k=k)
+
+    def _filename_stem(self) -> str:
+        return f"words_{self._side_key}"
 
     def _save_hint(self) -> str:
         max_k = len(self._all_side_rows)
@@ -195,7 +198,7 @@ class ClusterWordsView(View[ClusterWord]):
         return self._rows[i]
 
 
-class SidedClustersView(View[Cluster]):
+class ClustersViewSided(View[Cluster]):
     """Cluster summary view for one β pole.
 
     Callable to recompute with different parameters, e.g.
@@ -223,7 +226,7 @@ class SidedClustersView(View[Cluster]):
 
     def __getitem__(self, i):
         if isinstance(i, slice):
-            return SidedClustersView(
+            return ClustersViewSided(
                 parent=self._parent, side=self._side,
                 rows=self._rows[i], words_rows=self._words_rows,
                 snippets_rows=self._snippets_rows, params=self._params,
@@ -234,11 +237,14 @@ class SidedClustersView(View[Cluster]):
     @property
     def params(self): return dict(self._params)
 
-    def __call__(self, **params) -> SidedClustersView:
+    def __call__(self, **params) -> ClustersViewSided:
         """Recompute clusters with updated parameters (e.g. ``topn=50, k=3``)."""
         merged = {**self._params, **params}
         merged.pop("side", None)
         return self._parent._clusters_for(self._side, **merged)
+
+    def _filename_stem(self) -> str:
+        return f"clusters_{self._side}"
 
     def words(self, cluster_id: int) -> ClusterWordsView:
         """Return a ClusterWordsView for the given cluster_id on this side."""
@@ -247,9 +253,9 @@ class SidedClustersView(View[Cluster]):
         )
 
     @property
-    def snippets(self) -> SidedSnippetsView:
+    def snippets(self) -> SnippetsViewSided:
         """Snippets on this side — callable with a cluster_id to filter further."""
-        return SidedSnippetsView(self._side, self._snippets_rows)
+        return SnippetsViewSided(self._side, self._snippets_rows)
 
     def _save_hint(self) -> str:
         base = super()._save_hint()
@@ -266,17 +272,17 @@ class SidedClustersView(View[Cluster]):
 
 
 class ClustersIndex:
-    """`.pos` / `.neg` accessors that hand back a SidedClustersView."""
+    """`.pos` / `.neg` accessors that hand back a ClustersViewSided."""
 
     def __init__(self, parent: ContinuousResult):
         self._parent = parent
 
     @property
-    def pos(self) -> SidedClustersView:
+    def pos(self) -> ClustersViewSided:
         return self._parent._clusters_for("pos")
 
     @property
-    def neg(self) -> SidedClustersView:
+    def neg(self) -> ClustersViewSided:
         return self._parent._clusters_for("neg")
 
     def _cached_count(self, side: str) -> int | None:
@@ -372,7 +378,7 @@ class SnippetsView(View[Snippet]):
                 + "\nFilter: (side='pos', cluster_id=0, ...)")
 
 
-class SidedSnippetsView(SnippetsView):
+class SnippetsViewSided(SnippetsView):
     """Snippets filtered to one β side; callable with a cluster_id to filter further.
 
     Solves the confusing `clusters.neg.snippets` bound-method repr by behaving
@@ -393,6 +399,9 @@ class SidedSnippetsView(SnippetsView):
         if cluster_id is not None:
             merged["cluster_id"] = cluster_id
         return SnippetsView(rows, params=merged, _no_trunc=True)
+
+    def _filename_stem(self) -> str:
+        return f"snippets_{self._side_key}"
 
     def _save_hint(self) -> str:
         return (super()._save_hint()
@@ -935,7 +944,7 @@ class ContinuousResult(Result):
                                 cos_beta=signed_cos, contrast=None))
         return out
 
-    def _clusters_for(self, side: str, **params) -> SidedClustersView:
+    def _clusters_for(self, side: str, **params) -> ClustersViewSided:
         """Fetch or compute the cluster view for ``side`` with the given params (cached)."""
         defaults = {"topn": 100, "k": None, "k_min": 2, "k_max": 10,
                     "random_state": 2137, "min_cluster_size": 2}
@@ -944,7 +953,7 @@ class ContinuousResult(Result):
         def _compute():
             self._require_resource("embeddings", "clusters")
             rows, words_rows = self._compute_clusters_for_side(**params)
-            return SidedClustersView(
+            return ClustersViewSided(
                 parent=self, side=side, rows=rows, words_rows=words_rows,
                 snippets_rows=self._current_snippets_rows(), params=params,
             )
@@ -1131,6 +1140,21 @@ class ContinuousResult(Result):
             ("Δ (Q4−Q1)", fmt_d(s.iqr_effect)),
         ])
         sections.append(Section(title="Stats", kind="kv", rows=stat_rows))
+
+        fi = self.fit_info
+        fit_rows = []
+        if fi.p_method is not None:
+            fit_rows.append(("p_method", fi.p_method))
+        if fi.n_components is not None:
+            fit_rows.append(("n_components", fi.n_components))
+        if fi.pca_k is not None:
+            fit_rows.append(("pca_k", fi.pca_k))
+        if fi.pca_k_source is not None:
+            fit_rows.append(("pca_k_source", fi.pca_k_source))
+        if fi.random_state is not None:
+            fit_rows.append(("random_state", fi.random_state))
+        if fit_rows:
+            sections.append(Section(title="Fit info", kind="kv", rows=fit_rows))
 
         if top_words and self.embeddings is not None:
             pos_words = [w for w in self.words if w.side == "pos"][:top_words]

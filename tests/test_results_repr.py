@@ -78,9 +78,9 @@ def test_pairs_list_view_tuple_lookup_unaffected_by_slice_dispatch():
               p_corrected=0.02, cohens_d=0.6, n_g1=10, n_g2=10,
               contrast_norm=1.0)
     view = PairsListView([p1, p2])
-    pv = view["a", "b"]
-    from ssdiff.results.group_result import PairView
-    assert isinstance(pv, PairView)
+    looked_up = view["a", "b"]
+    # Tuple lookup now returns the Pair dataclass directly, not a wrapper.
+    assert isinstance(looked_up, Pair)
     sliced = view[:1]
     assert isinstance(sliced, PairsListView)
     assert len(sliced) == 1
@@ -335,25 +335,6 @@ def test_clusters_index_save_hint_present():
     assert "clusters_neg.csv" in out
 
 
-def test_pair_view_repr_includes_contrast_and_stats():
-    from ssdiff.results.group_result import PairView
-    from ssdiff.results.schema import Pair
-    p = Pair(contrast="low_vs_high", g1="low", g2="high",
-             T=0.842, p_raw=0.0001, p_corrected=0.0002, cohens_d=0.512,
-             n_g1=297, n_g2=300, contrast_norm=1.0)
-    pv = PairView(pair=p, reversed=False)
-    text = repr(pv)
-    assert "PairView" in text
-    assert "low" in text and "high" in text
-    assert "T=" in text
-    assert "p_corr" in text or "p=" in text
-    assert "d=" in text
-    assert "n=297/300" in text or "n=297" in text
-    assert "stats.to_dict()" in text
-    assert "pair_words.csv" in text
-    assert "pair_snippets.csv" in text
-
-
 def test_report_save_docx_writes_file(tmp_path):
     pytest.importorskip("docx")
     from ssdiff.results.report import Report, Section
@@ -477,8 +458,8 @@ def test_spec_example_5_clusters_index_uncached():
 
 
 def test_spec_example_6_sided_clusters_view_includes_words_hint():
-    """Example 6: `pls.clusters.pos` → SidedClustersView."""
-    from ssdiff.results.continuous_result import SidedClustersView
+    """Example 6: `pls.clusters.pos` → ClustersViewSided."""
+    from ssdiff.results.continuous_result import ClustersViewSided
     from ssdiff.results.schema import Cluster
     rows = [
         Cluster(cluster_id=i, side="pos", size=8 - i,
@@ -486,7 +467,7 @@ def test_spec_example_6_sided_clusters_view_includes_words_hint():
                 centroid_cos_beta=0.28 - 0.02 * i, contrast=None)
         for i in range(4)
     ]
-    v = SidedClustersView(parent=None, side="pos", rows=rows,
+    v = ClustersViewSided(parent=None, side="pos", rows=rows,
                           words_rows=[], snippets_rows=None, params={})
     text = repr(v)
     for h in ("cluster_id", "size", "coherence", "centroid_cos_beta"):
@@ -547,19 +528,18 @@ def test_spec_example_9_group_test_view_pairwise():
     assert "correction=" in text
 
 
-def test_spec_example_10_pair_view_repr_shape():
-    """Example 10: `gr.pairs['low', 'high']`."""
+def test_spec_example_10_pair_tuple_lookup_returns_pair_dataclass():
+    """Example 10: ``gr.pairs[(g1, g2)]`` returns a ``Pair`` dataclass directly."""
+    from ssdiff.results.schema import Pair
     gr = _shared_group()
-    text = repr(gr.pairs["low", "high"])
-    assert "PairView" in text
-    assert "low" in text and "high" in text
-    assert "T=" in text
-    assert "p_corr" in text
-    assert "d=" in text
-    assert "n=297/300" in text
-    assert "stats.to_dict()" in text
-    assert "pair_words.csv" in text
-    assert "pair_snippets.csv" in text
+    # _shared_group uses original labels "low"/"high"; groups=None so pairs are not relabeled.
+    pair = next(iter(gr.pairs))
+    looked_up = gr.pairs[(pair.g1, pair.g2)]
+    assert isinstance(looked_up, Pair)
+    assert looked_up.contrast == pair.contrast
+    # Reverse-order lookup raises KeyError (no sign-flip).
+    with pytest.raises(KeyError):
+        _ = gr.pairs[(pair.g2, pair.g1)]
 
 
 def test_spec_example_11_lexicon_result_repr_shape():

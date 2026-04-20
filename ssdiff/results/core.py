@@ -14,6 +14,7 @@ import json
 import warnings
 from abc import ABC
 from collections.abc import Callable, Iterator, Sequence
+from pathlib import Path
 from typing import Any, Generic, TypeVar
 
 from ssdiff.results.display import (
@@ -83,9 +84,9 @@ def _validate_cols(cols, view: View) -> tuple[tuple[str, ...], str | None]:
     return known, None
 
 
-def _warn(msg: str) -> None:
+def _warn(msg: str, *, stacklevel: int = 3) -> None:
     """Emit a UserWarning with a stacklevel that points to caller code."""
-    warnings.warn(msg, UserWarning, stacklevel=3)
+    warnings.warn(msg, UserWarning, stacklevel=stacklevel)
 
 
 # ---------------- row / rendering helpers ------------------------------------
@@ -256,12 +257,23 @@ class View(Generic[T]):
         """Parameters used to compute this view; empty dict for parameterless views."""
         return {}
 
+    def _filename_stem(self) -> str:
+        """Return the default filename stem (no extension) for ``save()``.
+
+        The default returns ``self._name``.  Sided subclasses override this to
+        append the side, e.g. ``"clusters_pos"`` / ``"clusters_neg"``.
+        """
+        return self._name
+
     def _save_hint(self) -> str:
         """Return the save-hint footer text shown below repr output."""
         cols_preview = "   ".join(repr(c) for c in self._columns[:4])
         more = " …" if len(self._columns) > 4 else ""
-        return ("Save:  .save('file.ext')   # csv json xlsx md txt html tex docx\n"
-                "       .to_df()  .to_records()  .to_dict()\n"
+        stem = self._filename_stem()
+        return (f"Save:  .save()  .save('file.ext')  .save('file.ext', cols=[...])"
+                f"   # default: {stem}.csv\n"
+                f"       extensions: csv json xlsx md txt html tex docx\n"
+                f"       .to_df()  .to_records()  .to_dict()\n"
                 f"       cols=[{cols_preview}{more}] → select & order columns")
 
     def _save_hint_html(self) -> str:
@@ -361,22 +373,26 @@ class View(Generic[T]):
         return "\n".join(parts)
 
     # -------- unified save() ---------------------------------------------
-    def save(self, path: str, *, cols=None, k: int | None = None) -> None:
+    def save(self, path: str | Path | None = None, *, cols=None, k: int | None = None) -> None:
         """Write the view to ``path``; format is inferred from the extension.
 
         Supported extensions: ``.csv .json .xlsx .md .txt .html .tex .docx``.
 
         Parameters
         ----------
-        path : str
-            Output file. Extension picks the format.
+        path : str, Path, or None
+            Output file. Extension picks the format. When omitted, defaults to
+            ``<cwd>/<view_name>.csv`` where ``<view_name>`` is the per-view
+            hardcoded filename stem (e.g. ``words``, ``clusters_pos``).
         cols : sequence of str, optional
             Column subset (and order). Unknown names warn and are skipped.
         k : int, optional
             Row cap for size-bearing views (words / docs / clusters / snippets).
             Silently ignored on single-row views.
         """
-        ext = _get_ext(path)
+        if path is None:
+            path = Path(f"{self._filename_stem()}.csv")
+        ext = _get_ext(str(path))
         _check_ext(ext)
 
         view = self._resized(k) if k is not None else self
@@ -527,8 +543,11 @@ class ScalarView(View):
     def _save_hint(self) -> str:
         cols_str = "   ".join(self._columns[:4])
         more = " …" if len(self._columns) > 4 else ""
-        return ("Save:  .save('file.ext')   # csv json xlsx md txt html tex docx\n"
-                "       .to_dict()  .to_df()\n"
+        stem = self._filename_stem()
+        return (f"Save:  .save()  .save('file.ext')  .save('file.ext', cols=[...])"
+                f"   # default: {stem}.csv\n"
+                f"       extensions: csv json xlsx md txt html tex docx\n"
+                f"       .to_dict()  .to_df()\n"
                 f"       cols=[{cols_str}{more}] → select & order keys")
 
     # save() uses ScalarView's single-row iter, producing one-row csv/xlsx/etc.

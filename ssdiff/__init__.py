@@ -1,19 +1,25 @@
 """ssdiff — Supervised Semantic Differential.
 
 Top-level package: re-exports the primary public API (``SSD``, ``Corpus``,
-``Embeddings``, result classes) so users can do ``from ssdiff import SSD``
+``Embeddings``, result classes, view classes) so users can do ``from ssdiff import SSD``
 without knowing the internal module structure.
 """
 
 from ssdiff.corpus import Corpus
 from ssdiff.embeddings import Embeddings
 from ssdiff.results import (
+    ClustersIndexPaired,
+    ClustersViewSided,
+    ClustersViewSidedPaired,
     GroupResult,
     LexiconResult,
-    PairView,
     PCAOLSResult,
     PLSResult,
     Result,
+    SnippetsViewPaired,
+    SnippetsViewSided,
+    WordsViewPaired,
+    WordsViewSided,
     set_repr_hints,
 )
 from ssdiff.ssd import SSD
@@ -23,12 +29,18 @@ __all__ = [
     "SSD",
     "Corpus",
     "Embeddings",
+    "ClustersIndexPaired",
+    "ClustersViewSided",
+    "ClustersViewSidedPaired",
     "GroupResult",
     "LexiconResult",
     "PCAOLSResult",
     "PLSResult",
-    "PairView",
     "Result",
+    "SnippetsViewPaired",
+    "SnippetsViewSided",
+    "WordsViewPaired",
+    "WordsViewSided",
     "progress_hook",
     "set_repr_hints",
 ]

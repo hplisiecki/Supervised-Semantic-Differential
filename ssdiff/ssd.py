@@ -544,6 +544,7 @@ class SSD:
                 "k_max": k_max if sweep_result is not None else None,
                 "k_step": k_step if sweep_result is not None else None,
                 "best_k": sweep_result.best_k if sweep_result is not None else None,
+                "pca_k_source": "sweep" if fixed_k is None else "fixed",
             },
             raw_diagnostics={
                 "sweep_result": sweep_result,
@@ -651,7 +652,7 @@ class SSD:
             ))
 
         # words_rows / cluster_rows / snippets_rows left empty here;
-        # per-contrast neighbor lookup is deferred to embeddings access on PairView.
+        # per-contrast neighbor lookup is deferred to top-level gr.words / .clusters / .snippets.
         return GroupResult(
             G=G,
             n_kept=len(x_local),
