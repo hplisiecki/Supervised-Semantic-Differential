@@ -305,6 +305,7 @@ class FitInfo:
     k_max: int | None = None
     k_step: int | None = None
     best_k: int | None = None
+    pca_k_source: str | None = None  # "sweep" | "fixed" | None (PLS)
 
 
 @dataclass(frozen=True, slots=True)

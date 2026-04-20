@@ -5,7 +5,7 @@ import pytest
 
 from ssdiff.corpus import Corpus
 from ssdiff.results import GroupResult
-from ssdiff.results.group_result import PairView
+from ssdiff.results.schema import Pair
 from ssdiff.ssd import SSD
 
 
@@ -23,9 +23,10 @@ class TestFitGroups2Groups:
 
     def test_attributes(self, result):
         assert result.G == 2
-        # group_labels removed; check via pairs
+        # Labels are canonical; originals survive in group_labels.
         g_labels = {p.g1 for p in result.pairs} | {p.g2 for p in result.pairs}
-        assert g_labels == {"A", "B"}
+        assert g_labels == {"g_1", "g_2"}
+        assert set(result.group_labels.values()) == {"A", "B"}
         assert result.n_kept > 0
         assert np.isfinite(result.test.omnibus_T)
         assert 0 <= result.test.omnibus_p <= 1
@@ -115,8 +116,10 @@ class TestFitGroupsMedianSplit:
         ssd = SSD(tiny_kv, corpus, sample_y, lexicon)
         result = ssd.fit_groups(median_split=True, n_perm=50)
         assert result.G == 2
+        # Canonical labels; originals are "high" / "low"
         g_labels = {p.g1 for p in result.pairs} | {p.g2 for p in result.pairs}
-        assert g_labels == {"high", "low"}
+        assert g_labels == {"g_1", "g_2"}
+        assert set(result.group_labels.values()) == {"high", "low"}
 
     def test_median_split_identical_y_raises(self, tiny_kv, sample_docs, lexicon):
         y_const = np.ones(len(sample_docs))
@@ -162,7 +165,7 @@ class TestFitGroupsCorrection:
 
 
 class TestGroupResultPairsAccess:
-    """GroupResult.pairs access: tuple key, iteration, PairView semantics."""
+    """GroupResult.pairs access: tuple key, iteration, canonical-only semantics."""
 
     @pytest.fixture(scope="class")
     def result(self, tiny_kv, large_docs, large_groups_2, lexicon):
@@ -174,19 +177,24 @@ class TestGroupResultPairsAccess:
         pairs = list(result.pairs)
         assert len(pairs) == 1
 
-    def test_pairs_tuple_key_access(self, result):
-        """gr.pairs["A", "B"] returns a PairView."""
-        pv = result.pairs["A", "B"]
-        assert isinstance(pv, PairView)
-        assert "A" in pv.contrast and "B" in pv.contrast
+    def test_pairs_tuple_key_returns_pair(self, result):
+        """gr.pairs[(g_1, g_2)] returns the Pair dataclass directly."""
+        p = result.pairs[("g_1", "g_2")]
+        assert isinstance(p, Pair)
+        assert p.contrast == "g_1_vs_g_2"
+
+    def test_pairs_reverse_order_raises_keyerror(self, result):
+        """Reverse-order lookup raises KeyError — no sign-flip."""
+        with pytest.raises(KeyError):
+            _ = result.pairs[("g_2", "g_1")]
 
     def test_pairs_missing_key_raises(self, result):
         with pytest.raises(KeyError):
             _ = result.pairs["X", "Y"]
 
 
-class TestGroupResultPairViewSemantics:
-    """PairView sign-flip and field-swap on reverse access."""
+class TestGroupResultMultiPair:
+    """3-group result exposes all canonical pairs."""
 
     @pytest.fixture(scope="class")
     def result_3g(self, tiny_kv, large_docs_3x20, large_groups_3x20, lexicon):
@@ -195,29 +203,20 @@ class TestGroupResultPairViewSemantics:
         return ssd.fit_groups(n_perm=50, random_state=42)
 
     def test_pair_access_all_contrasts(self, result_3g):
-        """3 groups → 3 pairs accessible by tuple key."""
+        """3 groups → 3 canonical pairs accessible by tuple key."""
         pairs = list(result_3g.pairs)
         g_set = {(p.g1, p.g2) for p in pairs}
-        # C(3,2) = 3 unique ordered pairs
         assert len(g_set) == 3
+        assert g_set == {("g_1", "g_2"), ("g_1", "g_3"), ("g_2", "g_3")}
 
-    def test_reverse_access_flips_t(self, result_3g):
-        """Accessing pair in reverse order flips the T statistic sign."""
-        # Find one pair
+    def test_reverse_order_raises_keyerror(self, result_3g):
+        """Any reverse-order lookup raises KeyError (canonical only)."""
         p_canonical = list(result_3g.pairs)[0]
         g1, g2 = p_canonical.g1, p_canonical.g2
-        pv_forward = result_3g.pairs[g1, g2]
-        pv_reverse = result_3g.pairs[g2, g1]
-        assert abs(pv_forward.pair.T + pv_reverse.pair.T) < 1e-9
-
-    def test_reverse_access_preserves_pvalues(self, result_3g):
-        """P-values are symmetric — must not flip on reverse access."""
-        p_canonical = list(result_3g.pairs)[0]
-        g1, g2 = p_canonical.g1, p_canonical.g2
-        pv_forward = result_3g.pairs[g1, g2]
-        pv_reverse = result_3g.pairs[g2, g1]
-        assert pv_forward.pair.p_raw == pv_reverse.pair.p_raw
-        assert pv_forward.pair.p_corrected == pv_reverse.pair.p_corrected
+        # Forward works
+        _ = result_3g.pairs[(g1, g2)]
+        with pytest.raises(KeyError):
+            _ = result_3g.pairs[(g2, g1)]
 
 
 class TestGroupReport:
@@ -358,48 +357,3 @@ class TestHolmStrictInflation:
         # and can equal, but the smaller ones get ×m, ×(m-1)).
         strict_gains = [c > rv + 1e-12 for c, rv in zip(corrs, raws)]
         assert any(strict_gains), f"Holm produced no inflation: raws={raws}, corrs={corrs}"
-
-
-class TestPairViewContrastFiltering:
-    """PairView.words and .snippets must filter flat rows by contrast."""
-
-    def test_pairview_words_filtered_to_this_contrast(
-        self, tiny_kv, large_docs_3x20, large_groups_3x20, lexicon,
-    ):
-        from ssdiff.corpus import Corpus
-        from ssdiff.ssd import SSD
-        corpus = Corpus(large_docs_3x20, pretokenized=True, lang="pl")
-        ssd = SSD(tiny_kv, corpus, large_groups_3x20, lexicon)
-        r = ssd.fit_groups(n_perm=50, random_state=42)
-        # Each pairview's words (if any rows exist) must all carry this pair's contrast string.
-        # If no words_rows were computed, the view is empty — still a valid invariant.
-        for p in r.pairs:
-            pv = r.pairs[p.g1, p.g2]
-            words = list(pv.words)
-            canonical = p.contrast
-            for w in words:
-                assert w.contrast == canonical, (
-                    f"Word contrast {w.contrast!r} leaked into PairView for {canonical!r}"
-                )
-
-    def test_reversed_pairview_flips_word_sides(
-        self, tiny_kv, large_docs_3x20, large_groups_3x20, lexicon,
-    ):
-        """Reverse-order access swaps pos/neg word sides without losing rows."""
-        from ssdiff.corpus import Corpus
-        from ssdiff.ssd import SSD
-        corpus = Corpus(large_docs_3x20, pretokenized=True, lang="pl")
-        ssd = SSD(tiny_kv, corpus, large_groups_3x20, lexicon)
-        r = ssd.fit_groups(n_perm=50, random_state=42)
-        p = list(r.pairs)[0]
-        forward = list(r.pairs[p.g1, p.g2].words)
-        reverse = list(r.pairs[p.g2, p.g1].words)
-        assert len(forward) == len(reverse)
-        if forward:
-            # same words, side labels inverted, cos_beta flipped
-            forward_by_word = {w.word: w for w in forward}
-            for rw in reverse:
-                fw = forward_by_word[rw.word]
-                expected_side = "neg" if fw.side == "pos" else "pos"
-                assert rw.side == expected_side
-                assert rw.cos_beta == pytest.approx(-fw.cos_beta, abs=1e-12)
