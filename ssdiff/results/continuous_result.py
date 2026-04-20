@@ -565,14 +565,31 @@ class DocDetailView(ScalarView):
 @dataclass(frozen=True, slots=True)
 class SweepRow:
     k: int
-    r2: float
-    r2_adj: float
-    pvalue: float
+    var_explained: float
+    mean_coherence: float
+    mean_abs_cosb: float
+    aggregate: float
+    n_clusters: int
+    total_size: int
+    beta_delta_1_minus_cos: float
+    interp_hat: float
+    interp_resid: float
+    interp_resid_z: float
+    interp_auck: float
+    stab_good_raw: float
+    stab_z_raw: float
+    stab_auck_raw: float
+    joint_score: float
 
 
 class SweepView(View[SweepRow]):
     _name = "sweep"
-    _columns = ("k", "r2", "r2_adj", "pvalue")
+    _columns = (
+        "k", "var_explained", "mean_coherence", "mean_abs_cosb",
+        "aggregate", "n_clusters", "total_size", "beta_delta_1_minus_cos",
+        "interp_hat", "interp_resid", "interp_resid_z", "interp_auck",
+        "stab_good_raw", "stab_z_raw", "stab_auck_raw", "joint_score",
+    )
 
     def __init__(self, rows, *, _no_trunc: bool = False):
         super().__init__(_no_trunc=_no_trunc)
@@ -1260,8 +1277,9 @@ class PCAOLSResult(ContinuousResult):
 
         Parameters
         ----------
-        sweep : list of (k, r2, r2_adj, pvalue) tuples or None
-            Per-K sweep table used to populate the ``.sweep`` SweepView.
+        sweep : list of dict or None
+            Per-K sweep rows (keys matching :class:`SweepRow` fields) used to
+            populate the ``.sweep`` SweepView.
         test_name : str or None
             Name of the initial test; defaults to ``"f_test"``.
         test_info : dict or None
@@ -1271,10 +1289,27 @@ class PCAOLSResult(ContinuousResult):
         """
         kw.setdefault("backend", "PCA+OLS")
         super().__init__(**kw)
-        self.sweep = SweepView(
-            [SweepRow(k=int(k), r2=float(r2), r2_adj=float(r2_adj), pvalue=float(p))
-             for (k, r2, r2_adj, p) in (sweep or [])]
-        )
+        self.sweep = SweepView([
+            SweepRow(
+                k=int(r["k"]),
+                var_explained=float(r["var_explained"]),
+                mean_coherence=float(r["mean_coherence"]),
+                mean_abs_cosb=float(r["mean_abs_cosb"]),
+                aggregate=float(r["aggregate"]),
+                n_clusters=int(r["n_clusters"]),
+                total_size=int(r["total_size"]),
+                beta_delta_1_minus_cos=float(r["beta_delta_1_minus_cos"]),
+                interp_hat=float(r["interp_hat"]),
+                interp_resid=float(r["interp_resid"]),
+                interp_resid_z=float(r["interp_resid_z"]),
+                interp_auck=float(r["interp_auck"]),
+                stab_good_raw=float(r["stab_good_raw"]),
+                stab_z_raw=float(r["stab_z_raw"]),
+                stab_auck_raw=float(r["stab_auck_raw"]),
+                joint_score=float(r["joint_score"]),
+            )
+            for r in (sweep or [])
+        ])
         self.sweep_result = self._raw_diagnostics.get("sweep_result")
         self.pca_k = int(self.fit_info.n_components or 0)
         self.pca_components = self._raw_diagnostics.get("pca_components")

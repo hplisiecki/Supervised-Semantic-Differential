@@ -127,10 +127,23 @@ def test_per_view_save_writes_files(tmp_path):
     assert (tmp_path / "docs.csv").exists()
 
 
+def _fake_sweep_row(k: int) -> dict:
+    return {
+        "k": k, "var_explained": 50.0 + k,
+        "mean_coherence": 0.3, "mean_abs_cosb": 0.2, "aggregate": 0.25,
+        "n_clusters": 4, "total_size": 100,
+        "beta_delta_1_minus_cos": 0.05,
+        "interp_hat": 0.0, "interp_resid": 0.0, "interp_resid_z": 0.0,
+        "interp_auck": 0.1,
+        "stab_good_raw": -0.05, "stab_z_raw": 0.0, "stab_auck_raw": 0.1,
+        "joint_score": 0.1,
+    }
+
+
 def test_pcaols_has_sweep_and_f_test():
     data = _make_continuous()
     data["backend"] = "PCA+OLS"
-    data["sweep"] = [(k, 0.3 + 0.01 * k, 0.3, 0.01) for k in range(1, 6)]
+    data["sweep"] = [_fake_sweep_row(k) for k in range(1, 6)]
     r = PCAOLSResult(**data)
     assert hasattr(r, "sweep")
     assert r.test.name == "f_test"
@@ -173,7 +186,7 @@ def test_pls_preserves_fit_info_and_raw_diagnostics():
 def test_pcaols_preserves_sweep_result_and_plot_sweep_available():
     data = _make_continuous()
     data["backend"] = "PCA+OLS"
-    data["sweep"] = [(k, 0.3 + 0.01 * k, 0.3, 0.01) for k in range(1, 6)]
+    data["sweep"] = [_fake_sweep_row(k) for k in range(1, 6)]
     data["fit_info"] = {"n_components": 64, "k_min": 20, "k_max": 120,
                          "k_step": 2, "best_k": 64}
 
