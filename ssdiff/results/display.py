@@ -44,6 +44,8 @@ DEFAULT_COLS: dict[str, tuple[str, ...]] = {
     "SnippetsView":        ("side", "doc_id", "cosine", "seed", "text_window"),
     "SidedSnippetsView":   ("side", "doc_id", "cosine", "seed", "text_window"),
     "PLSTestView":         ("name", "pvalue", "split_r2"),
+    "SweepView":           ("k", "var_explained", "interp_auck",
+                            "stab_auck_raw", "joint_score"),
     # group
     "GroupStatsView":      ("G", "n_kept", "pvalue"),
     "GroupTestView":       ("name", "pvalue", "omnibus_T"),

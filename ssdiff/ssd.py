@@ -530,8 +530,7 @@ class SSD:
         _sweep_rows = None
         if sweep_result is not None:
             _sweep_rows = [
-                (r["PCA_K"], r.get("r2", 0.0), r.get("r2_adj", 0.0), r.get("f_pvalue", float("nan")))
-                for r in sweep_result.df_joined
+                {**r, "k": r["PCA_K"]} for r in sweep_result.df_joined
             ]
 
         return PCAOLSResult(
