@@ -167,9 +167,6 @@ class WordsViewSided(WordsView):
     def __call__(self, k: int | None = 20) -> WordsViewSided:
         return WordsViewSided(self._side_key, self._all_side_rows, k=k)
 
-    def _filename_stem(self) -> str:
-        return f"words_{self._side_key}"
-
     def _save_hint(self) -> str:
         max_k = len(self._all_side_rows)
         current = "all" if self._k is None else str(self._k)
@@ -242,9 +239,6 @@ class ClustersViewSided(View[Cluster]):
         merged = {**self._params, **params}
         merged.pop("side", None)
         return self._parent._clusters_for(self._side, **merged)
-
-    def _filename_stem(self) -> str:
-        return f"clusters_{self._side}"
 
     def words(self, cluster_id: int) -> ClusterWordsView:
         """Return a ClusterWordsView for the given cluster_id on this side."""
@@ -341,7 +335,6 @@ class SnippetsView(View[Snippet]):
         "text_window", "text_surface", "text_lemmas",
         "cluster_id", "post_id", "contrast",
     )
-    _text_truncate = 40
 
     def __init__(self, rows: list[Snippet], params: dict | None = None,
                  parent: ContinuousResult | None = None,
@@ -399,9 +392,6 @@ class SnippetsViewSided(SnippetsView):
         if cluster_id is not None:
             merged["cluster_id"] = cluster_id
         return SnippetsView(rows, params=merged, _no_trunc=True)
-
-    def _filename_stem(self) -> str:
-        return f"snippets_{self._side_key}"
 
     def _save_hint(self) -> str:
         return (super()._save_hint()

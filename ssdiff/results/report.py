@@ -16,6 +16,12 @@ from dataclasses import dataclass, field
 from typing import ClassVar, Literal
 
 from ssdiff.results.core import _require
+from ssdiff.results.display import (
+    DEFAULT_EXT,
+    DEFAULT_FILENAMES,
+    NARRATIVE_EXTS,
+    build_report_save_hint,
+)
 from ssdiff.results.format import fmt_table
 
 CITATION = (
@@ -79,14 +85,15 @@ class Report:
     subtitle: str | None = None
     cite: bool = True
 
-    _SUPPORTED_EXTS: ClassVar[tuple[str, ...]] = (
-        "md", "txt", "html", "tex", "docx", "json",
-    )
+    _SUPPORTED_EXTS: ClassVar[tuple[str, ...]] = NARRATIVE_EXTS
 
     # -------- repr dunders ----------------------------------------------
+    def _default_filename(self) -> str:
+        """Return the default ``'stem.ext'`` filename for ``save(path=None)``."""
+        return DEFAULT_FILENAMES.get(type(self).__name__, f"report.{DEFAULT_EXT}")
+
     def _save_hint(self) -> str:
-        return ("Save:  .save('report.md')       "
-                "# extensions: md txt html tex docx json")
+        return build_report_save_hint(self)
 
     def _save_hint_html(self) -> str:
         return f"<pre class='ssd-save-hint'>{_html.escape(self._save_hint())}</pre>"
@@ -189,11 +196,16 @@ class Report:
         doc.save(path)
 
     # -------- unified save() --------------------------------------------
-    def save(self, path: str) -> None:
+    def save(self, path: str | None = None) -> None:
         """Write the report to ``path``; format inferred from the extension.
 
-        Supported: ``.md .txt .html .tex .docx .json``.
+        Supported: ``.md .txt .html .tex .docx .json``. When ``path`` is
+        omitted, defaults to ``<cwd>/<default-filename>`` from
+        ``DEFAULT_FILENAMES`` (``"report.md"`` for ``Report``).
         """
+        if path is None:
+            path = self._default_filename()
+        path = str(path)
         ext = path.lower().rsplit(".", 1)[-1] if "." in path else ""
         if ext not in self._SUPPORTED_EXTS:
             raise ValueError(

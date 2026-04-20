@@ -19,8 +19,15 @@ from typing import Any, Generic, TypeVar
 
 from ssdiff.results.display import (
     DEFAULT_COLS,
+    DEFAULT_EXT,
+    DEFAULT_FILENAMES,
     DEFAULT_MAX_ROWS,
+    DEFAULT_MAX_ROWS_BY_CLASS,
+    DEFAULT_TEXT_TRUNCATE,
+    TABULAR_EXTS,
     _save_hint_enabled,
+    build_scalar_save_hint,
+    build_view_save_hint,
 )
 
 # ``DEFAULT_COLS`` / ``DEFAULT_MAX_ROWS`` live in ``results.display`` as part
@@ -118,10 +125,8 @@ def _json_default(obj):
 
 
 # ---------------- save() extension helpers -----------------------------------
-
-SUPPORTED_EXTS: tuple[str, ...] = (
-    "csv", "json", "xlsx", "md", "txt", "html", "tex", "docx",
-)
+# ``TABULAR_EXTS`` lives in ``display`` next to the filename / column registries.
+SUPPORTED_EXTS = TABULAR_EXTS  # backward-compat re-export
 
 
 def _get_ext(path: str) -> str:
@@ -129,17 +134,17 @@ def _get_ext(path: str) -> str:
     if "." not in path:
         raise ValueError(
             f"save() requires a path with an extension; got {path!r}. "
-            f"Supported: {SUPPORTED_EXTS}"
+            f"Supported: {TABULAR_EXTS}"
         )
     return path.rsplit(".", 1)[-1].lower()
 
 
 def _check_ext(ext: str) -> None:
-    """Raise ValueError if ``ext`` is not in SUPPORTED_EXTS."""
-    if ext not in SUPPORTED_EXTS:
+    """Raise ValueError if ``ext`` is not in ``TABULAR_EXTS``."""
+    if ext not in TABULAR_EXTS:
         raise ValueError(
             f"Unsupported extension .{ext} for save(). "
-            f"Supported: {SUPPORTED_EXTS}"
+            f"Supported: {TABULAR_EXTS}"
         )
 
 
@@ -257,24 +262,25 @@ class View(Generic[T]):
         """Parameters used to compute this view; empty dict for parameterless views."""
         return {}
 
-    def _filename_stem(self) -> str:
-        """Return the default filename stem (no extension) for ``save()``.
+    def _default_filename(self) -> str:
+        """Return the default ``'stem.ext'`` filename for ``save(path=None)``.
 
-        The default returns ``self._name``.  Sided subclasses override this to
-        append the side, e.g. ``"clusters_pos"`` / ``"clusters_neg"``.
+        Consults ``DEFAULT_FILENAMES`` (keyed by class ``__name__``, like
+        ``DEFAULT_COLS``) with fallback to ``f'{self._name}.{DEFAULT_EXT}'``.
+        Entries containing ``{side}`` are formatted from the instance's
+        ``_side`` / ``_side_key`` attribute — e.g. ``"clusters_pos.csv"``.
         """
-        return self._name
+        default = DEFAULT_FILENAMES.get(
+            type(self).__name__, f"{self._name}.{DEFAULT_EXT}"
+        )
+        if "{side}" in default:
+            side = getattr(self, "_side_key", None) or getattr(self, "_side", None)
+            return default.format(side=side)
+        return default
 
     def _save_hint(self) -> str:
         """Return the save-hint footer text shown below repr output."""
-        cols_preview = "   ".join(repr(c) for c in self._columns[:4])
-        more = " …" if len(self._columns) > 4 else ""
-        stem = self._filename_stem()
-        return (f"Save:  .save()  .save('file.ext')  .save('file.ext', cols=[...])"
-                f"   # default: {stem}.csv\n"
-                f"       extensions: csv json xlsx md txt html tex docx\n"
-                f"       .to_df()  .to_records()  .to_dict()\n"
-                f"       cols=[{cols_preview}{more}] → select & order columns")
+        return build_view_save_hint(self)
 
     def _save_hint_html(self) -> str:
         """Return the save-hint footer as an HTML ``<pre>`` block."""
@@ -391,7 +397,7 @@ class View(Generic[T]):
             Silently ignored on single-row views.
         """
         if path is None:
-            path = Path(f"{self._filename_stem()}.csv")
+            path = Path(self._default_filename())
         ext = _get_ext(str(path))
         _check_ext(ext)
 
@@ -409,7 +415,7 @@ class View(Generic[T]):
                 f.write(_render_json(rows))
         elif ext == "md":
             with open(path, "w", encoding="utf-8") as f:
-                f.write(_render_md_table(rows, keep))
+                f.write(self._render_md(rows, keep))
         elif ext == "tex":
             with open(path, "w", encoding="utf-8") as f:
                 f.write(_render_tex_table(rows, keep))
@@ -431,6 +437,15 @@ class View(Generic[T]):
         except (TypeError, NotImplementedError):
             return self
 
+    def _render_md(self, rows: list[dict], cols: Sequence[str]) -> str:
+        """Markdown rendering for ``save('x.md')``.
+
+        Base implementation produces a wide GitHub-flavoured table — one row
+        per record. ``ScalarView`` overrides with a k/v layout so single-row
+        metric dumps render as ``| Metric | Value |`` instead of one wide row.
+        """
+        return _render_md_table(rows, cols)
+
     _text_truncate: int | None = None
 
     def to_text(self, max_rows: int | None = None, cols=None) -> str:
@@ -440,14 +455,18 @@ class View(Generic[T]):
         view was produced by slicing (``_no_trunc=True``), in which case the
         full content renders without truncation or footer.
 
-        ``max_rows=None`` resolves to the module-level ``DEFAULT_MAX_ROWS``.
+        ``max_rows=None`` resolves via ``DEFAULT_MAX_ROWS_BY_CLASS`` (per-class
+        registry) with fallback to the module-level ``DEFAULT_MAX_ROWS``.
 
-        Subclasses with long text columns set ``_text_truncate`` (chars) to
-        clip cells in the terminal. Data exports stay full-width.
+        Cell truncation (chars) for long text columns resolves via
+        ``DEFAULT_TEXT_TRUNCATE`` (per-class registry) with fallback to the
+        class attribute ``_text_truncate``. Data exports stay full-width.
         """
         from ssdiff.results.format import default_alignment, fmt_cell, fmt_table
+        cls_name = type(self).__name__
         if max_rows is None:
-            max_rows = DEFAULT_MAX_ROWS
+            max_rows = DEFAULT_MAX_ROWS_BY_CLASS.get(cls_name, DEFAULT_MAX_ROWS)
+        text_truncate = DEFAULT_TEXT_TRUNCATE.get(cls_name, self._text_truncate)
         keep, warning = _validate_cols(cols, self)
         if warning:
             _warn(warning)
@@ -462,7 +481,7 @@ class View(Generic[T]):
         rows_seq = [[fmt_cell(r.get(c), c) for c in keep] for r in shown]
         out = fmt_table(rows_seq, headers=list(keep),
                         numeric=default_alignment(len(keep)),
-                        text_truncate=self._text_truncate)
+                        text_truncate=text_truncate)
         if footer:
             out = out + "\n" + footer
         return out
@@ -540,15 +559,16 @@ class ScalarView(View):
         return fmt_table(rows_seq, headers=["", ""],
                          numeric=[False, True], gutter=2)
 
+    def _render_md(self, rows: list[dict], cols: Sequence[str]) -> str:
+        """K/V markdown: ``| Metric | Value |`` layout matching ``to_text`` / ``to_html``."""
+        from ssdiff.results.format import fmt_cell
+        row = rows[0] if rows else {}
+        header = "| Metric | Value |\n|:-------|------:|"
+        body = "\n".join(f"| {c} | {fmt_cell(row.get(c), c)} |" for c in cols)
+        return header + ("\n" + body if body else "")
+
     def _save_hint(self) -> str:
-        cols_str = "   ".join(self._columns[:4])
-        more = " …" if len(self._columns) > 4 else ""
-        stem = self._filename_stem()
-        return (f"Save:  .save()  .save('file.ext')  .save('file.ext', cols=[...])"
-                f"   # default: {stem}.csv\n"
-                f"       extensions: csv json xlsx md txt html tex docx\n"
-                f"       .to_dict()  .to_df()\n"
-                f"       cols=[{cols_str}{more}] → select & order keys")
+        return build_scalar_save_hint(self)
 
     # save() uses ScalarView's single-row iter, producing one-row csv/xlsx/etc.
 

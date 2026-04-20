@@ -651,8 +651,8 @@ class SSD:
                 contrast_norm=float(pw["contrast_norm"]),
             ))
 
-        # words_rows / cluster_rows / snippets_rows left empty here;
-        # per-contrast neighbor lookup is deferred to top-level gr.words / .clusters / .snippets.
+        # words / clusters / snippets are computed lazily on access by
+        # GroupResult, using (embeddings, x, groups) + per-pair gradient.
         return GroupResult(
             G=G,
             n_kept=len(x_local),
@@ -662,14 +662,14 @@ class SSD:
             omnibus_T=float(test_result["omnibus_T"]),
             omnibus_p=float(test_result["omnibus_p"]),
             pairs=pairs,
-            words_rows=[],
-            cluster_rows=[],
-            cluster_words_rows=[],
-            snippets_rows=[],
             embeddings=self.embeddings,
             corpus=self.corpus,
             x=x_local,
             groups=groups_local,
+            lang=self.lang,
+            lexicon=self.lexicon,
+            window=self.window,
+            sif_a=self.sif_a,
         )
 
     def __repr__(self) -> str:

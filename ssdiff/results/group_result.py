@@ -270,14 +270,26 @@ class _SinglePairClustersIndex:
     without involving a parent ``ContinuousResult``. Used both in the single-pair case
     (directly as ``gr.clusters``) and in the multi-pair case (as the per-pair children
     wrapped by ``ClustersIndexPaired``).
+
+    If pre-built ``cluster_rows`` / ``cluster_words_rows`` contain entries for this
+    contrast + side, they are used verbatim. Otherwise, when ``embeddings`` and
+    ``gradient`` are provided, the clusters are computed lazily on first access
+    via :func:`cluster_top_neighbors` and memoized per side.
     """
 
     def __init__(self, *, contrast: str,
                  cluster_rows: list[Cluster],
-                 cluster_words_rows: list[ClusterWord]):
+                 cluster_words_rows: list[ClusterWord],
+                 embeddings=None,
+                 gradient: np.ndarray | None = None,
+                 lang: str | None = None):
         self._contrast = contrast
         self._cluster_rows = cluster_rows
         self._cluster_words_rows = cluster_words_rows
+        self._embeddings = embeddings
+        self._gradient = gradient
+        self._lang = lang
+        self._lazy_cache: dict[str, tuple[list[Cluster], list[ClusterWord]]] = {}
 
     def _sided(self, side: str):
         from ssdiff.results.continuous_result import ClustersViewSided
@@ -285,10 +297,44 @@ class _SinglePairClustersIndex:
                 if c.contrast == self._contrast and c.side == side]
         words_rows = [w for w in self._cluster_words_rows
                       if w.contrast == self._contrast and w.side == side]
+
+        if not rows and not words_rows and self._can_compute():
+            if side not in self._lazy_cache:
+                self._lazy_cache[side] = self._compute_side(side)
+            rows, words_rows = self._lazy_cache[side]
+
         return ClustersViewSided(
             parent=None, side=side, rows=rows, words_rows=words_rows,
             snippets_rows=None, params={},
         )
+
+    def _can_compute(self) -> bool:
+        return self._embeddings is not None and self._gradient is not None
+
+    def _compute_side(self, side: str) -> tuple[list[Cluster], list[ClusterWord]]:
+        from ssdiff.utils.neighbors import cluster_top_neighbors
+        raw = cluster_top_neighbors(
+            self._embeddings, self._gradient, topn=100,
+            side=side, lang=self._lang or "pl",
+        )
+        rows: list[Cluster] = []
+        words_rows: list[ClusterWord] = []
+        for c in raw:
+            rows.append(Cluster(
+                cluster_id=int(c["id"]), side=side,
+                size=int(c["size"]),
+                coherence=float(c["coherence"]),
+                centroid_cos_beta=float(c["centroid_cos_beta"]),
+                contrast=self._contrast,
+            ))
+            for w in c["words"]:
+                words_rows.append(ClusterWord(
+                    cluster_id=int(c["id"]), side=side, word=w["word"],
+                    cos_centroid=float(w.get("cos_centroid", 0.0)),
+                    cos_beta=float(w["cos_beta"]),
+                    contrast=self._contrast,
+                ))
+        return rows, words_rows
 
     @property
     def pos(self):
@@ -364,14 +410,18 @@ class GroupResult(Result):
         omnibus_T: float,
         omnibus_p: float,
         pairs: list[Pair],
-        words_rows: list[Word],
-        cluster_rows: list[Cluster],
-        cluster_words_rows: list[ClusterWord],
-        snippets_rows: list[Snippet],
+        words_rows: list[Word] | None = None,
+        cluster_rows: list[Cluster] | None = None,
+        cluster_words_rows: list[ClusterWord] | None = None,
+        snippets_rows: list[Snippet] | None = None,
         embeddings=None,
         corpus=None,
         x: np.ndarray | None = None,
         groups: np.ndarray | None = None,
+        lang: str | None = None,
+        lexicon=None,
+        window: int = 3,
+        sif_a: float = 1e-3,
     ):
         """Construct a GroupResult from backend outputs.
 
@@ -463,10 +513,18 @@ class GroupResult(Result):
         )
 
         # Store flat row lists — top-level view accessors filter by contrast.
-        self._words_rows = list(words_rows)
-        self._cluster_rows = list(cluster_rows)
-        self._cluster_words_rows = list(cluster_words_rows)
-        self._snippets_rows = list(snippets_rows)
+        # Empty lists trigger lazy per-pair computation when embeddings / corpus
+        # are available (see the .words / .clusters / .snippets properties).
+        self._words_rows = list(words_rows or [])
+        self._cluster_rows = list(cluster_rows or [])
+        self._cluster_words_rows = list(cluster_words_rows or [])
+        self._snippets_rows = list(snippets_rows or [])
+
+        # Plumbing needed for lazy snippet computation (mirrors ContinuousResult).
+        self.lang = lang if lang is not None else getattr(corpus, "lang", None)
+        self.lexicon = set(lexicon) if lexicon is not None else set()
+        self.window = int(window)
+        self.sif_a = float(sif_a)
 
         self.pairs = PairsListView(pairs)
 
@@ -634,25 +692,68 @@ class GroupResult(Result):
     def words(self):
         """Top-level words view.
 
-        Single-pair: :class:`~ssdiff.results.continuous_result.WordsView`
-        built from all ``words_rows`` (contrast filter is a no-op since
-        rows all carry the same canonical contrast).
+        Single-pair: :class:`~ssdiff.results.continuous_result.WordsView`.
         Multi-pair: :class:`~ssdiff.results.paired_view.WordsViewPaired`
         whose children are per-contrast ``WordsView`` instances.
+
+        Rows are sourced in this order:
+        1. pre-built ``words_rows`` (filtered by contrast for multi-pair),
+        2. lazy ``filtered_neighbors`` lookup along the pair's gradient when
+           ``embeddings`` + per-pair arrays are available,
+        3. empty view (no embeddings and no rows — the synthetic-fixture path).
         """
         from ssdiff.results.continuous_result import WordsView
         from ssdiff.results.paired_view import WordsViewPaired
 
         keys = self._pair_keys()
-        if len(keys) == 1:
-            return WordsView(list(self._words_rows))
 
-        children: dict[tuple[str, str], WordsView] = {}
-        for key in keys:
-            contrast = f"{key[0]}_vs_{key[1]}"
-            rows = [w for w in self._words_rows if w.contrast == contrast]
-            children[key] = WordsView(rows)
+        def _rows_for(pair_key, *, is_single):
+            contrast = f"{pair_key[0]}_vs_{pair_key[1]}"
+            if self._words_rows:
+                if is_single:
+                    return list(self._words_rows)
+                return [w for w in self._words_rows if w.contrast == contrast]
+            if not self._can_compute_vectors() or self.embeddings is None:
+                return []
+            _, gradient, _, _ = self._pair_arrays[pair_key]
+            return self._compute_words_rows_for_gradient(gradient, contrast)
+
+        if len(keys) == 1:
+            return WordsView(_rows_for(keys[0], is_single=True))
+
+        children: dict[tuple[str, str], WordsView] = {
+            key: WordsView(_rows_for(key, is_single=False)) for key in keys
+        }
         return WordsViewPaired(children)
+
+    def _can_compute_vectors(self) -> bool:
+        """True iff ``x`` / ``groups`` are present (so ``_pair_arrays`` is usable)."""
+        return self.x is not None and self.groups is not None
+
+    def _compute_words_rows_for_gradient(
+        self, gradient: np.ndarray, contrast: str,
+    ) -> list[Word]:
+        """Top cosine neighbors of ±gradient, filtered to sign-consistent rows.
+
+        Mirrors ``ContinuousResult._compute_words_rows`` but tags each row with
+        ``contrast`` so multi-pair flat aggregation stays coherent.
+        """
+        from ssdiff.utils.neighbors import filtered_neighbors
+        out: list[Word] = []
+        for side, vec, sign in [("pos", gradient, 1.0),
+                                ("neg", -gradient, -1.0)]:
+            rank = 0
+            for word, cos in filtered_neighbors(
+                self.embeddings, vec, topn=100, lang=self.lang or "pl",
+            ):
+                signed_cos = float(cos) * sign
+                if (side == "pos" and signed_cos < 0) or \
+                   (side == "neg" and signed_cos > 0):
+                    continue
+                rank += 1
+                out.append(Word(side=side, rank=rank, word=word,
+                                cos_beta=signed_cos, contrast=contrast))
+        return out
 
     @cached_property
     def clusters(self):
@@ -661,27 +762,32 @@ class GroupResult(Result):
         Single-pair: a ``ClustersIndex``-like object (``.pos`` / ``.neg`` →
         :class:`~ssdiff.results.continuous_result.ClustersViewSided`).
         Multi-pair: :class:`~ssdiff.results.paired_view.ClustersIndexPaired`.
+
+        Clusters are computed lazily from the pair's gradient via
+        :func:`cluster_top_neighbors` when no pre-built rows exist and
+        embeddings are available.
         """
         from ssdiff.results.paired_view import ClustersIndexPaired
 
         keys = self._pair_keys()
-        if len(keys) == 1:
-            contrast = f"{keys[0][0]}_vs_{keys[0][1]}"
+        can_compute = self._can_compute_vectors() and self.embeddings is not None
+
+        def _make(pair_key):
+            contrast = f"{pair_key[0]}_vs_{pair_key[1]}"
+            gradient = self._pair_arrays[pair_key][1] if can_compute else None
             return _SinglePairClustersIndex(
                 contrast=contrast,
                 cluster_rows=self._cluster_rows,
                 cluster_words_rows=self._cluster_words_rows,
+                embeddings=self.embeddings if can_compute else None,
+                gradient=gradient,
+                lang=self.lang,
             )
 
-        children = {}
-        for key in keys:
-            contrast = f"{key[0]}_vs_{key[1]}"
-            children[key] = _SinglePairClustersIndex(
-                contrast=contrast,
-                cluster_rows=self._cluster_rows,
-                cluster_words_rows=self._cluster_words_rows,
-            )
-        return ClustersIndexPaired(children)
+        if len(keys) == 1:
+            return _make(keys[0])
+
+        return ClustersIndexPaired({key: _make(key) for key in keys})
 
     @cached_property
     def snippets(self):
@@ -689,20 +795,92 @@ class GroupResult(Result):
 
         Single-pair: :class:`~ssdiff.results.continuous_result.SnippetsView`.
         Multi-pair: :class:`~ssdiff.results.paired_view.SnippetsViewPaired`.
+
+        Rows are sourced from pre-built ``snippets_rows`` when present, otherwise
+        computed lazily per pair via :func:`snippets_along_beta` when ``corpus``
+        and ``embeddings`` are available.
         """
         from ssdiff.results.continuous_result import SnippetsView
         from ssdiff.results.paired_view import SnippetsViewPaired
 
         keys = self._pair_keys()
-        if len(keys) == 1:
-            return SnippetsView(list(self._snippets_rows))
 
-        children: dict[tuple[str, str], SnippetsView] = {}
-        for key in keys:
-            contrast = f"{key[0]}_vs_{key[1]}"
-            rows = [s for s in self._snippets_rows if s.contrast == contrast]
-            children[key] = SnippetsView(rows)
+        def _rows_for(pair_key, *, is_single):
+            contrast = f"{pair_key[0]}_vs_{pair_key[1]}"
+            if self._snippets_rows:
+                if is_single:
+                    return list(self._snippets_rows)
+                return [s for s in self._snippets_rows if s.contrast == contrast]
+            if not self._can_compute_snippets():
+                return []
+            _, gradient, _, _ = self._pair_arrays[pair_key]
+            return self._compute_snippets_rows_for_gradient(gradient, contrast)
+
+        if len(keys) == 1:
+            return SnippetsView(_rows_for(keys[0], is_single=True))
+
+        children: dict[tuple[str, str], SnippetsView] = {
+            key: SnippetsView(_rows_for(key, is_single=False)) for key in keys
+        }
         return SnippetsViewPaired(children)
+
+    def _can_compute_snippets(self) -> bool:
+        return (
+            self._can_compute_vectors()
+            and self.embeddings is not None
+            and self.corpus is not None
+            and getattr(self.corpus, "pre_docs", None) is not None
+        )
+
+    def _compute_snippets_rows_for_gradient(
+        self, gradient: np.ndarray, contrast: str,
+    ) -> list[Snippet]:
+        """Build Snippet rows along ±gradient for one canonical pair."""
+        from types import SimpleNamespace
+
+        from ssdiff.utils.snippets import snippets_along_beta
+
+        shim = SimpleNamespace(
+            embeddings=self.embeddings,
+            gradient=gradient,
+            beta=gradient,
+            lexicon=self.lexicon,
+            window=self.window,
+            sif_a=self.sif_a,
+        )
+        out = snippets_along_beta(
+            pre_docs=self.corpus.pre_docs,
+            ssd=shim,
+            token_window=self.window,
+            seeds=self.lexicon or None,
+            sif_a=self.sif_a,
+            top_per_side=30,
+            verbose=False,
+        )
+
+        rows: list[Snippet] = []
+        sid = 0
+        for side in ("pos", "neg"):
+            for d in out[side]:
+                rows.append(Snippet(
+                    snippet_id=sid,
+                    side=side,
+                    doc_id=int(d["profile_id"]),
+                    cosine=float(d["cosine"]),
+                    seed=d["seed"],
+                    start_token_idx=int(d["start_token_idx"]),
+                    end_token_idx=int(d["end_token_idx"]),
+                    start_sent_idx=int(d["start_sent_idx"]),
+                    end_sent_idx=int(d["end_sent_idx"]),
+                    text_window=d["snippet_anchor"],
+                    text_surface=d["essay_text_surface"],
+                    text_lemmas=d["essay_text_lemmas"],
+                    cluster_id=None,
+                    contrast=contrast,
+                    post_id=d.get("post_id"),
+                ))
+                sid += 1
+        return rows
 
     # -------- Result machinery ---------------------------------------
 
