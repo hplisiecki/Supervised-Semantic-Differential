@@ -192,12 +192,6 @@ def _paired_save(
             if warning:
                 _warn(warning, stacklevel=4)
             rows = [_project(_row_to_dict(r), keep) for r in child_view]
-            # Defensive deduplication of sheet names (should never happen with canonical labels)
-            if sheet_name in sheets:
-                suffix = 2
-                while f"{sheet_name}_{suffix}" in sheets:
-                    suffix += 1
-                sheet_name = f"{sheet_name}_{suffix}"
             sheets[sheet_name] = (rows, keep)
         _write_xlsx_multisheet(sheets, path)
 

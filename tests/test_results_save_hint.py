@@ -17,7 +17,7 @@ def test_view_default_save_hint_text():
     v = WordsView(_words())
     hint = v._save_hint()
     assert hint.startswith("Save:")
-    assert ".save('file.ext')" in hint
+    assert ".save('words.csv'," in hint
     assert ".to_df()" in hint
     # Enumerates supported extensions:
     assert "csv" in hint and "json" in hint and "xlsx" in hint
@@ -29,7 +29,7 @@ def test_view_repr_includes_table_and_hint_when_enabled():
     text = repr(v)
     assert "side" in text
     assert "w0" in text
-    assert ".save('file.ext')" in text
+    assert ".save('words.csv'," in text
     assert "cols=" in text
 
 

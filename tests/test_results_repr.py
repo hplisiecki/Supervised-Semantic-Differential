@@ -443,7 +443,7 @@ def test_spec_example_4_pls_words_repr_shows_both_sides():
     assert "pos" in text and "neg" in text
     assert "p0" in text and "n0" in text
     assert "more rows" in text
-    assert ".save('file.ext')" in text
+    assert ".save('words.csv'," in text
 
 
 def test_spec_example_5_clusters_index_uncached():
