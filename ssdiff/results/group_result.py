@@ -10,10 +10,10 @@ Per-pair arrays (``gr.beta``, ``gr.gradient``, ``gr.beta_norm``,
 ``gr.alignment_scores``) mirror the same shape: plain arrays for the
 single-pair case, dicts keyed on canonical pair tuples for multi-pair.
 
-Canonical labels: all groups are renamed ``g_1, g_2, …`` in
+Canonical labels: all groups are renamed ``g1, g2, …`` in
 ``sorted(set(groups), key=str)`` order. Originals survive in
 ``gr.group_labels``. Canonical pair keys use the numeric trailing index
-so that ``g_2 < g_10``. Reverse-order tuple lookup raises ``KeyError`` —
+so that ``g2 < g10``. Reverse-order tuple lookup raises ``KeyError`` —
 no sign-flip anywhere.
 """
 
@@ -45,11 +45,10 @@ def _canonical_pair_key(g1: str, g2: str) -> tuple[str, str]:
     Falls back to string order for non-canonical labels.
     """
     def _sort_key(s: str) -> tuple[int, int | str]:
-        if s.startswith("g_"):
-            try:
-                return (0, int(s.split("_", 1)[1]))
-            except (ValueError, IndexError):
-                pass
+        if s.startswith("g"):
+            tail = s[1:]
+            if tail.isdigit():
+                return (0, int(tail))
         return (1, s)
     return tuple(sorted((g1, g2), key=_sort_key))  # type: ignore[return-value]
 
@@ -153,7 +152,7 @@ class GroupTestView(TestView):
         new_pairs = []
         for (g1, g2), pw in test_result["pairwise"].items():
             new_pairs.append(Pair(
-                contrast=f"{g1}_vs_{g2}",
+                contrast=f"{g1}_{g2}",
                 g1=str(g1), g2=str(g2),
                 T=float(pw["T"]),
                 p_raw=float(pw["p_raw"]),
@@ -261,15 +260,35 @@ class PairsListView(View[Pair]):
                 + f"\nLookup: {example} → Pair")
 
 
-# ---------- helper: single-pair ClustersIndex-like ----------
+# ---------- helper: single-pair ClustersView-like ----------
+
+class _GroupClustersParentShim:
+    """Per-pair parent adapter so ClustersViewSided.snippets works on groups.
+
+    ClustersViewSided.snippets calls self._parent._cluster_snippets_for(side=..., **params).
+    On the continuous side, the parent is a ContinuousResult. On the group side,
+    each single-pair ClustersViewSided needs a per-pair parent that knows which
+    pair to dispatch to.
+    """
+
+    def __init__(self, group_parent, pair_key):
+        self._group = group_parent
+        self._pair = pair_key
+
+    def _cluster_snippets_for(self, side, **params):
+        params.pop("pair_key", None)
+        return self._group._cluster_snippets_for(
+            self._pair, side, **params,
+        )
+
 
 class _SinglePairClustersIndex:
-    """Lightweight ClustersIndex-like backed by flat cluster rows for one contrast.
+    """Lightweight ClustersView-like backed by flat cluster rows for one contrast.
 
-    Mirrors the ``ClustersIndex`` public contract (``.pos`` / ``.neg`` → ``ClustersViewSided``)
+    Mirrors the ``ClustersView`` public contract (``.pos`` / ``.neg`` → ``ClustersViewSided``)
     without involving a parent ``ContinuousResult``. Used both in the single-pair case
     (directly as ``gr.clusters``) and in the multi-pair case (as the per-pair children
-    wrapped by ``ClustersIndexPaired``).
+    wrapped by ``ClustersViewPaired``).
 
     If pre-built ``cluster_rows`` / ``cluster_words_rows`` contain entries for this
     contrast + side, they are used verbatim. Otherwise, when ``embeddings`` and
@@ -282,13 +301,17 @@ class _SinglePairClustersIndex:
                  cluster_words_rows: list[ClusterWord],
                  embeddings=None,
                  gradient: np.ndarray | None = None,
-                 lang: str | None = None):
+                 lang: str | None = None,
+                 group_parent=None,
+                 pair_key: tuple[str, str] | None = None):
         self._contrast = contrast
         self._cluster_rows = cluster_rows
         self._cluster_words_rows = cluster_words_rows
         self._embeddings = embeddings
         self._gradient = gradient
         self._lang = lang
+        self._group_parent = group_parent
+        self._pair_key = pair_key
         self._lazy_cache: dict[str, tuple[list[Cluster], list[ClusterWord]]] = {}
 
     def _sided(self, side: str):
@@ -303,9 +326,13 @@ class _SinglePairClustersIndex:
                 self._lazy_cache[side] = self._compute_side(side)
             rows, words_rows = self._lazy_cache[side]
 
+        parent = None
+        if self._group_parent is not None and self._pair_key is not None:
+            parent = _GroupClustersParentShim(self._group_parent, self._pair_key)
+
         return ClustersViewSided(
-            parent=None, side=side, rows=rows, words_rows=words_rows,
-            snippets_rows=None, params={},
+            parent=parent, side=side, rows=rows, words_rows=words_rows,
+            params={"pair_key": self._pair_key} if self._pair_key else {},
         )
 
     def _can_compute(self) -> bool:
@@ -374,7 +401,7 @@ class GroupResult(Result):
     stats : GroupStatsView
         Metadata (G, n_kept, n_perm, correction, random_state, pvalue).
     group_labels : dict[str, str]
-        Canonical → original label mapping (``{"g_1": "Warsaw", …}``).
+        Canonical → original label mapping (``{"g1": "Warsaw", …}``).
         Empty when ``groups`` was not provided at construction.
     words, clusters, snippets
         Top-level view accessors — single-pair → continuous-style views;
@@ -396,7 +423,7 @@ class GroupResult(Result):
         Per-document vectors retained after ``filter_small_groups``.
         Load-bearing for ``gr.test(...)`` reruns and contrast recomputation.
     groups : ndarray of shape (n_kept,)
-        Canonical group labels (``g_1``, ``g_2``, …) aligned with ``x``.
+        Canonical group labels (``g1``, ``g2``, …) aligned with ``x``.
     """
 
     def __init__(
@@ -425,7 +452,7 @@ class GroupResult(Result):
     ):
         """Construct a GroupResult from backend outputs.
 
-        Group labels are rewritten to canonical ``g_1, g_2, …`` form
+        Group labels are rewritten to canonical ``g1, g2, …`` form
         (in ``sorted(set(groups), key=str)`` order); the originals land in
         ``self.group_labels``. When ``groups`` is ``None`` the relabeling
         is skipped and ``group_labels`` is empty — this supports synthetic
@@ -534,27 +561,31 @@ class GroupResult(Result):
     def _canonicalize(
         groups: np.ndarray, pairs: list[Pair],
     ) -> tuple[np.ndarray, dict[str, str], list[Pair]]:
-        """Rewrite ``groups`` and ``pairs`` to canonical ``g_1, g_2, …`` labels.
+        """Rewrite ``groups`` and ``pairs`` to canonical ``g1, g2, …`` labels.
 
         Returns ``(relabeled_groups, group_labels_dict, canonical_pairs)``.
         """
         sorted_originals = sorted(set(groups), key=str)
         group_labels = {
-            f"g_{i + 1}": str(orig) for i, orig in enumerate(sorted_originals)
+            f"g{i + 1}": str(orig) for i, orig in enumerate(sorted_originals)
         }
-        orig_to_canonical = {orig: f"g_{i + 1}" for i, orig in enumerate(sorted_originals)}
+        orig_to_canonical = {orig: f"g{i + 1}" for i, orig in enumerate(sorted_originals)}
+        # Pair.g1/g2 come in as ``str(orig)`` from fit_groups — key a mirror of
+        # the map by ``str(orig)`` so pair-label lookup works for non-string
+        # originals (e.g. floats, ints) without changing ``groups`` dtype.
+        str_to_canonical = {str(orig): canon for orig, canon in orig_to_canonical.items()}
         relabeled = np.array([orig_to_canonical[g] for g in groups], dtype=object)
 
         canonical_pairs: list[Pair] = []
         for p in pairs:
-            cg1 = orig_to_canonical.get(p.g1, p.g1)
-            cg2 = orig_to_canonical.get(p.g2, p.g2)
+            cg1 = str_to_canonical.get(p.g1, p.g1)
+            cg2 = str_to_canonical.get(p.g2, p.g2)
             can_g1, can_g2 = _canonical_pair_key(cg1, cg2)
             canonical_pairs.append(replace(
                 p,
                 g1=can_g1,
                 g2=can_g2,
-                contrast=f"{can_g1}_vs_{can_g2}",
+                contrast=f"{can_g1}_{can_g2}",
             ))
         return relabeled, group_labels, canonical_pairs
 
@@ -580,7 +611,7 @@ class GroupResult(Result):
                 p,
                 g1=can_g1,
                 g2=can_g2,
-                contrast=f"{can_g1}_vs_{can_g2}",
+                contrast=f"{can_g1}_{can_g2}",
             ))
         self.pairs = PairsListView(ordered_pairs)
         self.stats = GroupStatsView(
@@ -708,7 +739,7 @@ class GroupResult(Result):
         keys = self._pair_keys()
 
         def _rows_for(pair_key, *, is_single):
-            contrast = f"{pair_key[0]}_vs_{pair_key[1]}"
+            contrast = f"{pair_key[0]}_{pair_key[1]}"
             if self._words_rows:
                 if is_single:
                     return list(self._words_rows)
@@ -759,21 +790,21 @@ class GroupResult(Result):
     def clusters(self):
         """Top-level clusters view.
 
-        Single-pair: a ``ClustersIndex``-like object (``.pos`` / ``.neg`` →
+        Single-pair: a ``ClustersViewSided``-exposing object (``.pos`` / ``.neg`` →
         :class:`~ssdiff.results.continuous_result.ClustersViewSided`).
-        Multi-pair: :class:`~ssdiff.results.paired_view.ClustersIndexPaired`.
+        Multi-pair: :class:`~ssdiff.results.paired_view.ClustersViewPaired`.
 
         Clusters are computed lazily from the pair's gradient via
         :func:`cluster_top_neighbors` when no pre-built rows exist and
         embeddings are available.
         """
-        from ssdiff.results.paired_view import ClustersIndexPaired
+        from ssdiff.results.paired_view import ClustersViewPaired
 
         keys = self._pair_keys()
         can_compute = self._can_compute_vectors() and self.embeddings is not None
 
         def _make(pair_key):
-            contrast = f"{pair_key[0]}_vs_{pair_key[1]}"
+            contrast = f"{pair_key[0]}_{pair_key[1]}"
             gradient = self._pair_arrays[pair_key][1] if can_compute else None
             return _SinglePairClustersIndex(
                 contrast=contrast,
@@ -782,12 +813,14 @@ class GroupResult(Result):
                 embeddings=self.embeddings if can_compute else None,
                 gradient=gradient,
                 lang=self.lang,
+                group_parent=self,
+                pair_key=pair_key,
             )
 
         if len(keys) == 1:
             return _make(keys[0])
 
-        return ClustersIndexPaired({key: _make(key) for key in keys})
+        return ClustersViewPaired({key: _make(key) for key in keys})
 
     @cached_property
     def snippets(self):
@@ -806,7 +839,7 @@ class GroupResult(Result):
         keys = self._pair_keys()
 
         def _rows_for(pair_key, *, is_single):
-            contrast = f"{pair_key[0]}_vs_{pair_key[1]}"
+            contrast = f"{pair_key[0]}_{pair_key[1]}"
             if self._snippets_rows:
                 if is_single:
                     return list(self._snippets_rows)
@@ -881,6 +914,230 @@ class GroupResult(Result):
                 ))
                 sid += 1
         return rows
+
+    def _cluster_snippets_for(
+        self, pair_key: tuple[str, str], side: str, *,
+        top_per_cluster: int = 100,
+        min_cosine: float | None = None,
+        n_jobs: int = -1,
+        **cluster_params,
+    ):
+        """Fetch or compute per-cluster centroid snippets for one pair + side (cached)."""
+        from types import SimpleNamespace
+
+        from ssdiff.results.continuous_result import SnippetsViewSided
+
+        keys = self._pair_keys()
+        pair_idx = self.clusters if len(keys) == 1 else self.clusters[pair_key]
+        cluster_view = pair_idx.pos if side == "pos" else pair_idx.neg
+        effective_cluster_params = {
+            k: v for k, v in cluster_view._params.items()
+            if k not in ("side", "pair_key")
+        }
+        cache_params = {
+            "pair": pair_key,
+            "side": side,
+            "top_per_cluster": top_per_cluster,
+            "min_cosine": min_cosine,
+            "n_jobs": n_jobs,
+            **effective_cluster_params,
+        }
+
+        def _compute():
+            self._require_resource("corpus", "cluster_snippets")
+            self._require_resource("embeddings", "cluster_snippets")
+            from ssdiff.utils.snippets import cluster_snippets_by_centroids
+
+            words_by_cid: dict[int, list[dict]] = {}
+            for cw in cluster_view._words_rows:
+                words_by_cid.setdefault(cw.cluster_id, []).append({"word": cw.word})
+            clusters_arg = [
+                {"words": words_by_cid.get(c.cluster_id, [])}
+                for c in cluster_view._rows
+            ]
+            rank_to_cid = {
+                i + 1: c.cluster_id for i, c in enumerate(cluster_view._rows)
+            }
+
+            _, gradient, _, _ = self._pair_arrays[pair_key]
+            shim = SimpleNamespace(
+                embeddings=self.embeddings,
+                gradient=gradient,
+                beta=gradient,
+                lexicon=self.lexicon,
+                window=self.window,
+                sif_a=self.sif_a,
+            )
+
+            pos_arg = clusters_arg if side == "pos" else None
+            neg_arg = clusters_arg if side == "neg" else None
+
+            out = cluster_snippets_by_centroids(
+                pre_docs=self.corpus.pre_docs, ssd=shim,
+                pos_clusters=pos_arg, neg_clusters=neg_arg,
+                token_window=self.window, seeds=self.lexicon or None,
+                sif_a=self.sif_a, top_per_cluster=top_per_cluster,
+                n_jobs=n_jobs, verbose=False,
+            )
+            side_rows = out.get(side, [])
+            if min_cosine is not None:
+                side_rows = [d for d in side_rows if d["cosine"] >= min_cosine]
+
+            rows: list[Snippet] = []
+            for sid, d in enumerate(side_rows):
+                rank = int(d["centroid_label"].rsplit("_", 1)[-1])
+                rows.append(Snippet(
+                    snippet_id=sid,
+                    side=side,
+                    doc_id=int(d["profile_id"]),
+                    cosine=float(d["cosine"]),
+                    seed=d["seed"],
+                    start_token_idx=int(d["start_token_idx"]),
+                    end_token_idx=int(d["end_token_idx"]),
+                    start_sent_idx=int(d["start_sent_idx"]),
+                    end_sent_idx=int(d["end_sent_idx"]),
+                    text_window=d["snippet_anchor"],
+                    text_surface=d["essay_text_surface"],
+                    text_lemmas=d["essay_text_lemmas"],
+                    cluster_id=rank_to_cid.get(rank),
+                    contrast=f"{pair_key[0]}_{pair_key[1]}",
+                    post_id=d.get("post_id"),
+                ))
+            return SnippetsViewSided(side=side, all_rows=rows)
+
+        return self._cache_get("cluster_snippets", cache_params, _compute)
+
+    def cluster_snippets(
+        self, *,
+        pair: tuple[str, str] | None = None,
+        side: str,
+        top_per_cluster: int = 100,
+        min_cosine: float | None = None,
+        n_jobs: int = -1,
+        **cluster_params,
+    ):
+        """Top-level accessor for centroid-based cluster snippets.
+
+        For 2-group fits (single pair) ``pair`` may be omitted; otherwise it is
+        required and must be a canonical pair tuple (reversed order also accepted).
+        """
+        keys = self._pair_keys()
+        if pair is None:
+            if len(keys) != 1:
+                raise ValueError(
+                    f"pair= is required when result has {len(keys)} pairs; "
+                    f"choose one of {keys!r}"
+                )
+            resolved = keys[0]
+        else:
+            resolved = _canonical_pair_key(*pair)
+            if resolved not in keys:
+                raise KeyError(f"unknown pair {pair!r}; known: {keys!r}")
+        return self._cluster_snippets_for(
+            resolved, side, top_per_cluster=top_per_cluster,
+            min_cosine=min_cosine, n_jobs=n_jobs, **cluster_params,
+        )
+
+    # -------- pair filter --------------------------------------------
+
+    def _normalize_pair_specs(self, specs) -> list[tuple[str, str]]:
+        """Parse a user ``gr(...)`` argument into a list of ``(g1, g2)`` tuples.
+
+        Accepts a single contrast string, a 2-tuple/list, or an iterable of
+        either. Raw user labels are resolved to canonical via the inverse of
+        ``group_labels``.
+        """
+        raw_to_canonical = {v: k for k, v in (self.group_labels or {}).items()}
+
+        def resolve(label):
+            s = label if isinstance(label, str) else str(label)
+            return raw_to_canonical.get(s, s)
+
+        def as_pair(spec):
+            if isinstance(spec, str):
+                if "_" not in spec:
+                    raise ValueError(
+                        f"pair spec {spec!r} must be 'g1_g2' form "
+                        f"or a 2-element tuple"
+                    )
+                a, b = spec.split("_", 1)
+                return (resolve(a), resolve(b))
+            if isinstance(spec, (tuple, list)) and len(spec) == 2:
+                return (resolve(spec[0]), resolve(spec[1]))
+            raise TypeError(f"invalid pair spec {spec!r}")
+
+        if isinstance(specs, str):
+            return [as_pair(specs)]
+        if isinstance(specs, (tuple, list)) and len(specs) == 2 \
+                and all(isinstance(s, str) for s in specs) \
+                and not any("_" in s for s in specs):
+            return [as_pair(tuple(specs))]
+        if isinstance(specs, (tuple, list)):
+            return [as_pair(s) for s in specs]
+        raise TypeError(f"invalid pairs spec {specs!r}")
+
+    def __call__(self, *args, pairs=None) -> "GroupResult":
+        """Return a shallow copy restricted to the requested pair(s).
+
+        Flexible input — any of:
+
+        - Contrast string:          ``gr('g1_g2')``
+        - Positional pair:          ``gr('g1', 'g2')``
+        - Tuple / list pair:        ``gr(('g1', 'g2'))``, ``gr(['g1', 'g2'])``
+        - List of contrast strings: ``gr(['g1_g2', 'g1_g3'])``
+        - List of tuples:           ``gr([('g1', 'g2'), ('g1', 'g3')])``
+        - Keyword form:             ``gr(pairs=...)``
+
+        Raw user labels accepted too — mapped to canonical via ``group_labels``
+        (e.g. ``gr('A', 'B')`` when ``group_labels == {'g1': 'A', 'g2': 'B'}``).
+
+        Unknown pairs raise :exc:`KeyError`; empty input raises :exc:`ValueError`.
+        Reverse-order tuples are normalized to canonical order.
+        """
+        import copy
+
+        if pairs is not None:
+            if args:
+                raise TypeError("cannot mix positional args with pairs= keyword")
+            specs = pairs
+        elif len(args) == 0:
+            raise TypeError("gr(...) requires at least one pair argument")
+        elif len(args) == 2 and all(isinstance(a, str) for a in args) \
+                and not any("_" in a for a in args):
+            specs = [args]
+        elif len(args) >= 2:
+            specs = list(args)
+        else:
+            specs = args[0]
+
+        normalized = self._normalize_pair_specs(specs)
+        if not normalized:
+            raise ValueError("pair list cannot be empty")
+
+        requested: list[tuple[str, str]] = []
+        for pr in normalized:
+            key = _canonical_pair_key(*pr)
+            requested.append(key)
+
+        known = [(p.g1, p.g2) for p in self.pairs]
+        for key in requested:
+            if key not in known:
+                raise KeyError(f"unknown pair {key!r}; known: {known!r}")
+
+        new = copy.copy(self)
+        filtered_pairs = [p for p in self.pairs if (p.g1, p.g2) in set(requested)]
+        by_key = {(p.g1, p.g2): p for p in filtered_pairs}
+        ordered = [by_key[k] for k in requested]
+        new.pairs = PairsListView(ordered)
+
+        for name in (
+            "_pair_arrays", "beta", "gradient", "beta_norm",
+            "alignment_scores", "words", "clusters", "snippets",
+        ):
+            new.__dict__.pop(name, None)
+
+        new._cache = {}
+        return new
 
     # -------- Result machinery ---------------------------------------
 

@@ -4,8 +4,8 @@ Uses the real ``group_result_3g`` session-scoped fixture (no hand-constructed
 views).  One test per format; dispatch minutiae are covered exhaustively in
 ``test_paired_view_save.py``.
 
-Canonical pairs for the 3-group fixture: g_1_vs_g_2, g_1_vs_g_3, g_2_vs_g_3.
-Section titles: "g_1 vs g_2", "g_1 vs g_3", "g_2 vs g_3".
+Canonical pairs for the 3-group fixture: g1_g2, g1_g3, g2_g3.
+Section titles: "g1 vs g2", "g1 vs g3", "g2 vs g3".
 """
 
 from __future__ import annotations
@@ -22,12 +22,12 @@ import pytest
 # ---------------------------------------------------------------------------
 
 def _expected_pair_strings(gr):
-    """Return the set of canonical pair key strings, e.g. {'g_1_vs_g_2', ...}."""
-    return {f"{p.g1}_vs_{p.g2}" for p in gr.pairs}
+    """Return the set of canonical pair key strings, e.g. {'g1_g2', ...}."""
+    return {f"{p.g1}_{p.g2}" for p in gr.pairs}
 
 
 def _expected_pair_titles(gr):
-    """Return the set of per-pair heading titles, e.g. {'g_1 vs g_2', ...}."""
+    """Return the set of per-pair heading titles, e.g. {'g1 vs g2', ...}."""
     return {f"{p.g1} vs {p.g2}" for p in gr.pairs}
 
 
@@ -37,7 +37,7 @@ def _expected_pair_titles(gr):
 
 
 def test_save_csv_fanout(group_result_3g, tmp_path):
-    """gr.words.save(path.csv) for N=3 fans out to tmp/words/g_i_vs_g_j.csv."""
+    """gr.words.save(path.csv) for N=3 fans out to tmp/words/gi_gj.csv."""
     target = tmp_path / "words.csv"
     with warnings.catch_warnings(record=True) as recorded:
         warnings.simplefilter("always")
@@ -51,7 +51,7 @@ def test_save_csv_fanout(group_result_3g, tmp_path):
     assert folder.is_dir(), "fan-out subfolder 'words' should exist"
 
     for pair in group_result_3g.pairs:
-        expected_file = folder / f"{pair.g1}_vs_{pair.g2}.csv"
+        expected_file = folder / f"{pair.g1}_{pair.g2}.csv"
         assert expected_file.is_file(), f"expected {expected_file}"
 
     # UserWarning must be emitted

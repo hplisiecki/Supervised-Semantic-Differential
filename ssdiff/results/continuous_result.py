@@ -195,6 +195,25 @@ class ClusterWordsView(View[ClusterWord]):
         return self._rows[i]
 
 
+class ClusterWordsViewSided(ClusterWordsView):
+    """Cluster-word rows for one β side, callable to filter down to a single cluster.
+
+    ``clusters.pos.words`` returns a ``ClusterWordsViewSided`` with all
+    positive-side cluster word rows; ``clusters.pos.words(cluster_id)``
+    filters to a single cluster and returns a plain ``ClusterWordsView``.
+    """
+
+    def __init__(self, side: str, rows, *, _no_trunc: bool = False):
+        super().__init__(rows, _no_trunc=_no_trunc)
+        self._side = side
+
+    def __call__(self, cluster_id: int) -> ClusterWordsView:
+        """Return a ClusterWordsView filtered to the given cluster_id."""
+        return ClusterWordsView(
+            [w for w in self._rows if w.cluster_id == cluster_id]
+        )
+
+
 class ClustersViewSided(View[Cluster]):
     """Cluster summary view for one β pole.
 
@@ -208,14 +227,12 @@ class ClustersViewSided(View[Cluster]):
 
     def __init__(self, parent: ContinuousResult, side: str,
                  rows: list[Cluster], words_rows: list[ClusterWord],
-                 snippets_rows: list[Snippet] | None, params: dict,
-                 *, _no_trunc: bool = False):
+                 params: dict, *, _no_trunc: bool = False):
         super().__init__(_no_trunc=_no_trunc)
         self._parent = parent
         self._side = side
         self._rows = rows
         self._words_rows = words_rows
-        self._snippets_rows = snippets_rows or []
         self._params = dict(params)
 
     def __iter__(self): return iter(self._rows)
@@ -226,8 +243,7 @@ class ClustersViewSided(View[Cluster]):
             return ClustersViewSided(
                 parent=self._parent, side=self._side,
                 rows=self._rows[i], words_rows=self._words_rows,
-                snippets_rows=self._snippets_rows, params=self._params,
-                _no_trunc=True,
+                params=self._params, _no_trunc=True,
             )
         return self._rows[i]
 
@@ -240,16 +256,18 @@ class ClustersViewSided(View[Cluster]):
         merged.pop("side", None)
         return self._parent._clusters_for(self._side, **merged)
 
-    def words(self, cluster_id: int) -> ClusterWordsView:
-        """Return a ClusterWordsView for the given cluster_id on this side."""
-        return ClusterWordsView(
-            [w for w in self._words_rows if w.cluster_id == cluster_id]
-        )
+    @property
+    def words(self) -> ClusterWordsViewSided:
+        """ClusterWordsViewSided for this side — call with a ``cluster_id`` to filter."""
+        return ClusterWordsViewSided(side=self._side, rows=self._words_rows)
 
     @property
     def snippets(self) -> SnippetsViewSided:
-        """Snippets on this side — callable with a cluster_id to filter further."""
-        return SnippetsViewSided(self._side, self._snippets_rows)
+        """Centroid-based snippets on this side — callable with a cluster_id to filter further."""
+        return self._parent._cluster_snippets_for(
+            side=self._side,
+            **{k: v for k, v in self._params.items() if k != "side"},
+        )
 
     def _save_hint(self) -> str:
         base = super()._save_hint()
@@ -257,19 +275,46 @@ class ClustersViewSided(View[Cluster]):
             ids = sorted({c.cluster_id for c in self._rows})
             examples = "   ".join(f".words({i})" for i in ids[:6])
             more = "   …" if len(ids) > 6 else ""
-            base = base + f"\nWords: {examples}{more} → ClusterWordsView"
+            base = base + (f"\nWords: .words → ClusterWordsViewSided "
+                           f"(all; {examples}{more} → single cluster)")
         else:
-            base = base + "\nWords: .words(cluster_id) → ClusterWordsView"
+            base = base + ("\nWords: .words → ClusterWordsViewSided   "
+                           ".words(cluster_id) → ClusterWordsView")
         topn = self._params.get("topn", 100)
         return base + (f"\nSize:  .{self._side}(topn=50, k=…) "
                        f"→ recompute (current topn={topn})")
 
 
-class ClustersIndex:
-    """`.pos` / `.neg` accessors that hand back a ClustersViewSided."""
+class ClustersView(View[Cluster]):
+    """Flat-iterable cluster view — pos rows, then neg rows.
+
+    Exposes ``.pos`` / ``.neg`` for per-side access and ``.words`` for the
+    combined cluster-words table. Supports ``.save()`` (inherited from
+    ``View``) which writes all rows (pos then neg) to a single file.
+    """
+
+    _name = "clusters"
+    _columns = ("cluster_id", "side", "size", "coherence", "centroid_cos_beta", "contrast")
 
     def __init__(self, parent: ContinuousResult):
+        super().__init__()
         self._parent = parent
+
+    @property
+    def _rows(self) -> list[Cluster]:
+        """Materialize pos + neg rows in canonical order (pos first)."""
+        pos = list(self._parent._clusters_for("pos")._rows)
+        neg = list(self._parent._clusters_for("neg")._rows)
+        return pos + neg
+
+    def __iter__(self):
+        return iter(self._rows)
+
+    def __len__(self):
+        return len(self._rows)
+
+    def __getitem__(self, i):
+        return self._rows[i]
 
     @property
     def pos(self) -> ClustersViewSided:
@@ -278,6 +323,20 @@ class ClustersIndex:
     @property
     def neg(self) -> ClustersViewSided:
         return self._parent._clusters_for("neg")
+
+    @property
+    def words(self) -> ClusterWordsView:
+        """Combined cluster-words across both sides."""
+        pos_rows = self._parent._clusters_for("pos")._words_rows
+        neg_rows = self._parent._clusters_for("neg")._words_rows
+        return ClusterWordsView(list(pos_rows) + list(neg_rows))
+
+    @property
+    def snippets(self):
+        raise AttributeError(
+            "cluster snippets are per-side; use .pos.snippets or .neg.snippets, "
+            "or result.cluster_snippets(side='pos')"
+        )
 
     def _cached_count(self, side: str) -> int | None:
         """Return cached len for `side`, or None if not yet computed."""
@@ -289,17 +348,18 @@ class ClustersIndex:
         return None
 
     def _save_hint(self) -> str:
-        return ("Save:  .pos.save('clusters_pos.csv')\n"
+        return ("Save:  .save('clusters.csv')               # all rows (pos then neg)\n"
+                "       .pos.save('clusters_pos.csv')\n"
                 "       .neg.save('clusters_neg.csv')")
 
     def to_text(self) -> str:
-        lines = ["ClustersIndex"]
+        lines = ["ClustersView"]
         for side, label in (("pos", "positive"), ("neg", "negative")):
             n = self._cached_count(side)
             if n is None:
-                lines.append(f"  .{side}  \u2192 {label} clusters (call to compute)")
+                lines.append(f"  .{side}  → {label} clusters (call to compute)")
             else:
-                lines.append(f"  .{side}  \u2192 {n} {label} clusters")
+                lines.append(f"  .{side}  → {n} {label} clusters")
         return "\n".join(lines)
 
     def to_html(self) -> str:
@@ -318,14 +378,18 @@ class ClustersIndex:
                     + f"\n<pre class='ssd-save-hint'>{self._save_hint()}</pre>")
         return body
 
-
 # ---------- SnippetsView ----------
+_SNIPPET_EXTRACTION_KWARGS = frozenset({"top_per_side", "min_cosine", "n_jobs"})
+
+
 class SnippetsView(View[Snippet]):
     """Tabular view of text snippets extracted near seed words along the gradient.
 
-    Callable to recompute with different parameters, e.g.
-    ``result.snippets(top_per_side=100)``.  Text columns are truncated to 40
-    characters in terminal display; full text is preserved in data exports.
+    Use ``.pos`` / ``.neg`` for side filtering, and call the sided view with
+    ``k`` / ``cluster_id=`` to resize or filter. The flat view's ``__call__``
+    is reserved for **recomputing** with different extraction parameters
+    (``top_per_side``, ``min_cosine``, ``n_jobs``). Text columns are truncated
+    to 40 characters in terminal display; full text is preserved in exports.
     """
 
     _name = "snippets"
@@ -356,46 +420,99 @@ class SnippetsView(View[Snippet]):
     @property
     def params(self): return dict(self._params)
 
+    @property
+    def pos(self) -> SnippetsViewSided:
+        """Snippets filtered to the β-positive side (default k=30)."""
+        return SnippetsViewSided("pos", self._rows)
+
+    @property
+    def neg(self) -> SnippetsViewSided:
+        """Snippets filtered to the β-negative side (default k=30)."""
+        return SnippetsViewSided("neg", self._rows)
+
     def __call__(self, **params) -> SnippetsView:
-        """Recompute snippets with updated parameters (e.g. ``top_per_side=100``)."""
+        """Recompute snippets with updated extraction parameters.
+
+        Accepts only extraction kwargs (``top_per_side``, ``min_cosine``,
+        ``n_jobs``). Use ``.pos`` / ``.neg`` for side filtering, and
+        ``.pos(k, cluster_id=...)`` for per-cluster filtering.
+        """
         if self._parent is None:
             return self
+        unknown = set(params) - _SNIPPET_EXTRACTION_KWARGS
+        if unknown:
+            raise TypeError(
+                f"SnippetsView() got unexpected kwargs {sorted(unknown)!r}. "
+                f"Accepted extraction kwargs: {sorted(_SNIPPET_EXTRACTION_KWARGS)}. "
+                f"Use .pos / .neg for side filtering, or "
+                f".pos(cluster_id=...) for cluster filtering."
+            )
         merged = {**self._params, **params}
         return self._parent._snippets_for(**merged)
 
     def _save_hint(self) -> str:
         top_per_side = self._params.get("top_per_side", 30)
         return (super()._save_hint()
+                + "\nSides: .pos   .neg → SnippetsViewSided "
+                  "(top 30; .pos(50) / .pos(cluster_id=0) for more)"
                 + f"\nSize:  (top_per_side=100) → recompute "
-                f"(current {top_per_side})"
-                + "\nFilter: (side='pos', cluster_id=0, ...)")
+                  f"(current {top_per_side})")
 
 
 class SnippetsViewSided(SnippetsView):
-    """Snippets filtered to one β side; callable with a cluster_id to filter further.
+    """Snippets filtered to one β side.
 
-    Solves the confusing `clusters.neg.snippets` bound-method repr by behaving
-    as a view when accessed and as a method when called.
+    Defaults to 30 rows (by cosine) for display AND export — iterating,
+    saving to CSV, or rendering in the terminal all stop at 30. Call with
+    a different ``k`` to resize, or ``cluster_id=`` to filter::
+
+        snippets.pos                    → SnippetsViewSided, 30 rows
+        snippets.pos(50)                → SnippetsViewSided, 50 rows
+        snippets.pos(None)              → all pos rows (unsized)
+        snippets.pos(cluster_id=0)      → pos rows in cluster 0
+        snippets.pos(50, cluster_id=0)  → top 50 pos rows in cluster 0
     """
 
-    def __init__(self, side: str, all_rows, *, _no_trunc: bool = False):
+    def __init__(self, side: str, all_rows: list[Snippet],
+                 k: int | None = 30, cluster_id: int | None = None,
+                 *, _no_trunc: bool = False):
         side_rows = [s for s in all_rows if s.side == side]
-        super().__init__(side_rows, params={"side": side}, _no_trunc=_no_trunc)
+        if cluster_id is not None:
+            side_rows = [s for s in side_rows if s.cluster_id == cluster_id]
+        limited = side_rows if k is None else side_rows[:k]
+        super().__init__(limited, params={"side": side}, _no_trunc=True)
         self._side_key = side
+        self._all_side_rows = side_rows
         self._all_rows = all_rows
+        self._k = k
+        self._cluster_id = cluster_id
 
-    def __call__(self, cluster_id: int | None = None, **params) -> SnippetsView:
-        rows = [s for s in self._all_rows if s.side == self._side_key]
-        if cluster_id is not None:
-            rows = [s for s in rows if s.cluster_id == cluster_id]
-        merged = {"side": self._side_key, **params}
-        if cluster_id is not None:
-            merged["cluster_id"] = cluster_id
-        return SnippetsView(rows, params=merged, _no_trunc=True)
+    def __call__(self, k: int | None = 30, *,
+                 cluster_id: int | None = None) -> SnippetsViewSided:
+        """Resize or re-filter this sided view.
+
+        Parameters
+        ----------
+        k : int or None, default 30
+            Post-extraction row cap (by cosine). ``None`` returns all rows.
+        cluster_id : int or None
+            If omitted, the current cluster filter is preserved.
+        """
+        cid = cluster_id if cluster_id is not None else self._cluster_id
+        return SnippetsViewSided(
+            self._side_key, self._all_rows, k=k, cluster_id=cid,
+        )
 
     def _save_hint(self) -> str:
-        return (super()._save_hint()
-                + "\nCluster: .snippets(cluster_id) → SnippetsView")
+        max_k = len(self._all_side_rows)
+        current_k = "all" if self._k is None else str(self._k)
+        cid = self._cluster_id
+        cid_note = f" (cluster_id={cid})" if cid is not None else ""
+        return (View._save_hint(self)
+                + f"\nCount: .{self._side_key}(k) → first k{cid_note} "
+                  f"(current {current_k}, max {max_k}; k=None for all)"
+                + f"\nCluster: .{self._side_key}(cluster_id=N) → filter "
+                  f"by cluster")
 
 
 # ---------- DocsView ----------
@@ -861,7 +978,7 @@ class ContinuousResult(Result):
             parent=self, _preview=True,
         )
 
-        self.clusters = ClustersIndex(self)
+        self.clusters = ClustersView(self)
 
         # Subclasses set self.test in their own __init__.
         self.test: TestView | None = None
@@ -945,7 +1062,7 @@ class ContinuousResult(Result):
             rows, words_rows = self._compute_clusters_for_side(**params)
             return ClustersViewSided(
                 parent=self, side=side, rows=rows, words_rows=words_rows,
-                snippets_rows=self._current_snippets_rows(), params=params,
+                params=params,
             )
         return self._cache_get("clusters", params, _compute)
 
@@ -984,9 +1101,18 @@ class ContinuousResult(Result):
         return self._snippets_for(top_per_side=30)
 
     def _snippets_for(self, **params) -> SnippetsView:
-        """Fetch or compute the snippets view with the given params (cached)."""
+        """Fetch or compute the snippets view with the given params (cached).
+
+        Only extraction kwargs (``top_per_side``, ``min_cosine``, ``n_jobs``)
+        participate in the cache key; filter-style kwargs are rejected at the
+        public surface (``SnippetsView.__call__``) and are dropped here as a
+        defensive measure.
+        """
         defaults = {"top_per_side": 30}
-        params = {**defaults, **params}
+        extraction_params = {
+            k: v for k, v in params.items() if k in _SNIPPET_EXTRACTION_KWARGS
+        }
+        params = {**defaults, **extraction_params}
 
         def _compute():
             self._require_resource("corpus", "snippets")
@@ -998,7 +1124,7 @@ class ContinuousResult(Result):
         return self._cache_get("snippets", params, _compute)
 
     def _compute_snippets_rows(self, **params) -> list[Snippet]:
-        """Extract snippet rows from the corpus and enrich with cluster IDs."""
+        """Extract β-aligned snippet rows from the corpus."""
         from ssdiff.utils.snippets import snippets_along_beta
 
         out = snippets_along_beta(
@@ -1012,16 +1138,6 @@ class ContinuousResult(Result):
             n_jobs=params.get("n_jobs", -1),
             verbose=False,
         )
-
-        seed_to_cluster: dict[str, dict[str, int]] = {"pos": {}, "neg": {}}
-        for (name, key), view in self._cache.items():
-            if name != "clusters":
-                continue
-            side = dict(key).get("side")
-            if side not in seed_to_cluster:
-                continue
-            for cw in getattr(view, "_words_rows", []):
-                seed_to_cluster[side][cw.word] = cw.cluster_id
 
         rows: list[Snippet] = []
         sid = 0
@@ -1040,19 +1156,104 @@ class ContinuousResult(Result):
                     text_window=d["snippet_anchor"],
                     text_surface=d["essay_text_surface"],
                     text_lemmas=d["essay_text_lemmas"],
-                    cluster_id=seed_to_cluster[side].get(d["seed"]),
+                    cluster_id=None,
                     contrast=None,
                     post_id=d.get("post_id"),
                 ))
                 sid += 1
         return rows
 
-    def _current_snippets_rows(self):
-        """Return flattened snippet rows from the cache, or None if not yet computed."""
-        for (name, _), view in self._cache.items():
-            if name == "snippets":
-                return list(view)
-        return None
+    def _cluster_snippets_for(
+        self, side: str, *,
+        top_per_cluster: int = 100,
+        min_cosine: float | None = None,
+        n_jobs: int = -1,
+        **cluster_params,
+    ) -> SnippetsViewSided:
+        """Fetch or compute per-cluster centroid snippets for ``side`` (cached)."""
+        cluster_view = self._clusters_for(side, **cluster_params)
+        effective_cluster_params = {
+            k: v for k, v in cluster_view._params.items() if k != "side"
+        }
+        cache_params = {
+            "side": side,
+            "top_per_cluster": top_per_cluster,
+            "min_cosine": min_cosine,
+            "n_jobs": n_jobs,
+            **effective_cluster_params,
+        }
+
+        def _compute():
+            self._require_resource("corpus", "cluster_snippets")
+            self._require_resource("embeddings", "cluster_snippets")
+            from ssdiff.utils.snippets import cluster_snippets_by_centroids
+
+            words_by_cid: dict[int, list[dict]] = {}
+            for cw in cluster_view._words_rows:
+                words_by_cid.setdefault(cw.cluster_id, []).append({"word": cw.word})
+            clusters_arg = [
+                {"words": words_by_cid.get(c.cluster_id, [])}
+                for c in cluster_view._rows
+            ]
+            rank_to_cid = {
+                i + 1: c.cluster_id for i, c in enumerate(cluster_view._rows)
+            }
+
+            pos_arg = clusters_arg if side == "pos" else None
+            neg_arg = clusters_arg if side == "neg" else None
+
+            out = cluster_snippets_by_centroids(
+                pre_docs=self.corpus.pre_docs, ssd=self,
+                pos_clusters=pos_arg, neg_clusters=neg_arg,
+                token_window=self.window, seeds=self.lexicon or None,
+                sif_a=self.sif_a, top_per_cluster=top_per_cluster,
+                n_jobs=n_jobs, verbose=False,
+            )
+            side_rows = out.get(side, [])
+            if min_cosine is not None:
+                side_rows = [d for d in side_rows if d["cosine"] >= min_cosine]
+
+            rows: list[Snippet] = []
+            for sid, d in enumerate(side_rows):
+                rank = int(d["centroid_label"].rsplit("_", 1)[-1])
+                rows.append(Snippet(
+                    snippet_id=sid,
+                    side=side,
+                    doc_id=int(d["profile_id"]),
+                    cosine=float(d["cosine"]),
+                    seed=d["seed"],
+                    start_token_idx=int(d["start_token_idx"]),
+                    end_token_idx=int(d["end_token_idx"]),
+                    start_sent_idx=int(d["start_sent_idx"]),
+                    end_sent_idx=int(d["end_sent_idx"]),
+                    text_window=d["snippet_anchor"],
+                    text_surface=d["essay_text_surface"],
+                    text_lemmas=d["essay_text_lemmas"],
+                    cluster_id=rank_to_cid.get(rank),
+                    contrast=None,
+                    post_id=d.get("post_id"),
+                ))
+            return SnippetsViewSided(side=side, all_rows=rows)
+
+        return self._cache_get("cluster_snippets", cache_params, _compute)
+
+    def cluster_snippets(
+        self, *, side: str,
+        top_per_cluster: int = 100,
+        min_cosine: float | None = None,
+        n_jobs: int = -1,
+        **cluster_params,
+    ) -> SnippetsViewSided:
+        """Top-level accessor for centroid-based cluster snippets.
+
+        Mirrors ``result.clusters.<side>.snippets`` but lets callers pass
+        extraction kwargs (``top_per_cluster``, ``min_cosine``, ``n_jobs``)
+        alongside cluster params (``topn``, ``k``, ...).
+        """
+        return self._cluster_snippets_for(
+            side=side, top_per_cluster=top_per_cluster,
+            min_cosine=min_cosine, n_jobs=n_jobs, **cluster_params,
+        )
 
     _access = (
         "stats", "fit_info", "words", "clusters", "snippets", "docs", "test",
@@ -1358,7 +1559,7 @@ class PCAOLSResult(ContinuousResult):
         except ImportError:
             raise ImportError(
                 "matplotlib is required for plot_sweep(). "
-                "Install it with: pip install ssdiff[plot]"
+                "Install it with: pip install ssdiff[results]"
             ) from None
 
         import io

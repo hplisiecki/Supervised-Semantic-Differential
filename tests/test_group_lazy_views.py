@@ -24,7 +24,7 @@ class TestWordsPopulatedSinglePair:
 
     def test_contrast_tag_matches_pair(self, group_result_2g):
         pair = next(iter(group_result_2g.pairs))
-        expected = f"{pair.g1}_vs_{pair.g2}"
+        expected = f"{pair.g1}_{pair.g2}"
         for w in group_result_2g.words:
             assert w.contrast == expected
 
@@ -41,7 +41,7 @@ class TestWordsPopulatedMultiPair:
 
     def test_per_pair_contrast_tag(self, group_result_3g):
         for key in group_result_3g.words.keys():
-            expected = f"{key[0]}_vs_{key[1]}"
+            expected = f"{key[0]}_{key[1]}"
             for w in group_result_3g.words[key]:
                 assert w.contrast == expected
 
@@ -54,7 +54,7 @@ class TestClustersPopulatedSinglePair:
 
     def test_cluster_contrast_matches_pair(self, group_result_2g):
         pair = next(iter(group_result_2g.pairs))
-        expected = f"{pair.g1}_vs_{pair.g2}"
+        expected = f"{pair.g1}_{pair.g2}"
         for c in group_result_2g.clusters.pos:
             assert c.contrast == expected
         for c in group_result_2g.clusters.neg:

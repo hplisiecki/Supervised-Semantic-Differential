@@ -74,9 +74,9 @@ def group_result_3_cities():
 # ---------------------------------------------------------------------------
 
 def test_group_labels_mapping(group_result_3_cities):
-    """Canonical labels map g_1→Berlin, g_2→Kraków, g_3→Warsaw (sorted by str)."""
+    """Canonical labels map g1→Berlin, g2→Kraków, g3→Warsaw (sorted by str)."""
     gr = group_result_3_cities
-    assert gr.group_labels == {"g_1": "Berlin", "g_2": "Kraków", "g_3": "Warsaw"}
+    assert gr.group_labels == {"g1": "Berlin", "g2": "Kraków", "g3": "Warsaw"}
 
 
 def test_groups_array_values_are_canonical(group_result_3_cities):
@@ -88,9 +88,9 @@ def test_groups_array_values_are_canonical(group_result_3_cities):
 
 
 def test_pair_contrast_is_canonical(group_result_3_cities):
-    """Every Pair.contrast matches the pattern g_N_vs_g_M."""
+    """Every Pair.contrast matches the pattern gN_gM."""
     gr = group_result_3_cities
-    pattern = re.compile(r"^g_\d+_vs_g_\d+$")
+    pattern = re.compile(r"^g\d+_g\d+$")
     for p in gr.pairs:
         assert pattern.match(p.contrast), f"Bad contrast: {p.contrast!r}"
 
@@ -114,10 +114,10 @@ def test_pair_canonical_order(group_result_3_cities):
 
 
 def test_pair_contrast_matches_g1_g2(group_result_3_cities):
-    """Pair.contrast must equal f'{g1}_vs_{g2}'."""
+    """Pair.contrast must equal f'{g1}_{g2}'."""
     gr = group_result_3_cities
     for p in gr.pairs:
-        expected = f"{p.g1}_vs_{p.g2}"
+        expected = f"{p.g1}_{p.g2}"
         assert p.contrast == expected, (
             f"Contrast mismatch: {p.contrast!r} != {expected!r}"
         )
@@ -126,21 +126,21 @@ def test_pair_contrast_matches_g1_g2(group_result_3_cities):
 def test_canonical_pair_order_with_many_groups():
     """With G>=10, canonical pair order must be numeric, not lexicographic.
 
-    Under lex sort 'g_10' < 'g_2', so (g_2, g_10) would wrongly become
-    (g_10, g_2).  Under numeric sort it stays (g_2, g_10).
+    Under lex sort 'g10' < 'g2', so (g2, g10) would wrongly become
+    (g10, g2).  Under numeric sort it stays (g2, g10).
     """
     from ssdiff.results.group_result import GroupResult
     from ssdiff.results.schema import Pair
 
     G = 11
     n_per_group = 2
-    labels = [f"orig_{i:02d}" for i in range(G)]   # "orig_00" .. "orig_10"
+    labels = [f"orig_{i:02d}" for i in range(G)]   # "orig00" .. "orig10"
     groups = np.array([l for l in labels for _ in range(n_per_group)], dtype=object)
     x = np.random.default_rng(0).standard_normal((len(groups), 4))
 
     pairs = [
         Pair(
-            contrast=f"{a}_vs_{b}",
+            contrast=f"{a}_{b}",
             g1=a, g2=b,
             T=0.0, p_raw=1.0, p_corrected=1.0, cohens_d=0.0,
             n_g1=n_per_group, n_g2=n_per_group, contrast_norm=0.0,
@@ -156,10 +156,10 @@ def test_canonical_pair_order_with_many_groups():
         x=x, groups=groups,
     )
 
-    # g_2 vs g_10: numeric index 2 < 10, so g_2 must come first.
-    targets = [p for p in gr.pairs if {p.g1, p.g2} == {"g_2", "g_10"}]
-    assert len(targets) == 1, "Expected exactly one pair involving g_2 and g_10"
+    # g2 vs g10: numeric index 2 < 10, so g2 must come first.
+    targets = [p for p in gr.pairs if {p.g1, p.g2} == {"g2", "g10"}]
+    assert len(targets) == 1, "Expected exactly one pair involving g2 and g10"
     p = targets[0]
-    assert p.g1 == "g_2" and p.g2 == "g_10", (
-        f"Expected g_2 before g_10 by numeric order, got ({p.g1}, {p.g2})"
+    assert p.g1 == "g2" and p.g2 == "g10", (
+        f"Expected g2 before g10 by numeric order, got ({p.g1}, {p.g2})"
     )

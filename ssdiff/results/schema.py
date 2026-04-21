@@ -24,7 +24,7 @@ class Word:
     cos_beta : float
         Cosine similarity between the word vector and the semantic gradient.
     contrast : str or None
-        Group contrast key (e.g. ``"A_vs_B"``); ``None`` for continuous results.
+        Group contrast key (e.g. ``"A_B"``); ``None`` for continuous results.
     """
     side: str            # "pos" | "neg"
     rank: int            # 1-based
@@ -167,7 +167,7 @@ class Pair:
     Fields
     ------
     contrast : str
-        Human-readable label in the form ``"g1_vs_g2"``.
+        Human-readable label in the form ``"g1_g2"``.
     g1, g2 : str
         Group labels in canonical order (g1 is the first group alphabetically
         after sorting by ``str``).
@@ -184,7 +184,7 @@ class Pair:
     contrast_norm : float
         L2 norm of the raw (un-normalized) contrast vector ``c_g1 − c_g2``.
     """
-    contrast: str          # "g1_vs_g2"
+    contrast: str          # "g1_g2"
     g1: str
     g2: str
     T: float

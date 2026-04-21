@@ -7,7 +7,7 @@ Covers:
 - gr.words[(g2, g1)] raises KeyError (canonical-only)
 - list(gr.words.keys()) matches canonical pair tuples from gr.pairs
 - _compute_pair_arrays called exactly once per pair (caching regression)
-- gr.words[("g_2", "g_1")] raises KeyError on words view (not just on gr.pairs)
+- gr.words[("g2", "g1")] raises KeyError on words view (not just on gr.pairs)
 """
 
 from __future__ import annotations
@@ -27,8 +27,8 @@ class TestMultiPairDispatch:
         assert isinstance(group_result_3g.words, WordsViewPaired)
 
     def test_clusters_is_paired(self, group_result_3g):
-        from ssdiff.results.paired_view import ClustersIndexPaired
-        assert isinstance(group_result_3g.clusters, ClustersIndexPaired)
+        from ssdiff.results.paired_view import ClustersViewPaired
+        assert isinstance(group_result_3g.clusters, ClustersViewPaired)
 
     def test_snippets_is_paired(self, group_result_3g):
         from ssdiff.results.paired_view import SnippetsViewPaired

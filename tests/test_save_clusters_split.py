@@ -49,7 +49,7 @@ def test_clusters_neg_single_pair_flat_file(group_result_2g, tmp_path):
 
 
 def test_clusters_pos_multi_pair_subfolder(group_result_3g, tmp_path):
-    """Multi-pair: clusters.pos.save → tmp/clusters_pos/g_i_vs_g_j.csv for each pair."""
+    """Multi-pair: clusters.pos.save → tmp/clusters_pos/gi_gj.csv for each pair."""
     target = tmp_path / "clusters_pos.csv"
     with warnings.catch_warnings(record=True) as recorded:
         warnings.simplefilter("always")
@@ -63,7 +63,7 @@ def test_clusters_pos_multi_pair_subfolder(group_result_3g, tmp_path):
     assert folder.is_dir(), "subfolder 'clusters_pos' should be created"
 
     for pair in group_result_3g.pairs:
-        expected = folder / f"{pair.g1}_vs_{pair.g2}.csv"
+        expected = folder / f"{pair.g1}_{pair.g2}.csv"
         assert expected.is_file(), f"expected {expected}"
 
     assert any(issubclass(w.category, UserWarning) for w in recorded), \
@@ -71,7 +71,7 @@ def test_clusters_pos_multi_pair_subfolder(group_result_3g, tmp_path):
 
 
 def test_clusters_neg_multi_pair_subfolder(group_result_3g, tmp_path):
-    """Multi-pair: clusters.neg.save → tmp/clusters_neg/g_i_vs_g_j.csv for each pair."""
+    """Multi-pair: clusters.neg.save → tmp/clusters_neg/gi_gj.csv for each pair."""
     target = tmp_path / "clusters_neg.csv"
     with warnings.catch_warnings(record=True) as recorded:
         warnings.simplefilter("always")
@@ -83,7 +83,7 @@ def test_clusters_neg_multi_pair_subfolder(group_result_3g, tmp_path):
     assert folder.is_dir(), "subfolder 'clusters_neg' should be created"
 
     for pair in group_result_3g.pairs:
-        expected = folder / f"{pair.g1}_vs_{pair.g2}.csv"
+        expected = folder / f"{pair.g1}_{pair.g2}.csv"
         assert expected.is_file(), f"expected {expected}"
 
     assert any(issubclass(w.category, UserWarning) for w in recorded)

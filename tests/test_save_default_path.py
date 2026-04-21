@@ -135,7 +135,7 @@ def test_clusters_view_sided_pos_default_path(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     view = ClustersViewSided(
         parent=None, side="pos",
-        rows=[_cluster("pos")], words_rows=[], snippets_rows=None, params={},
+        rows=[_cluster("pos")], words_rows=[], params={},
     )
     view.save()
     out = tmp_path / "clusters_pos.csv"
@@ -147,7 +147,7 @@ def test_clusters_view_sided_neg_default_path(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     view = ClustersViewSided(
         parent=None, side="neg",
-        rows=[_cluster("neg")], words_rows=[], snippets_rows=None, params={},
+        rows=[_cluster("neg")], words_rows=[], params={},
     )
     view.save()
     out = tmp_path / "clusters_neg.csv"
@@ -209,7 +209,7 @@ def test_pls_words_neg_default_stem(pls_result, tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_multi_pair_words_default_save_creates_folder(group_result_3g, tmp_path, monkeypatch):
-    """For N>=2 csv default save, gr.words.save() writes ./words/g_i_vs_g_j.csv."""
+    """For N>=2 csv default save, gr.words.save() writes ./words/gi_gj.csv."""
     monkeypatch.chdir(tmp_path)
     with pytest.warns(UserWarning, match="fans out"):
         group_result_3g.words.save()
