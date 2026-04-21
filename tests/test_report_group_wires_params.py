@@ -56,7 +56,7 @@ def test_report_top_words_none_skips_word_sections(group_result_2g):
     gr = group_result_2g
     text = gr.report(top_words=None).to_text()
     # Without top_words, no pair vs. pair word table sections
-    # The section headers like "g_1 vs g_2" should NOT be present
+    # The section headers like "g1 vs g2" should NOT be present
     # (only pairwise contrasts table will have pair info, but as a table body)
     # Check that clusters section isn't there either
     assert "— pos" not in text

@@ -14,7 +14,7 @@ import pytest
 
 from ssdiff.results.continuous_result import ClustersViewSided, SnippetsView, WordsView
 from ssdiff.results.paired_view import (
-    ClustersIndexPaired,
+    ClustersViewPaired,
     ClustersViewSidedPaired,
     SnippetsViewPaired,
     WordsViewPaired,
@@ -58,13 +58,12 @@ def _make_clusters_view_sided(contrast: str, side: str) -> ClustersViewSided:
             )
         ],
         words_rows=[],
-        snippets_rows=None,
         params={},
     )
 
 
 class _FakePairClustersIndex:
-    """Minimal stand-in for _PairClustersIndex to back ClustersIndexPaired."""
+    """Minimal stand-in for _PairClustersIndex to back ClustersViewPaired."""
 
     def __init__(self, contrast: str):
         self._contrast = contrast
@@ -82,9 +81,9 @@ class _FakePairClustersIndex:
 def paired_words() -> WordsViewPaired:
     return WordsViewPaired(
         views={
-            ("g_1", "g_2"): _make_words_view("g_1_vs_g_2"),
-            ("g_1", "g_3"): _make_words_view("g_1_vs_g_3"),
-            ("g_2", "g_3"): _make_words_view("g_2_vs_g_3"),
+            ("g1", "g2"): _make_words_view("g1_g2"),
+            ("g1", "g3"): _make_words_view("g1_g3"),
+            ("g2", "g3"): _make_words_view("g2_g3"),
         },
         view_name="words",
     )
@@ -94,21 +93,21 @@ def paired_words() -> WordsViewPaired:
 def paired_snippets() -> SnippetsViewPaired:
     return SnippetsViewPaired(
         views={
-            ("g_1", "g_2"): _make_snippets_view("g_1_vs_g_2"),
-            ("g_1", "g_3"): _make_snippets_view("g_1_vs_g_3"),
-            ("g_2", "g_3"): _make_snippets_view("g_2_vs_g_3"),
+            ("g1", "g2"): _make_snippets_view("g1_g2"),
+            ("g1", "g3"): _make_snippets_view("g1_g3"),
+            ("g2", "g3"): _make_snippets_view("g2_g3"),
         },
         view_name="snippets",
     )
 
 
 @pytest.fixture
-def paired_clusters_index() -> ClustersIndexPaired:
-    return ClustersIndexPaired(
+def paired_clusters_index() -> ClustersViewPaired:
+    return ClustersViewPaired(
         views={
-            ("g_1", "g_2"): _FakePairClustersIndex("g_1_vs_g_2"),
-            ("g_1", "g_3"): _FakePairClustersIndex("g_1_vs_g_3"),
-            ("g_2", "g_3"): _FakePairClustersIndex("g_2_vs_g_3"),
+            ("g1", "g2"): _FakePairClustersIndex("g1_g2"),
+            ("g1", "g3"): _FakePairClustersIndex("g1_g3"),
+            ("g2", "g3"): _FakePairClustersIndex("g2_g3"),
         },
     )
 
@@ -119,36 +118,40 @@ def paired_clusters_index() -> ClustersIndexPaired:
 
 
 def test_keys_and_len(paired_words: WordsViewPaired) -> None:
-    assert sorted(paired_words.keys()) == [("g_1", "g_2"), ("g_1", "g_3"), ("g_2", "g_3")]
-    assert len(paired_words) == 3
+    assert sorted(paired_words.keys()) == [("g1", "g2"), ("g1", "g3"), ("g2", "g3")]
+    # len() counts total rows across all pairs (2 rows x 3 pairs = 6)
+    assert len(paired_words) == 6
 
 
 def test_getitem_canonical(paired_words: WordsViewPaired) -> None:
-    view = paired_words[("g_1", "g_2")]
+    view = paired_words[("g1", "g2")]
     assert isinstance(view, WordsView)
     assert len(view) == 2
 
 
 def test_getitem_reverse_order_raises(paired_words: WordsViewPaired) -> None:
     with pytest.raises(KeyError):
-        _ = paired_words[("g_2", "g_1")]
+        _ = paired_words[("g2", "g1")]
 
 
 def test_getitem_unknown_key_raises(paired_words: WordsViewPaired) -> None:
     with pytest.raises(KeyError):
-        _ = paired_words[("g_1", "g_9")]
+        _ = paired_words[("g1", "g9")]
 
 
 def test_getitem_bad_type_raises(paired_words: WordsViewPaired) -> None:
     with pytest.raises(KeyError):
-        _ = paired_words["g_1_vs_g_2"]  # type: ignore[index]
+        _ = paired_words["g1_g2"]  # type: ignore[index]
 
 
-def test_iter_yields_tuples(paired_words: WordsViewPaired) -> None:
+def test_iter_yields_rows(paired_words: WordsViewPaired) -> None:
+    """Flat iteration yields Word rows (not (key, view) tuples) — new Phase C contract."""
+    from ssdiff.results.schema import Word
     items = list(paired_words)
-    assert all(isinstance(item, tuple) and len(item) == 2 for item in items)
-    keys = [t[0] for t in items]
-    assert set(keys) == {("g_1", "g_2"), ("g_1", "g_3"), ("g_2", "g_3")}
+    assert len(items) == 6  # 2 words per pair × 3 pairs
+    assert all(isinstance(item, Word) for item in items)
+    contrasts = {item.contrast for item in items}
+    assert contrasts == {"g1_g2", "g1_g3", "g2_g3"}
 
 
 def test_repr_contains_view_name(paired_words: WordsViewPaired) -> None:
@@ -172,9 +175,9 @@ def test_save_csv_fans_out(paired_words: WordsViewPaired, tmp_path: Path) -> Non
     # Subfolder hardcoded to view_name "words", not "anything"
     folder = tmp_path / "words"
     assert folder.is_dir()
-    assert (folder / "g_1_vs_g_2.csv").is_file()
-    assert (folder / "g_1_vs_g_3.csv").is_file()
-    assert (folder / "g_2_vs_g_3.csv").is_file()
+    assert (folder / "g1_g2.csv").is_file()
+    assert (folder / "g1_g3.csv").is_file()
+    assert (folder / "g2_g3.csv").is_file()
     assert any(issubclass(w.category, UserWarning) for w in recorded)
 
 
@@ -182,8 +185,8 @@ def test_save_csv_content_correct(paired_words: WordsViewPaired, tmp_path: Path)
     with warnings.catch_warnings(record=True):
         warnings.simplefilter("always")
         paired_words.save(tmp_path / "out.csv")
-    content = (tmp_path / "words" / "g_1_vs_g_2.csv").read_text()
-    assert "g_1_vs_g_2_p" in content
+    content = (tmp_path / "words" / "g1_g2.csv").read_text()
+    assert "g1_g2_p" in content
     assert "side" in content
 
 
@@ -198,7 +201,7 @@ def test_save_xlsx_multisheet(paired_words: WordsViewPaired, tmp_path: Path) -> 
     assert path.is_file()
     from openpyxl import load_workbook
     wb = load_workbook(path)
-    assert set(wb.sheetnames) == {"g_1_vs_g_2", "g_1_vs_g_3", "g_2_vs_g_3"}
+    assert set(wb.sheetnames) == {"g1_g2", "g1_g3", "g2_g3"}
 
 
 def test_save_xlsx_row_content(paired_words: WordsViewPaired, tmp_path: Path) -> None:
@@ -206,7 +209,7 @@ def test_save_xlsx_row_content(paired_words: WordsViewPaired, tmp_path: Path) ->
     paired_words.save(path)
     from openpyxl import load_workbook
     wb = load_workbook(path)
-    ws = wb["g_1_vs_g_2"]
+    ws = wb["g1_g2"]
     # Row 1 = header, Row 2+ = data
     headers = [ws.cell(1, c).value for c in range(1, ws.max_column + 1)]
     assert "word" in headers
@@ -221,7 +224,7 @@ def test_save_json_keyed(paired_words: WordsViewPaired, tmp_path: Path) -> None:
     path = tmp_path / "out.json"
     paired_words.save(path)
     data = json.loads(path.read_text())
-    assert set(data.keys()) == {"g_1_vs_g_2", "g_1_vs_g_3", "g_2_vs_g_3"}
+    assert set(data.keys()) == {"g1_g2", "g1_g3", "g2_g3"}
     for rows in data.values():
         assert isinstance(rows, list)
         assert all(isinstance(r, dict) for r in rows)
@@ -231,8 +234,8 @@ def test_save_json_contains_words(paired_words: WordsViewPaired, tmp_path: Path)
     path = tmp_path / "out.json"
     paired_words.save(path)
     data = json.loads(path.read_text())
-    pair_rows = data["g_1_vs_g_2"]
-    assert any(r.get("word") == "g_1_vs_g_2_p" for r in pair_rows)
+    pair_rows = data["g1_g2"]
+    assert any(r.get("word") == "g1_g2_p" for r in pair_rows)
 
 
 # ---------------------------------------------------------------------------
@@ -244,16 +247,16 @@ def test_save_md_sectioned(paired_words: WordsViewPaired, tmp_path: Path) -> Non
     path = tmp_path / "out.md"
     paired_words.save(path)
     body = path.read_text()
-    assert "g_1 vs g_2" in body
-    assert "g_1 vs g_3" in body
-    assert "g_2 vs g_3" in body
+    assert "g1 vs g2" in body
+    assert "g1 vs g3" in body
+    assert "g2 vs g3" in body
 
 
 def test_save_html_sectioned(paired_words: WordsViewPaired, tmp_path: Path) -> None:
     path = tmp_path / "out.html"
     paired_words.save(path)
     body = path.read_text()
-    assert "g_1 vs g_2" in body
+    assert "g1 vs g2" in body
     assert "<table>" in body
 
 
@@ -261,7 +264,7 @@ def test_save_tex_sectioned(paired_words: WordsViewPaired, tmp_path: Path) -> No
     path = tmp_path / "out.tex"
     paired_words.save(path)
     body = path.read_text()
-    assert "g_1 vs g_2" in body
+    assert "g1 vs g2" in body
     assert "tabular" in body
 
 
@@ -269,8 +272,8 @@ def test_save_txt_sectioned(paired_words: WordsViewPaired, tmp_path: Path) -> No
     path = tmp_path / "out.txt"
     paired_words.save(path)
     body = path.read_text()
-    assert "g_1 vs g_2" in body
-    assert "g_2 vs g_3" in body
+    assert "g1 vs g2" in body
+    assert "g2 vs g3" in body
 
 
 def test_save_docx_sectioned(paired_words: WordsViewPaired, tmp_path: Path) -> None:
@@ -281,8 +284,8 @@ def test_save_docx_sectioned(paired_words: WordsViewPaired, tmp_path: Path) -> N
     from docx import Document
     doc = Document(str(path))
     headings = [p.text for p in doc.paragraphs if p.style.name.startswith("Heading")]
-    assert "g_1 vs g_2" in headings
-    assert "g_2 vs g_3" in headings
+    assert "g1 vs g2" in headings
+    assert "g2 vs g3" in headings
 
 
 # ---------------------------------------------------------------------------
@@ -293,7 +296,7 @@ def test_save_docx_sectioned(paired_words: WordsViewPaired, tmp_path: Path) -> N
 def test_save_single_pair_no_fanout(tmp_path: Path) -> None:
     single = WordsViewPaired(
         views={
-            ("g_1", "g_2"): _make_words_view("g_1_vs_g_2"),
+            ("g1", "g2"): _make_words_view("g1_g2"),
         },
         view_name="words",
     )
@@ -306,7 +309,7 @@ def test_save_single_pair_no_fanout(tmp_path: Path) -> None:
 
 def test_save_single_pair_xlsx_flat(tmp_path: Path) -> None:
     single = WordsViewPaired(
-        views={("g_1", "g_2"): _make_words_view("g_1_vs_g_2")},
+        views={("g1", "g2"): _make_words_view("g1_g2")},
         view_name="words",
     )
     path = tmp_path / "w.xlsx"
@@ -330,12 +333,12 @@ def test_save_default_path_creates_csv(
     # N≥2 + csv → fan-out; subfolder is "words"
     folder = tmp_path / "words"
     assert folder.is_dir()
-    assert (folder / "g_1_vs_g_2.csv").is_file()
+    assert (folder / "g1_g2.csv").is_file()
 
 
 def test_save_default_path_single_pair(tmp_path: Path, monkeypatch) -> None:
     single = WordsViewPaired(
-        views={("g_1", "g_2"): _make_words_view("g_1_vs_g_2")},
+        views={("g1", "g2"): _make_words_view("g1_g2")},
         view_name="words",
     )
     monkeypatch.chdir(tmp_path)
@@ -344,23 +347,24 @@ def test_save_default_path_single_pair(tmp_path: Path, monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# ClustersIndexPaired — pos / neg access + save
+# ClustersViewPaired — pos / neg access + save
 # ---------------------------------------------------------------------------
 
 
 def test_clusters_index_paired_keys(
-    paired_clusters_index: ClustersIndexPaired,
+    paired_clusters_index: ClustersViewPaired,
 ) -> None:
     assert sorted(paired_clusters_index.keys()) == [
-        ("g_1", "g_2"),
-        ("g_1", "g_3"),
-        ("g_2", "g_3"),
+        ("g1", "g2"),
+        ("g1", "g3"),
+        ("g2", "g3"),
     ]
-    assert len(paired_clusters_index) == 3
+    # len() counts total Cluster rows across all pairs (1 pos + 1 neg per pair × 3 pairs = 6)
+    assert len(paired_clusters_index) == 6
 
 
 def test_clusters_index_paired_pos_type(
-    paired_clusters_index: ClustersIndexPaired,
+    paired_clusters_index: ClustersViewPaired,
 ) -> None:
     pos = paired_clusters_index.pos
     assert isinstance(pos, ClustersViewSidedPaired)
@@ -368,7 +372,7 @@ def test_clusters_index_paired_pos_type(
 
 
 def test_clusters_index_paired_neg_type(
-    paired_clusters_index: ClustersIndexPaired,
+    paired_clusters_index: ClustersViewPaired,
 ) -> None:
     neg = paired_clusters_index.neg
     assert isinstance(neg, ClustersViewSidedPaired)
@@ -376,7 +380,7 @@ def test_clusters_index_paired_neg_type(
 
 
 def test_clusters_pos_save_subfolder_name(
-    paired_clusters_index: ClustersIndexPaired, tmp_path: Path
+    paired_clusters_index: ClustersViewPaired, tmp_path: Path
 ) -> None:
     """clusters.pos.save → subfolder name = 'clusters_pos', NOT 'anything'."""
     target = tmp_path / "anything.csv"
@@ -386,12 +390,12 @@ def test_clusters_pos_save_subfolder_name(
     assert not target.exists()
     folder = tmp_path / "clusters_pos"
     assert folder.is_dir()
-    assert (folder / "g_1_vs_g_2.csv").is_file()
+    assert (folder / "g1_g2.csv").is_file()
     assert any(issubclass(w.category, UserWarning) for w in recorded)
 
 
 def test_clusters_neg_save_subfolder_name(
-    paired_clusters_index: ClustersIndexPaired, tmp_path: Path
+    paired_clusters_index: ClustersViewPaired, tmp_path: Path
 ) -> None:
     target = tmp_path / "anything.csv"
     with warnings.catch_warnings(record=True):
@@ -399,32 +403,35 @@ def test_clusters_neg_save_subfolder_name(
         paired_clusters_index.neg.save(target)
     folder = tmp_path / "clusters_neg"
     assert folder.is_dir()
-    assert (folder / "g_1_vs_g_2.csv").is_file()
+    assert (folder / "g1_g2.csv").is_file()
 
 
 def test_clusters_pos_save_xlsx(
-    paired_clusters_index: ClustersIndexPaired, tmp_path: Path
+    paired_clusters_index: ClustersViewPaired, tmp_path: Path
 ) -> None:
     path = tmp_path / "clusters.xlsx"
     paired_clusters_index.pos.save(path)
     assert path.is_file()
     from openpyxl import load_workbook
     wb = load_workbook(path)
-    assert set(wb.sheetnames) == {"g_1_vs_g_2", "g_1_vs_g_3", "g_2_vs_g_3"}
+    assert set(wb.sheetnames) == {"g1_g2", "g1_g3", "g2_g3"}
 
 
 def test_clusters_index_paired_reverse_raises(
-    paired_clusters_index: ClustersIndexPaired,
+    paired_clusters_index: ClustersViewPaired,
 ) -> None:
     with pytest.raises(KeyError):
-        _ = paired_clusters_index[("g_2", "g_1")]
+        _ = paired_clusters_index[("g2", "g1")]
 
 
 def test_clusters_index_paired_iter(
-    paired_clusters_index: ClustersIndexPaired,
+    paired_clusters_index: ClustersViewPaired,
 ) -> None:
+    """Flat iteration yields Cluster rows (not (key, view) tuples) — new Phase C contract."""
+    from ssdiff.results.schema import Cluster
     items = list(paired_clusters_index)
-    assert all(isinstance(item, tuple) and len(item) == 2 for item in items)
+    assert len(items) == 6  # 1 pos + 1 neg per pair × 3 pairs
+    assert all(isinstance(item, Cluster) for item in items)
 
 
 # ---------------------------------------------------------------------------
@@ -436,9 +443,9 @@ def test_snippets_view_paired_keys(
     paired_snippets: SnippetsViewPaired,
 ) -> None:
     assert sorted(paired_snippets.keys()) == [
-        ("g_1", "g_2"),
-        ("g_1", "g_3"),
-        ("g_2", "g_3"),
+        ("g1", "g2"),
+        ("g1", "g3"),
+        ("g2", "g3"),
     ]
 
 
@@ -451,7 +458,7 @@ def test_snippets_save_csv_fanout(
         paired_snippets.save(target)
     folder = tmp_path / "snippets"
     assert folder.is_dir()
-    assert (folder / "g_1_vs_g_2.csv").is_file()
+    assert (folder / "g1_g2.csv").is_file()
     assert any(issubclass(w.category, UserWarning) for w in recorded)
 
 
@@ -461,7 +468,7 @@ def test_snippets_save_json(
     path = tmp_path / "out.json"
     paired_snippets.save(path)
     data = json.loads(path.read_text())
-    assert set(data.keys()) == {"g_1_vs_g_2", "g_1_vs_g_3", "g_2_vs_g_3"}
+    assert set(data.keys()) == {"g1_g2", "g1_g3", "g2_g3"}
 
 
 def test_snippets_save_md(
@@ -470,7 +477,7 @@ def test_snippets_save_md(
     path = tmp_path / "out.md"
     paired_snippets.save(path)
     body = path.read_text()
-    assert "g_1 vs g_2" in body
+    assert "g1 vs g2" in body
 
 
 # ---------------------------------------------------------------------------
@@ -483,7 +490,7 @@ def test_save_with_k_filter(paired_words: WordsViewPaired, tmp_path: Path) -> No
     with warnings.catch_warnings(record=True):
         warnings.simplefilter("always")
         paired_words.save(tmp_path / "out.csv", k=1)
-    content = (tmp_path / "words" / "g_1_vs_g_2.csv").read_text()
+    content = (tmp_path / "words" / "g1_g2.csv").read_text()
     lines = [l for l in content.strip().splitlines() if l]
     # header + 1 data row
     assert len(lines) == 2
@@ -493,7 +500,7 @@ def test_save_json_with_cols(paired_words: WordsViewPaired, tmp_path: Path) -> N
     path = tmp_path / "out.json"
     paired_words.save(path, cols=["word", "cos_beta"])
     data = json.loads(path.read_text())
-    rows = data["g_1_vs_g_2"]
+    rows = data["g1_g2"]
     assert all(set(r.keys()) == {"word", "cos_beta"} for r in rows)
 
 
@@ -541,7 +548,7 @@ def test_save_csv_warning_stacklevel(paired_words: WordsViewPaired, tmp_path: Pa
 
 def test_imports() -> None:
     from ssdiff.results.paired_view import (  # noqa: F401
-        ClustersIndexPaired,
+        ClustersViewPaired,
         ClustersViewSidedPaired,
         SnippetsViewPaired,
         WordsViewPaired,

@@ -25,7 +25,7 @@ class TestFitGroups2Groups:
         assert result.G == 2
         # Labels are canonical; originals survive in group_labels.
         g_labels = {p.g1 for p in result.pairs} | {p.g2 for p in result.pairs}
-        assert g_labels == {"g_1", "g_2"}
+        assert g_labels == {"g1", "g2"}
         assert set(result.group_labels.values()) == {"A", "B"}
         assert result.n_kept > 0
         assert np.isfinite(result.test.omnibus_T)
@@ -118,7 +118,7 @@ class TestFitGroupsMedianSplit:
         assert result.G == 2
         # Canonical labels; originals are "high" / "low"
         g_labels = {p.g1 for p in result.pairs} | {p.g2 for p in result.pairs}
-        assert g_labels == {"g_1", "g_2"}
+        assert g_labels == {"g1", "g2"}
         assert set(result.group_labels.values()) == {"high", "low"}
 
     def test_median_split_identical_y_raises(self, tiny_kv, sample_docs, lexicon):
@@ -178,15 +178,15 @@ class TestGroupResultPairsAccess:
         assert len(pairs) == 1
 
     def test_pairs_tuple_key_returns_pair(self, result):
-        """gr.pairs[(g_1, g_2)] returns the Pair dataclass directly."""
-        p = result.pairs[("g_1", "g_2")]
+        """gr.pairs[(g1, g2)] returns the Pair dataclass directly."""
+        p = result.pairs[("g1", "g2")]
         assert isinstance(p, Pair)
-        assert p.contrast == "g_1_vs_g_2"
+        assert p.contrast == "g1_g2"
 
     def test_pairs_reverse_order_raises_keyerror(self, result):
         """Reverse-order lookup raises KeyError — no sign-flip."""
         with pytest.raises(KeyError):
-            _ = result.pairs[("g_2", "g_1")]
+            _ = result.pairs[("g2", "g1")]
 
     def test_pairs_missing_key_raises(self, result):
         with pytest.raises(KeyError):
@@ -207,7 +207,7 @@ class TestGroupResultMultiPair:
         pairs = list(result_3g.pairs)
         g_set = {(p.g1, p.g2) for p in pairs}
         assert len(g_set) == 3
-        assert g_set == {("g_1", "g_2"), ("g_1", "g_3"), ("g_2", "g_3")}
+        assert g_set == {("g1", "g2"), ("g1", "g3"), ("g2", "g3")}
 
     def test_reverse_order_raises_keyerror(self, result_3g):
         """Any reverse-order lookup raises KeyError (canonical only)."""

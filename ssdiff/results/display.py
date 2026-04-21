@@ -41,6 +41,7 @@ DEFAULT_COLS: dict[str, tuple[str, ...]] = {
     "WordsViewSided":      ("side", "rank", "word", "cos_beta"),
     "ClustersViewSided":   ("cluster_id", "size", "coherence", "centroid_cos_beta"),
     "ClusterWordsView":    ("cluster_id", "word", "cos_centroid", "cos_beta"),
+    "ClusterWordsViewSided": ("cluster_id", "side", "word", "cos_centroid", "cos_beta"),
     "SnippetsView":        ("side", "doc_id", "cosine", "seed", "text_window"),
     "SnippetsViewSided":   ("side", "doc_id", "cosine", "seed", "text_window"),
     "PLSTestView":         ("name", "pvalue", "split_r2"),
@@ -115,6 +116,7 @@ DEFAULT_FILENAMES: dict[str, str] = {
     "WordsView":           "words.csv",
     "WordsViewSided":      "words_{side}.csv",
     "ClusterWordsView":    "cluster_words.csv",
+    "ClusterWordsViewSided": "cluster_words_{side}.csv",
     "ClustersViewSided":   "clusters_{side}.csv",
     "SnippetsView":        "snippets.csv",
     "SnippetsViewSided":   "snippets_{side}.csv",
@@ -156,3 +158,17 @@ def build_report_save_hint(report) -> str:
     return (f"Save:  .save()  .save('{report._default_filename()}')   "
             f"# default: {report._default_filename()}; "
             f"extensions: {' '.join(NARRATIVE_EXTS)}")
+
+
+def build_paired_view_save_hint(view) -> str:
+    """Return the save/index-hint footer for a paired view."""
+    name = view._view_name
+    first_key = next(iter(view._views.keys()), ("g1", "g2"))
+    key_repr = f"({first_key[0]!r}, {first_key[1]!r})"
+    contrast = f"{first_key[0]}_{first_key[1]}"
+    return (f"Index: pv[{key_repr}]  → single-pair view\n"
+            f"Save:  .save('{name}.xlsx')  → one file, sheet per pair\n"
+            f"       .save('{name}.json')  → one file, keys like {contrast!r}\n"
+            f"       .save()  or  .save('{name}.csv')  → fans out to "
+            f"{name}/{contrast}.csv …\n"
+            f"       extensions: {' '.join(TABULAR_EXTS)}")

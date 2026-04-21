@@ -639,7 +639,7 @@ class SSD:
         pairs = []
         for (g1, g2), pw in test_result["pairwise"].items():
             pairs.append(Pair(
-                contrast=f"{g1}_vs_{g2}",
+                contrast=f"{g1}_{g2}",
                 g1=str(g1),
                 g2=str(g2),
                 T=float(pw["T"]),

@@ -37,13 +37,11 @@ dependencies = [
 gensim = [
   "gensim>=4.0",
 ]
-plot = [
-  "matplotlib>=3.7",
-]
 results = [
   "pandas>=2.0",
   "openpyxl>=3.1",
   "python-docx>=1.0",
+  "matplotlib>=3.7",  
 ]
 dev = [
   "pytest>=7.0",

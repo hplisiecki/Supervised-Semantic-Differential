@@ -215,7 +215,7 @@ Columns: `k`, `r2`, `r2_adj`, `pvalue`. One row per K tested. Default = full.
 
 | column | default | note |
 |---|:---:|---|
-| `contrast` | ✓ | `"g1_vs_g2"` |
+| `contrast` | ✓ | `"g1_g2"` |
 | `g1` |  | encoded in `contrast` |
 | `g2` |  | encoded in `contrast` |
 | `T` | ✓ | observed cosine distance |

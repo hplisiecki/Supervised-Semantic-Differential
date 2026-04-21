@@ -149,7 +149,7 @@ class TestSilhouetteScoreAgreement:
         ("well_sep_2d_k3", make_well_separated(n_features=2, k=3)),
         ("well_sep_3d_k3", make_well_separated(n_features=3, k=3)),
         ("well_sep_20d_k4", make_high_dim()),
-        ("overlapping_2d_k3", make_overlapping()),
+        ("overlapping2d_k3", make_overlapping()),
         ("two_blobs_3d", make_two_blobs()),
         ("many_small_k8", make_many_small()),
         ("unequal_sizes", make_unequal_sizes()),

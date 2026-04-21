@@ -25,6 +25,11 @@ For per-view column listings and how to change column defaults see [`results_tab
 8. [Domain row dataclasses](#domain-row-dataclasses)
 9. [Optional dependencies](#optional-dependencies)
 
+> **Planned changes.** A flat `ClustersView` (mirroring `WordsView`) and a
+> canonical-key scheme for paired-group views are tracked in
+> [`TODO.md`](TODO.md). Current behaviour below is stable; expect additive
+> changes there, not renames.
+
 ---
 
 ## Returned objects
@@ -136,6 +141,7 @@ Size-bearing views are **callable**. Calling re-slices or recomputes; the new vi
 | `result.docs.pos()` / `.neg()` / `.misdiagnosed()` | 20 | `result.docs.pos(50)` | re-sort + slice |
 | `result.clusters.pos` / `.neg` | `topn=100` | `result.clusters.pos(topn=50, k=5, …)` | **re-cluster** (cached per param set) |
 | `result.snippets` | `top_per_side=30` | `result.snippets(top_per_side=200, min_cosine=0.4)` | **re-extract** (cached per param set) |
+| `result.snippets.pos` / `.neg` | 30 rows | `result.snippets.pos(50, cluster_id=3)` | post-extraction re-slice + filter |
 | `result.report(...)` | see below | `report(top_words=10, clusters=30, …)` | new `Report` object |
 
 `save(..., k=N)` caps rows directly without recomputing:
@@ -244,12 +250,14 @@ Returned by `SSD.fit_pls(...)`. Inherits the full continuous-result surface.
 | Attribute | Class | Default | Callable? |
 |---|---|---|---|
 | `.words` | `WordsView` | top 100 / side | — |
-| `.words.pos`, `.words.neg` | `SidedWordsView` | 20 rows | `words.pos(k)`, `words.pos(None)` |
-| `.clusters` | `ClustersIndex` | — | — |
-| `.clusters.pos`, `.clusters.neg` | `SidedClustersView` | `topn=100` | `clusters.pos(topn=50, k=5, k_min=2, k_max=10, min_cluster_size=2, random_state=2137)` |
-| `.clusters.pos.words(cid)` | `ClusterWordsView` | — | — |
-| `.clusters.pos.snippets` | `SidedSnippetsView` | — | `clusters.pos.snippets(cluster_id=0)` |
-| `.snippets` | `SnippetsView` | `top_per_side=30` | `snippets(top_per_side=200, min_cosine=0.4, n_jobs=-1)` |
+| `.words.pos`, `.words.neg` | `WordsViewSided` | 20 rows | `words.pos(k)`, `words.pos(None)` |
+| `.clusters` | `ClustersView` | — | flat-iterable (pos rows then neg); `.pos` / `.neg` / `.words` accessors |
+| `.clusters.pos`, `.clusters.neg` | `ClustersViewSided` | `topn=100` | `clusters.pos(topn=50, k=5, k_min=2, k_max=10, min_cluster_size=2, random_state=2137)` |
+| `.clusters.words` | `ClusterWordsView` | — | combined cluster-words across both sides |
+| `.clusters.pos.words` | `ClusterWordsViewSided` | — | all pos-side cluster-words; `.words(cid)` filters to one cluster |
+| `.clusters.pos.snippets` | `SnippetsViewSided` | `k=30` | `clusters.pos.snippets(k=50, cluster_id=0)` — post-extraction re-slice + filter |
+| `.snippets` | `SnippetsView` | `top_per_side=30` | `snippets(top_per_side=200, min_cosine=0.4, n_jobs=-1)` — extraction kwargs only |
+| `.snippets.pos`, `.snippets.neg` | `SnippetsViewSided` | 30 rows | `snippets.pos(k, cluster_id=...)` — post-extraction slice + filter |
 | `.docs` | `DocsView` | preview (β-pos 5 / β-neg 5) in terminal | `docs.pos(k)`, `docs.neg(k)`, `docs.misdiagnosed(k, direction="both"|"over"|"under")`, `docs.id(doc_id) → DocDetailView` |
 
 `DocsView` extras:
@@ -389,7 +397,7 @@ Ephemeral view built on `gr.pairs["A", "B"]`. Mirrors the continuous-result surf
 | Attribute | Description |
 |---|---|
 | `.pair` | `Pair` dataclass (sign-flipped if accessed reverse) |
-| `.contrast` | Label `"A_vs_B"` (or `"B_vs_A"` when reversed) |
+| `.contrast` | Label `"A_B"` (or `"B_A"` when reversed) |
 | `.beta` | `(D,)` — contrast vector `c_g1 − c_g2` (carries magnitude) |
 | `.gradient` | `(D,)` — `beta / ‖beta‖` |
 | `.beta_norm` | `‖beta‖` (invariant under reverse) |
@@ -401,7 +409,7 @@ Ephemeral view built on `gr.pairs["A", "B"]`. Mirrors the continuous-result surf
 |---|---|---|
 | `.stats` | `PairStatsView` | `T`, `p_raw`, `p_corrected`, `cohens_d`, `n_g1`, `n_g2`, `contrast_norm` |
 | `.words` | `WordsView` | Filtered to this contrast; sides flipped on reverse access |
-| `.clusters` | `_PairClustersIndex` | `.pos` / `.neg` → `SidedClustersView` (no callable recompute on this variant) |
+| `.clusters` | `_PairClustersIndex` | `.pos` / `.neg` → `ClustersViewSided` (no callable recompute on this variant) |
 | `.snippets` | `SnippetsView` | Filtered to this contrast; sides flipped on reverse access |
 
 Sign handling: `PairView` lazily detects whether you looked it up in canonical or reverse order and flips `T`, `cohens_d`, `contrast_norm`, `beta`, `gradient`, `cos_beta`, and `side` labels accordingly. P-values and cluster `coherence` / `size` do not flip.
@@ -517,7 +525,7 @@ Conventions:
 - `side ∈ {"pos", "neg"}` — β-direction pole.
 - `direction ∈ {"positive", "negative", "none"}` on `Suggestion` — sign of the outcome correlation.
 - `direction ∈ {"both", "over", "under"}` on `DocsView.misdiagnosed()` — residual sign (distinct axis from `side`).
-- `contrast` is `None` on continuous results; `"g1_vs_g2"` on pairs / group results.
+- `contrast` is `None` on continuous results; `"g1_g2"` on pairs / group results.
 
 Import from `ssdiff.results.schema` if you need the types themselves (e.g. for `isinstance` checks or type hints).
 

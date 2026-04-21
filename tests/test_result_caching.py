@@ -6,7 +6,7 @@ This is the primary regression the redesign fixes.
 
 Note: Session-scoped fixtures cannot be mutated (clear_cache / cache injection).
 Tests that need a clean _cache use class-scoped or function-scoped copies,
-constructing a fresh ClustersIndex pointing at the right parent.
+constructing a fresh ClustersView pointing at the right parent.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import pickle
 import numpy as np
 import pytest
 
-from ssdiff.results.continuous_result import ClustersIndex
+from ssdiff.results.continuous_result import ClustersView
 
 
 def _make_fresh_pls(ssd_instance):
@@ -40,9 +40,9 @@ class TestRequireEmbeddings:
         r = _make_fresh_pls(ssd_instance)
         r.embeddings = None
         r._cache = {}
-        # Re-wire ClustersIndex parent to point at this result so it reads
+        # Re-wire ClustersView parent to point at this result so it reads
         # r.embeddings (None) rather than the old result.
-        r.clusters = ClustersIndex(r)
+        r.clusters = ClustersView(r)
         with pytest.raises(RuntimeError, match="attach"):
             _ = r.clusters.pos
 
@@ -120,7 +120,7 @@ class TestClustersCache:
             )
 
         monkeypatch.setattr(type(r), "_compute_clusters_for_side", _fake_clusters)
-        r.clusters = ClustersIndex(r)
+        r.clusters = ClustersView(r)
 
         v100 = r.clusters.pos            # topn=100 (default)
         v50 = r.clusters.pos(topn=50)   # new params → new entry
@@ -134,7 +134,7 @@ class TestClustersCache:
     def test_clusters_pos_cached(self, ssd_instance):
         r = _make_fresh_pls(ssd_instance)
         r._cache = {}
-        r.clusters = ClustersIndex(r)
+        r.clusters = ClustersView(r)
         _ = r.clusters.pos
         cluster_keys = [k for k in r._cache if k[0] == "clusters"]
         assert len(cluster_keys) >= 1
@@ -142,7 +142,7 @@ class TestClustersCache:
     def test_clusters_neg_independent_from_pos(self, ssd_instance):
         r = _make_fresh_pls(ssd_instance)
         r._cache = {}
-        r.clusters = ClustersIndex(r)
+        r.clusters = ClustersView(r)
         cl_pos = r.clusters.pos
         cl_neg = r.clusters.neg
         for c in cl_pos:
@@ -153,7 +153,7 @@ class TestClustersCache:
     def test_clear_cache_clusters_drops_all_cluster_entries(self, ssd_instance):
         r = _make_fresh_pls(ssd_instance)
         r._cache = {}
-        r.clusters = ClustersIndex(r)
+        r.clusters = ClustersView(r)
         _ = r.clusters.pos
         _ = r.clusters.neg
         _ = r.clusters.pos(topn=50)
@@ -165,7 +165,7 @@ class TestClustersCache:
         """After two calls with different topn, both cache entries exist."""
         r = _make_fresh_pls(ssd_instance)
         r._cache = {}
-        r.clusters = ClustersIndex(r)
+        r.clusters = ClustersView(r)
         _ = r.clusters.pos            # topn=100 (default)
         _ = r.clusters.pos(topn=50)   # different params
         cluster_keys = [k for k in r._cache if k[0] == "clusters"]
@@ -328,6 +328,6 @@ class TestPickleRoundTrip:
         assert loaded.embeddings is None
         # Re-attach and it works
         loaded.attach(embeddings=tiny_kv)
-        loaded.clusters = ClustersIndex(loaded)  # rewire parent reference
+        loaded.clusters = ClustersView(loaded)  # rewire parent reference
         words = list(loaded.words)
         assert len(words) > 0

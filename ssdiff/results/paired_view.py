@@ -1,14 +1,14 @@
 """Paired-view collection classes for multi-group GroupResult.
 
 Each class wraps a ``dict[tuple[str, str], <single-pair view>]`` keyed on
-canonical pair tuples ``(g_i, g_j)`` with numeric order (g_1 < g_2 < …).
+canonical pair tuples ``(g_i, g_j)`` with numeric order (g1 < g2 < …).
 
 Public interface (same on every paired view):
 
     pv[(g1, g2)]                         → single-pair view (canonical order only)
     pv.keys()                            → list[tuple[str, str]]
-    len(pv)                              → int
-    iter(pv)                             → yields (pair_tuple, single_view) tuples
+    len(pv)                              → total row count across all pairs
+    iter(pv)                             → yields flat rows across all pairs
     pv.save(path, *, cols=None, k=None)  → None
 """
 
@@ -35,11 +35,17 @@ from ssdiff.results.core import (
     _json_default,
     _require,
 )
+from ssdiff.results.display import (
+    _save_hint_enabled,
+    build_paired_view_save_hint,
+)
 
 if TYPE_CHECKING:
     from ssdiff.results.continuous_result import (
+        ClusterWordsView,
         ClustersViewSided,
         SnippetsView,
+        SnippetsViewSided,
         WordsView,
     )
 
@@ -49,16 +55,15 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 def _numeric_key(label: str) -> float:
-    """Sort key for canonical labels like ``g_1``, ``g_2``, …
+    """Sort key for canonical labels like ``g1``, ``g2``, …
 
     Falls back to ``float('inf')`` for non-canonical labels so they sort
     after canonical ones.
     """
-    if label.startswith("g_"):
-        try:
-            return float(label.split("_", 1)[1])
-        except (ValueError, IndexError):
-            pass
+    if label.startswith("g"):
+        tail = label[1:]
+        if tail.isdigit():
+            return float(tail)
     return float("inf")
 
 
@@ -68,8 +73,8 @@ def _canonical_pair(a: str, b: str) -> tuple[str, str]:
 
 
 def _pair_str(key: tuple[str, str]) -> str:
-    """Convert a canonical pair tuple to a string key, e.g. ``g_1_vs_g_2``."""
-    return f"{key[0]}_vs_{key[1]}"
+    """Convert a canonical pair tuple to a string key, e.g. ``g1_g2``."""
+    return f"{key[0]}_{key[1]}"
 
 
 # ---------------------------------------------------------------------------
@@ -331,14 +336,29 @@ class _PairedMappingBase:
 
     def __repr__(self) -> str:
         pairs_str = ", ".join(f"({a!r}, {b!r})" for a, b in self._views)
-        return (
+        header = (
             f"{type(self).__name__}(view_name={self._view_name!r}, "
             f"n={len(self._views)}, pairs=[{pairs_str}])"
         )
+        if _save_hint_enabled() and self._views:
+            return f"{header}\n\n{build_paired_view_save_hint(self)}"
+        return header
 
 
 class _PairedViewBase(_PairedMappingBase):
-    """Paired view base that adds ``.save()`` on top of the mapping interface."""
+    """Paired view base: mapping + ``.save()`` + flat iteration across all pairs."""
+
+    # ------------------------------------------------------------------
+    # Flat iteration (rows across all pairs, canonical pair order)
+    # ------------------------------------------------------------------
+
+    def __iter__(self):
+        """Iterate rows across all pairs in canonical pair order."""
+        for pair_key in sorted(self._views.keys(), key=lambda k: (_numeric_key(k[0]), _numeric_key(k[1]))):
+            yield from iter(self._views[pair_key])
+
+    def __len__(self) -> int:
+        return sum(len(v) for v in self._views.values())
 
     # ------------------------------------------------------------------
     # Unified save
@@ -356,10 +376,10 @@ class _PairedViewBase(_PairedMappingBase):
         Dispatch:
 
         - N=1: delegate to the single underlying view's ``.save()``.
-        - N≥2, csv: fan-out → ``<parent>/<view_name>/g_i_vs_g_j.csv``
+        - N≥2, csv: fan-out → ``<parent>/<view_name>/gi_gj.csv``
           (emits ``UserWarning``; original path NOT written).
         - N≥2, xlsx: single file, one sheet per pair.
-        - N≥2, json: single file, keys ``g_i_vs_g_j``.
+        - N≥2, json: single file, keys ``gi_gj``.
         - N≥2, md / html / tex / docx / txt: single file with per-pair sections.
 
         Default path (if omitted): ``<cwd>/<view_name>.csv``.
@@ -386,9 +406,9 @@ class WordsViewPaired(_PairedViewBase):
     Examples
     --------
     >>> pv = gr.words                   # WordsViewPaired when N≥2
-    >>> pv[("g_1", "g_2")]              # → WordsView
+    >>> pv[("g1", "g2")]               # → WordsView
     >>> pv.save("words.xlsx")           # one sheet per pair
-    >>> pv.save("words.csv")            # fan-out: words/g_1_vs_g_2.csv …
+    >>> pv.save("words.csv")            # fan-out: words/g1_g2.csv …
     """
 
     def __init__(
@@ -399,17 +419,36 @@ class WordsViewPaired(_PairedViewBase):
         super().__init__(views=views, view_name=view_name)
 
 
+class ClusterWordsViewPaired(_PairedViewBase):
+    """Paired collection of :class:`~ssdiff.results.continuous_result.ClusterWordsView`
+    (or :class:`~ssdiff.results.continuous_result.ClusterWordsViewSided`) per contrast.
+
+    Examples
+    --------
+    >>> pv = gr.clusters.pos.words      # ClusterWordsViewPaired when N≥2
+    >>> pv[("g1", "g2")]               # → ClusterWordsViewSided
+    >>> pv.save("cluster_words_pos.csv")  # fan-out: cluster_words_pos/g1_g2.csv …
+    """
+
+    def __init__(
+        self,
+        views: dict[tuple[str, str], "ClusterWordsView"],
+        view_name: str = "cluster_words",
+    ) -> None:
+        super().__init__(views=views, view_name=view_name)
+
+
 class ClustersViewSidedPaired(_PairedViewBase):
     """Paired collection of :class:`~ssdiff.results.continuous_result.ClustersViewSided` instances.
 
-    Returned by :attr:`ClustersIndexPaired.pos` and
-    :attr:`ClustersIndexPaired.neg`.
+    Returned by :attr:`ClustersViewPaired.pos` and
+    :attr:`ClustersViewPaired.neg`.
 
     Examples
     --------
     >>> pv = gr.clusters.pos            # ClustersViewSidedPaired when N≥2
-    >>> pv[("g_1", "g_2")]              # → ClustersViewSided
-    >>> pv.save("clusters_pos.csv")     # fan-out: clusters_pos/g_1_vs_g_2.csv …
+    >>> pv[("g1", "g2")]               # → ClustersViewSided
+    >>> pv.save("clusters_pos.csv")     # fan-out: clusters_pos/g1_g2.csv …
     """
 
     def __init__(
@@ -419,29 +458,63 @@ class ClustersViewSidedPaired(_PairedViewBase):
     ) -> None:
         super().__init__(views=views, view_name=view_name)
 
+    @property
+    def words(self) -> ClusterWordsViewPaired:
+        """Paired cluster-words for this side across all pairs.
 
-class ClustersIndexPaired(_PairedMappingBase):
-    """Paired collection wrapper for cluster index access.
+        Each pair's member is a ``ClusterWordsViewSided`` carrying its ``_side``,
+        so per-pair defaults still resolve to ``cluster_words_{side}.csv``.
+        view_name swaps the ``clusters_`` prefix for ``cluster_words_`` so
+        multi-pair csv fan-out writes into ``cluster_words_{side}/…``.
+        """
+        new_view_name = self._view_name.replace("clusters_", "cluster_words_", 1)
+        members: dict[tuple[str, str], "ClusterWordsView"] = {}
+        for pair_key, child in self._views.items():
+            members[pair_key] = child.words  # type: ignore[attr-defined]
+        return ClusterWordsViewPaired(members, view_name=new_view_name)
 
-    Wraps a ``dict[tuple[str, str], <clusters-index-like>]`` (each value
-    has ``.pos`` / ``.neg`` returning a :class:`ClustersViewSided`).
 
-    Access `.pos` / `.neg` to get :class:`ClustersViewSidedPaired` instances
-    whose save subfolder names are hardcoded to ``"clusters_pos"`` /
-    ``"clusters_neg"``.
+class ClustersViewPaired(_PairedViewBase):
+    """Paired collection wrapper for cluster access — flat iterable over all Cluster rows.
+
+    Iterates rows across all pairs in canonical pair order; within each pair, pos first then neg.
+    Accessors preserved: ``.pos`` / ``.neg`` (return ``ClustersViewSidedPaired``), ``.words``,
+    dict lookup ``pv[(g1,g2)]``.
 
     Examples
     --------
-    >>> pv = gr.clusters                # ClustersIndexPaired when N≥2
-    >>> pv.pos.save("clusters_pos.csv") # fan-out: clusters_pos/g_1_vs_g_2.csv …
-    >>> pv[("g_1", "g_2")]              # → underlying index for that pair
+    >>> pv = gr.clusters                  # ClustersViewPaired when N≥2
+    >>> pv.pos.save("clusters_pos.csv")   # fan-out: clusters_pos/g1_g2.csv …
+    >>> pv[("g1", "g2")]                  # → underlying index for that pair
     """
+
+    _name = "clusters"
+    _columns = ("cluster_id", "side", "size", "coherence", "centroid_cos_beta", "contrast")
 
     def __init__(
         self,
         views: dict[tuple[str, str], object],
     ) -> None:
         super().__init__(views=views, view_name="clusters")
+
+    def __iter__(self):
+        """Iterate all Cluster rows across pairs: canonical pair order, pos then neg within each."""
+        for pair_key in sorted(self._views.keys(), key=lambda k: (_numeric_key(k[0]), _numeric_key(k[1]))):
+            idx = self._views[pair_key]
+            yield from iter(idx.pos)  # type: ignore[union-attr]
+            yield from iter(idx.neg)  # type: ignore[union-attr]
+
+    def __len__(self) -> int:
+        total = 0
+        for idx in self._views.values():
+            total += len(idx.pos) + len(idx.neg)  # type: ignore[union-attr]
+        return total
+
+    def __getitem__(self, key):
+        """Tuple key → single-pair index; integer key is not supported."""
+        if isinstance(key, tuple):
+            return super().__getitem__(key)
+        raise KeyError(f"ClustersViewPaired does not support integer indexing; use a pair tuple")
 
     @property
     def pos(self) -> ClustersViewSidedPaired:
@@ -459,13 +532,52 @@ class ClustersIndexPaired(_PairedMappingBase):
             view_name="clusters_neg",
         )
 
+    @property
+    def words(self) -> ClusterWordsViewPaired:
+        """Combined cluster-words (both sides) across all pairs.
+
+        Each member is a plain :class:`ClusterWordsView` concatenating
+        pos + neg rows, so per-pair saves default to ``cluster_words.csv``.
+        """
+        from ssdiff.results.continuous_result import ClusterWordsView
+        members: dict[tuple[str, str], "ClusterWordsView"] = {}
+        for pair_key, idx in self._views.items():
+            pos_rows = idx.pos._words_rows  # type: ignore[attr-defined]
+            neg_rows = idx.neg._words_rows  # type: ignore[attr-defined]
+            members[pair_key] = ClusterWordsView(list(pos_rows) + list(neg_rows))
+        return ClusterWordsViewPaired(members, view_name="cluster_words")
+
     def __repr__(self) -> str:
         pairs_str = ", ".join(f"({a!r}, {b!r})" for a, b in self._views)
-        return (
-            f"ClustersIndexPaired(n={len(self._views)}, pairs=[{pairs_str}])\n"
-            f"  .pos → ClustersViewSidedPaired (view_name='clusters_pos')\n"
-            f"  .neg → ClustersViewSidedPaired (view_name='clusters_neg')"
+        header = (
+            f"ClustersViewPaired(n={len(self._views)}, pairs=[{pairs_str}])\n"
+            f"  .pos   → ClustersViewSidedPaired (view_name='clusters_pos')\n"
+            f"  .neg   → ClustersViewSidedPaired (view_name='clusters_neg')\n"
+            f"  .words → ClusterWordsViewPaired  (view_name='cluster_words')"
         )
+        if _save_hint_enabled() and self._views:
+            return f"{header}\n\n{build_paired_view_save_hint(self)}"
+        return header
+
+
+class SnippetsViewSidedPaired(_PairedViewBase):
+    """Paired collection of :class:`~ssdiff.results.continuous_result.SnippetsViewSided` instances.
+
+    Returned by :attr:`SnippetsViewPaired.pos` and :attr:`SnippetsViewPaired.neg`.
+
+    Examples
+    --------
+    >>> pv = gr.snippets.pos           # SnippetsViewSidedPaired when N>=2
+    >>> pv[("g1", "g2")]               # → SnippetsViewSided
+    >>> pv.save("snippets_pos.csv")    # fan-out: snippets_pos/g1_g2.csv …
+    """
+
+    def __init__(
+        self,
+        views: dict[tuple[str, str], "SnippetsViewSided"],
+        view_name: str,
+    ) -> None:
+        super().__init__(views=views, view_name=view_name)
 
 
 class SnippetsViewPaired(_PairedViewBase):
@@ -477,8 +589,8 @@ class SnippetsViewPaired(_PairedViewBase):
     Examples
     --------
     >>> pv = gr.snippets                # SnippetsViewPaired when N≥2
-    >>> pv[("g_1", "g_2")]             # → SnippetsView
-    >>> pv.save("snippets.json")        # one file, keys g_1_vs_g_2 …
+    >>> pv[("g1", "g2")]               # → SnippetsView
+    >>> pv.save("snippets.json")        # one file, keys g1_g2 …
     """
 
     def __init__(
@@ -487,3 +599,23 @@ class SnippetsViewPaired(_PairedViewBase):
         view_name: str = "snippets",
     ) -> None:
         super().__init__(views=views, view_name=view_name)
+
+    @property
+    def pos(self) -> SnippetsViewSidedPaired:
+        """Paired positive-side snippets across all pairs."""
+        from ssdiff.results.continuous_result import SnippetsViewSided
+        members = {
+            key: SnippetsViewSided(side="pos", all_rows=list(child._rows))
+            for key, child in self._views.items()
+        }
+        return SnippetsViewSidedPaired(members, view_name="snippets_pos")
+
+    @property
+    def neg(self) -> SnippetsViewSidedPaired:
+        """Paired negative-side snippets across all pairs."""
+        from ssdiff.results.continuous_result import SnippetsViewSided
+        members = {
+            key: SnippetsViewSided(side="neg", all_rows=list(child._rows))
+            for key, child in self._views.items()
+        }
+        return SnippetsViewSidedPaired(members, view_name="snippets_neg")

@@ -71,10 +71,10 @@ def test_view_int_index_unchanged():
 
 
 def test_pairs_list_view_tuple_lookup_unaffected_by_slice_dispatch():
-    p1 = Pair(contrast="a_vs_b", g1="a", g2="b", T=1.0, p_raw=0.01,
+    p1 = Pair(contrast="a_b", g1="a", g2="b", T=1.0, p_raw=0.01,
               p_corrected=0.01, cohens_d=0.5, n_g1=10, n_g2=10,
               contrast_norm=1.0)
-    p2 = Pair(contrast="a_vs_c", g1="a", g2="c", T=2.0, p_raw=0.02,
+    p2 = Pair(contrast="a_c", g1="a", g2="c", T=2.0, p_raw=0.02,
               p_corrected=0.02, cohens_d=0.6, n_g1=10, n_g2=10,
               contrast_norm=1.0)
     view = PairsListView([p1, p2])
@@ -310,7 +310,7 @@ def test_clusters_index_repr_when_uncached():
         r2=0.5, r2_adj=0.4, pvalue=0.01,
     )
     text = repr(pls.clusters)
-    assert "ClustersIndex" in text
+    assert "ClustersView" in text
     assert ".pos" in text
     assert ".neg" in text
     assert "call to compute" in text
@@ -450,7 +450,7 @@ def test_spec_example_5_clusters_index_uncached():
     """Example 5: `pls.clusters` — uncached path."""
     pls = _shared_pls()
     text = repr(pls.clusters)
-    assert "ClustersIndex" in text
+    assert "ClustersView" in text
     assert ".pos" in text and ".neg" in text
     assert "call to compute" in text
     assert "clusters_pos.csv" in text
@@ -468,7 +468,7 @@ def test_spec_example_6_sided_clusters_view_includes_words_hint():
         for i in range(4)
     ]
     v = ClustersViewSided(parent=None, side="pos", rows=rows,
-                          words_rows=[], snippets_rows=None, params={})
+                          words_rows=[], params={})
     text = repr(v)
     for h in ("cluster_id", "size", "coherence", "centroid_cos_beta"):
         assert h in text
@@ -493,7 +493,7 @@ def _shared_group():
     return GroupResult(
         G=2, n_kept=597, n_perm=5000, correction="holm", random_state=2137,
         omnibus_T=0.842, omnibus_p=0.0002,
-        pairs=[Pair(contrast="low_vs_high", g1="low", g2="high",
+        pairs=[Pair(contrast="low_high", g1="low", g2="high",
                     T=0.842, p_raw=0.0001, p_corrected=0.0002,
                     cohens_d=0.512, n_g1=297, n_g2=300, contrast_norm=1.0)],
         words_rows=[], cluster_rows=[], cluster_words_rows=[], snippets_rows=[],
@@ -523,7 +523,7 @@ def test_spec_example_9_group_test_view_pairwise():
     for k in ("omnibus_p", "G", "n_kept", "n_perm", "correction"):
         assert k not in body
     assert "pairwise:" in text
-    assert "low_vs_high" in text
+    assert "low_high" in text
     assert "Rerun:" in text
     assert "correction=" in text
 

@@ -155,7 +155,7 @@ def test_group_test_view_to_text_appends_pairwise_section():
         pass
     parent = _FakeParent()
     parent.pairs = PairsListView([
-        Pair(contrast="low_vs_high", g1="low", g2="high",
+        Pair(contrast="low_high", g1="low", g2="high",
              T=0.842, p_raw=0.0001, p_corrected=0.0002, cohens_d=0.512,
              n_g1=297, n_g2=300, contrast_norm=1.0),
     ])
@@ -168,7 +168,7 @@ def test_group_test_view_to_text_appends_pairwise_section():
     assert "permutation" in text
     assert "omnibus_T" in text
     assert "pairwise:" in text
-    assert "low_vs_high" in text
+    assert "low_high" in text
     assert "T=" in text
     assert "p=" in text
     assert "d=" in text
@@ -177,20 +177,23 @@ def test_group_test_view_to_text_appends_pairwise_section():
 def test_sided_clusters_view_save_hint_includes_words_line():
     from ssdiff.results.continuous_result import ClustersViewSided
     v = ClustersViewSided(parent=None, side="pos", rows=[],
-                          words_rows=[], snippets_rows=None, params={})
+                          words_rows=[], params={})
     hint = v._save_hint()
     assert "Save:" in hint
-    assert "Words: .words(cluster_id)" in hint
+    # .words is now a property → ClusterWordsViewSided; .words(cluster_id) still works.
+    assert ".words" in hint
+    assert "ClusterWordsViewSided" in hint or "ClusterWordsView" in hint
 
 
-def test_snippets_view_save_hint_includes_filter_line():
+def test_snippets_view_save_hint_includes_sides_line():
+    """SnippetsView hint advertises .pos/.neg (not a broken side/cluster_id filter)."""
     from ssdiff.results.continuous_result import SnippetsView
     v = SnippetsView([])
     hint = v._save_hint()
     assert "Save:" in hint
-    assert "Filter: " in hint
-    assert "side=" in hint
-    assert "cluster_id=" in hint
+    assert ".pos" in hint and ".neg" in hint
+    # The old misleading filter line must be gone.
+    assert "side='pos'" not in hint
 
 
 def test_docs_view_save_hint_includes_slice_line():
@@ -217,7 +220,7 @@ def test_pairs_list_view_save_hint_includes_lookup_line():
     assert "<group1>" in hint and "<group2>" in hint
 
     # Populated case: hint substitutes real group names so copy-paste works.
-    pair = Pair(contrast="high_vs_low", g1="high", g2="low",
+    pair = Pair(contrast="high_low", g1="high", g2="low",
                 T=0.0, p_raw=1.0, p_corrected=1.0, cohens_d=0.0,
                 n_g1=10, n_g2=10, contrast_norm=0.0)
     hint = PairsListView([pair])._save_hint()
@@ -293,7 +296,7 @@ def _make_group_result():
     return GroupResult(
         G=2, n_kept=597, n_perm=5000, correction="holm", random_state=2137,
         omnibus_T=0.842, omnibus_p=0.0002,
-        pairs=[Pair(contrast="low_vs_high", g1="low", g2="high",
+        pairs=[Pair(contrast="low_high", g1="low", g2="high",
                     T=0.842, p_raw=0.0001, p_corrected=0.0002,
                     cohens_d=0.512, n_g1=297, n_g2=300, contrast_norm=1.0)],
         words_rows=[], cluster_rows=[], cluster_words_rows=[], snippets_rows=[],

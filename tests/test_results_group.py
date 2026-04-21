@@ -9,10 +9,10 @@ from ssdiff.results.schema import Pair
 def _fake_group():
     # Unequal group sizes so they can't be confused.
     pairs = [
-        Pair(contrast="A_vs_B", g1="A", g2="B",
+        Pair(contrast="A_B", g1="A", g2="B",
              T=1.0, p_raw=0.01, p_corrected=0.02, cohens_d=0.5,
              n_g1=30, n_g2=70, contrast_norm=0.7),
-        Pair(contrast="A_vs_C", g1="A", g2="C",
+        Pair(contrast="A_C", g1="A", g2="C",
              T=2.0, p_raw=0.001, p_corrected=0.003, cohens_d=0.8,
              n_g1=30, n_g2=80, contrast_norm=0.9),
     ]
@@ -37,14 +37,14 @@ def test_pairs_view_iterates_pair_rows():
     gr = _fake_group()
     assert len(gr.pairs) == 2
     contrasts = {p.contrast for p in gr.pairs}
-    assert contrasts == {"A_vs_B", "A_vs_C"}
+    assert contrasts == {"A_B", "A_C"}
 
 
 def test_pair_access_by_tuple_returns_pair_dataclass():
     gr = _fake_group()
     p = gr.pairs[("A", "B")]
     assert isinstance(p, Pair)
-    assert p.contrast == "A_vs_B"
+    assert p.contrast == "A_B"
 
 
 def test_pair_reverse_access_raises_keyerror():
