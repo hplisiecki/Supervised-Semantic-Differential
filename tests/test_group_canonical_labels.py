@@ -152,7 +152,6 @@ def test_canonical_pair_order_with_many_groups():
         G=G, n_kept=len(groups), n_perm=0, correction="none",
         random_state=0, omnibus_T=0.0, omnibus_p=1.0,
         pairs=pairs,
-        words_rows=[], cluster_rows=[], cluster_words_rows=[], snippets_rows=[],
         x=x, groups=groups,
     )
 

@@ -2,7 +2,7 @@
 
 Public API of the `ssdiff` package: main classes, their methods, and arguments.
 
-**Install**: `pip install ssdiff` (core), `pip install ssdiff[results]` (pandas/Excel/docx export).
+**Install**: `pip install ssdiff` (core), `pip install ssdiff[results]` (pandas/Excel/docx/matplotlib export).
 **Python**: 3.10+.
 **Imports**: `from ssdiff import Embeddings, Corpus, SSD`.
 
@@ -261,8 +261,10 @@ Every fit method returns a result object with a consistent surface:
 result.stats                # headline metrics (StatsView / GroupStatsView / …)
 result.report(...)          # narrative Report — .to_text() / .to_html() / .save(...)
 result.save(...)            # — not defined; export per-view instead
-result.words / .clusters / .snippets / .docs    # continuous only
-result.pairs / .pairs["A", "B"]                 # groups only
+result.words / .clusters / .snippets / .docs    # continuous; also .words/.clusters/.snippets on GroupResult
+result.pairs                # groups only — PairsListView of Pair dataclass rows
+gr[('g1', 'g2')].words      # idiomatic per-pair drill-down (also .clusters, .snippets, .stats, …)
+gr.pairs[('g1', 'g2')]      # raw Pair dataclass (fields: T, p_raw, p_corrected, cohens_d, contrast, …)
 result.suggestions / .tokens / .summary         # lexicon only
 result.attach(corpus=..., embeddings=...)       # re-wire after un-pickling
 result.clear_cache()

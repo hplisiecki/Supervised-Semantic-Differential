@@ -2,7 +2,8 @@
 
 Covers:
 - clusters.pos.words / .neg.words → ClusterWordsViewSided (property)
-- clusters.pos.words(cluster_id) → filtered ClusterWordsView (back-compat)
+- clusters.pos.words(n) → first n rows (row-count slice, type-preserving)
+- clusters.pos(cluster_id).words → drilled ClusterWordsView (one cluster)
 - clusters.words → combined ClusterWordsView across both sides
 - Default save path: cluster_words_pos.csv / cluster_words_neg.csv / cluster_words.csv
 - DEFAULT_COLS["ClusterWordsViewSided"] includes ``side``, excludes ``contrast``
@@ -64,15 +65,23 @@ def test_words_is_property_returning_sided_view():
         assert w.side == "pos"
 
 
-def test_words_callable_filters_back_to_cluster_words_view():
+def test_words_positional_call_returns_first_n_rows():
+    """Positional ``(n)`` is a row-count slice — type is preserved."""
     sv = _sided("pos", cluster_ids=(0, 1, 2))
-    filtered = sv.words(1)
-    assert isinstance(filtered, ClusterWordsView)
-    # Must NOT be a ClusterWordsViewSided — it's the back-compat single-cluster form.
-    assert not isinstance(filtered, ClusterWordsViewSided)
-    rows = list(filtered)
-    assert len(rows) == 1
-    assert rows[0].cluster_id == 1
+    first_two = sv.words(2)
+    assert isinstance(first_two, ClusterWordsViewSided)
+    rows = list(first_two)
+    assert len(rows) == 2
+
+
+def test_cluster_drill_via_clusters_view_returns_cluster_words_view():
+    """Canonical drill path: ``clusters.pos(cluster_id).words`` → ClusterWordsView."""
+    sv = _sided("pos", cluster_ids=(0, 1, 2))
+    drilled = sv(1).words
+    assert isinstance(drilled, ClusterWordsView)
+    assert not isinstance(drilled, ClusterWordsViewSided)
+    rows = list(drilled)
+    assert rows and all(r.cluster_id == 1 for r in rows)
 
 
 # ---------------------------------------------------------------------------
@@ -134,45 +143,33 @@ def test_clusters_words_combined_includes_both_sides(pls_result):
 # ---------------------------------------------------------------------------
 
 def test_paired_cluster_words_single_pair(group_result_2g, tmp_path, monkeypatch):
-    """2-group: gr.clusters.pos.words.save() writes a flat cluster_words_pos.csv."""
+    """2-group: gr[pair].clusters.pos.words.save() writes a flat cluster_words_pos.csv."""
     monkeypatch.chdir(tmp_path)
-    with pytest.warns(UserWarning, match="fans out") if len(group_result_2g.pairs) > 1 else _nullctx():
-        group_result_2g.clusters.pos.words.save()
-    # With a single pair the paired view delegates to the child, flat filename.
+    gr = group_result_2g
+    pair = next(iter(gr.pairs))
+    leaf = gr[(pair.g1, pair.g2)]
+    leaf.clusters.pos.words.save()
     out = tmp_path / "cluster_words_pos.csv"
     assert out.exists()
 
 
-def test_paired_cluster_words_multi_pair_csv_fans_out(group_result_3g, tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    with pytest.warns(UserWarning, match="fans out"):
-        group_result_3g.clusters.pos.words.save()
-    subfolder = tmp_path / "cluster_words_pos"
-    assert subfolder.is_dir()
-    files = sorted(p.name for p in subfolder.glob("*.csv"))
-    assert len(files) == 3
-    for name in files:
-        assert name.startswith("g") and "_g" in name
+def test_paired_cluster_words_multi_pair_each_leaf_saves(group_result_3g, tmp_path):
+    """Multi-pair: iterate leaves and save pos words per pair (canonical path)."""
+    gr = group_result_3g
+    for (g1, g2), leaf in gr._leaves.items():
+        out = tmp_path / f"cluster_words_pos_{g1}_{g2}.csv"
+        leaf.clusters.pos.words.save(str(out))
+        assert out.is_file(), f"expected flat file at {out}"
 
+# removed: test_paired_cluster_words_multi_pair_csv_fans_out — gr.clusters.pos.words
+#          no longer exists; gr.clusters is a _ShimView with no .pos attribute.
+#          The ClustersViewSidedPaired fan-out path is a removed feature.
 
-def test_paired_cluster_words_combined_multi_pair_csv_fans_out(
-    group_result_3g, tmp_path, monkeypatch,
-):
-    monkeypatch.chdir(tmp_path)
-    with pytest.warns(UserWarning, match="fans out"):
-        group_result_3g.clusters.words.save()
-    subfolder = tmp_path / "cluster_words"
-    assert subfolder.is_dir()
-    assert len(list(subfolder.glob("*.csv"))) == 3
+# removed: test_paired_cluster_words_combined_multi_pair_csv_fans_out — gr.clusters.words
+#          no longer exists; _ShimView has no .words attribute.
 
-
-def test_paired_cluster_words_xlsx_multi_pair(group_result_3g, tmp_path, monkeypatch):
-    pytest.importorskip("pandas")
-    pytest.importorskip("openpyxl")
-    monkeypatch.chdir(tmp_path)
-    out = tmp_path / "cw.xlsx"
-    group_result_3g.clusters.pos.words.save(str(out))
-    assert out.exists()
+# removed: test_paired_cluster_words_xlsx_multi_pair — depends on gr.clusters.pos.words
+#          which is a removed feature.
 
 
 # ---------------------------------------------------------------------------

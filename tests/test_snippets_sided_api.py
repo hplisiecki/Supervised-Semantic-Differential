@@ -172,10 +172,26 @@ def test_save_hint_does_not_advertise_broken_filter():
     assert "cluster_id=0," not in hint
 
 
-def test_sided_save_hint_mentions_cluster_id_kwarg():
-    view = SnippetsView(_mixed_rows()).pos
+def test_sided_save_hint_when_filtered_mentions_cluster_id():
+    """When filtered by ``cluster_id=``, the hint shows the active filter."""
+    rows = _mixed_rows()
+    view = SnippetsViewSided("pos", rows, cluster_id=0)
     hint = view._save_hint()
-    assert "cluster_id=" in hint
+    assert "cluster_id=0" in hint
+
+
+def test_sided_save_hint_unfiltered_has_no_drill_advertisement():
+    """Flat / undrilled sided views advertise row count only — no positional drill.
+
+    ``cluster_id`` may appear in the columns preview (it's a row column) but the
+    hint must NOT advertise a positional drill form or active filter.
+    """
+    rows = _mixed_rows()
+    view = SnippetsViewSided("pos", rows)
+    hint = view._save_hint()
+    assert "Drill" not in hint
+    assert "filtered to cluster_id" not in hint
+    assert "zoom to one cluster" not in hint
 
 
 # ---------------------------------------------------------------------------

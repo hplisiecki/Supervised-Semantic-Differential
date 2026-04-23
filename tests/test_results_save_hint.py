@@ -299,7 +299,6 @@ def _make_group_result():
         pairs=[Pair(contrast="low_high", g1="low", g2="high",
                     T=0.842, p_raw=0.0001, p_corrected=0.0002,
                     cohens_d=0.512, n_g1=297, n_g2=300, contrast_norm=1.0)],
-        words_rows=[], cluster_rows=[], cluster_words_rows=[], snippets_rows=[],
         x=None, groups=None,
     )
 

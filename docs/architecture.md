@@ -43,7 +43,8 @@ ssdiff/
 │   ├── core.py           — Result ABC, View / ScalarView / TestView, save()/to_* helpers, parameter-keyed cache
 │   ├── schema.py         — frozen dataclasses: Word, Cluster, ClusterWord, Snippet, Doc, Pair, Suggestion, Stats, FitInfo, Summary
 │   ├── continuous_result.py  — ContinuousResult, PLSResult, PCAOLSResult, and their views
-│   ├── group_result.py       — GroupResult, PairView, _GroupPairsListView
+│   ├── group_result.py       — GroupResult, PairsListView, GroupStatsView, GroupTestView, per-pair helpers
+│   ├── paired_view.py        — ``_paired_save`` helper: unified multi-key save dispatch used by ``_ShimView``
 │   ├── lexicon_result.py     — LexiconResult + lexicon views
 │   ├── report.py             — Report / Section builders + text/md/html/tex/docx/json renderers
 │   ├── format.py             — APA-style numeric formatting primitives (fmt_p, fmt_r, fmt_table, …)
@@ -58,7 +59,7 @@ ssdiff/
     └── diagnostics.py  — progress_hook, runtime counters
 ```
 
-Core runtime deps: **numpy + spaCy + matplotlib**. Gensim is optional (only to write `.kv`; loading `.kv` works via an internal unpickler shim). Pandas / openpyxl / python-docx are behind the `[results]` extra and gated at call sites.
+Core runtime deps: **numpy + spaCy**. Gensim is optional (only to write `.kv`; loading `.kv` works via an internal unpickler shim). Matplotlib / pandas / openpyxl / python-docx are behind the `[results]` extra and gated at call sites.
 
 ---
 

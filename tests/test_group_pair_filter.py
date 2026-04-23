@@ -1,142 +1,89 @@
-"""Pair-filter accessor tests for GroupResult.__call__."""
+"""Item-access tests for GroupResult (post-refactor).
 
+Replaces the old `gr(...)` filter tests. The new API is strict:
+- ``gr[('g1', 'g2')]`` → PairResult
+- reverse order / unknown pair / non-tuple keys all raise KeyError
+- no list / string / positional / raw-label / pairs= forms
+"""
 import numpy as np
 import pytest
 
 
-def test_filter_returns_shallow_copy(group_result_3g):
+def test_item_access_returns_pair_result(group_result_3g):
+    from ssdiff.results.group_result import PairResult
     gr = group_result_3g
-    filtered = gr([("g1", "g2")])
-    assert filtered is not gr
-    assert gr.embeddings is filtered.embeddings
-    assert gr.corpus is filtered.corpus
-    assert gr.x is filtered.x
-    assert gr.groups is filtered.groups
+    pr = gr[("g1", "g2")]
+    assert isinstance(pr, PairResult)
+    assert (pr.g1, pr.g2) == ("g1", "g2")
 
 
-def test_filter_restricts_pairs(group_result_3g):
+def test_item_access_x_contains_correct_rows(group_result_3g):
     gr = group_result_3g
-    filtered = gr([("g1", "g2")])
-    assert [(p.g1, p.g2) for p in filtered.pairs] == [("g1", "g2")]
+    pr = gr[("g1", "g2")]
+    # pr.x is a boolean-masked slice of gr._x — cannot share memory (masked copies),
+    # but must contain exactly the rows belonging to g1 or g2.
+    mask = (gr._groups == "g1") | (gr._groups == "g2")
+    expected = gr._x[mask]
+    np.testing.assert_array_equal(pr.x, expected)
 
 
-def test_filter_downstream_views_inherit(group_result_3g):
+def test_item_access_reverse_order_raises(group_result_3g):
     gr = group_result_3g
-    filtered = gr([("g1", "g2")])
-    from ssdiff.results.continuous_result import WordsView
-    from ssdiff.results.paired_view import WordsViewPaired
-    # Single-pair filtered result should give a WordsView (single-pair dispatch)
-    # while the original multi-pair gives a WordsViewPaired
-    assert isinstance(filtered.words, WordsView)
-    assert isinstance(gr.words, WordsViewPaired)
+    with pytest.raises(KeyError, match="canonical order"):
+        gr[("g2", "g1")]
 
 
-def test_filter_accepts_pairs_keyword(group_result_3g):
+def test_item_access_unknown_pair_raises(group_result_3g):
     gr = group_result_3g
-    a = gr([("g1", "g2")])
-    b = gr(pairs=[("g1", "g2")])
-    assert [(p.g1, p.g2) for p in a.pairs] == [(p.g1, p.g2) for p in b.pairs]
+    with pytest.raises(KeyError, match="unknown pair"):
+        gr[("g1", "g99")]
 
 
-def test_filter_normalizes_reverse_order(group_result_3g):
+def test_item_access_string_raises(group_result_3g):
     gr = group_result_3g
-    filtered = gr([("g2", "g1")])
-    assert [(p.g1, p.g2) for p in filtered.pairs] == [("g1", "g2")]
+    with pytest.raises(KeyError, match="tuple of two strings"):
+        gr["g1_g2"]
 
 
-def test_filter_unknown_pair_raises(group_result_3g):
+def test_item_access_list_raises(group_result_3g):
     gr = group_result_3g
     with pytest.raises(KeyError):
-        gr([("g1", "g99")])
+        gr[[("g1", "g2"), ("g1", "g3")]]
 
 
-def test_filter_empty_list_raises(group_result_3g):
-    gr = group_result_3g
-    with pytest.raises(ValueError):
-        gr([])
-
-
-def test_single_pair_noop(group_result_3g):
-    gr = group_result_3g
-    all_keys = [(p.g1, p.g2) for p in gr.pairs]
-    filtered = gr(all_keys)
-    assert [(p.g1, p.g2) for p in filtered.pairs] == all_keys
-
-
-# -- ergonomic __call__ forms --------------------------------------------------
-
-def test_filter_contrast_string(group_result_3g):
-    gr = group_result_3g
-    filtered = gr("g1_g2")
-    assert [(p.g1, p.g2) for p in filtered.pairs] == [("g1", "g2")]
-
-
-def test_filter_positional_pair(group_result_3g):
-    gr = group_result_3g
-    filtered = gr("g1", "g2")
-    assert [(p.g1, p.g2) for p in filtered.pairs] == [("g1", "g2")]
-
-
-def test_filter_single_tuple(group_result_3g):
-    gr = group_result_3g
-    filtered = gr(("g1", "g2"))
-    assert [(p.g1, p.g2) for p in filtered.pairs] == [("g1", "g2")]
-
-
-def test_filter_single_list_as_pair(group_result_3g):
-    gr = group_result_3g
-    filtered = gr(["g1", "g2"])
-    assert [(p.g1, p.g2) for p in filtered.pairs] == [("g1", "g2")]
-
-
-def test_filter_list_of_contrast_strings(group_result_3g):
-    gr = group_result_3g
-    filtered = gr(["g1_g2", "g1_g3"])
-    assert [(p.g1, p.g2) for p in filtered.pairs] == [("g1", "g2"), ("g1", "g3")]
-
-
-def test_filter_multiple_positional_contrasts(group_result_3g):
-    gr = group_result_3g
-    filtered = gr("g1_g2", "g1_g3")
-    assert [(p.g1, p.g2) for p in filtered.pairs] == [("g1", "g2"), ("g1", "g3")]
-
-
-def test_filter_raw_label_resolution(group_result_3g):
-    gr = group_result_3g
-    raw_by_canon = gr.group_labels
-    raw1, raw2 = raw_by_canon["g1"], raw_by_canon["g2"]
-    filtered = gr(raw1, raw2)
-    assert [(p.g1, p.g2) for p in filtered.pairs] == [("g1", "g2")]
-
-
-def test_filter_no_underscore_string_raises(group_result_3g):
-    gr = group_result_3g
-    with pytest.raises(ValueError):
-        gr("g1g2")
-
-
-def test_filter_no_args_raises(group_result_3g):
+def test_item_access_positional_pair_raises(group_result_3g):
+    """The old `gr('g1', 'g2')` form is gone — gr is not callable."""
     gr = group_result_3g
     with pytest.raises(TypeError):
-        gr()
+        gr("g1", "g2")
 
 
-def test_filter_mix_args_and_kwarg_raises(group_result_3g):
+def test_pair_result_views_work(group_result_3g):
+    from ssdiff.results.continuous_result import WordsView
     gr = group_result_3g
-    with pytest.raises(TypeError):
-        gr("g1_g2", pairs=[("g1", "g2")])
+    pr = gr[("g1", "g2")]
+    # Leaf exposes single-gradient WordsView directly (not a shim).
+    if gr.embeddings is not None:
+        assert isinstance(pr.words, WordsView)
 
 
-# -- float-label canonicalization regression ---------------------------------
+def test_shim_access_keyed(group_result_3g):
+    """Sanity-check the power-user shortcut: gr.words[pair]."""
+    from ssdiff.results.continuous_result import WordsView
+    gr = group_result_3g
+    if gr.embeddings is not None:
+        assert isinstance(gr.words[("g1", "g2")], WordsView)
+
+
+# -- float-label canonicalization regression (unchanged from old test) -------
 
 def test_fit_groups_float_labels_produces_distinct_gradients(
     tiny_kv, large_docs_3x20, lexicon,
 ):
     """Regression for dtype-mismatch bug in _canonicalize.
 
-    Before fix: float user labels produced uncanonicalized Pair.g1/g2 strings
-    that didn't match the relabeled groups array, yielding nan gradients and
-    identical top words for every pair.
+    Float user labels must canonicalize to ``g1, g2, …`` cleanly, producing
+    finite distinct gradients across all pairs.
     """
     from ssdiff.corpus import Corpus
     from ssdiff.ssd import SSD
@@ -149,11 +96,10 @@ def test_fit_groups_float_labels_produces_distinct_gradients(
     assert all(a.startswith("g") and b.startswith("g")
                for a, b in canonical_keys), canonical_keys
 
-    gradients = gr.gradient
+    gradients = gr.gradient  # always dict now
+    assert isinstance(gradients, dict)
     grad_list = list(gradients.values())
-    assert all(np.isfinite(g).all() for g in grad_list), \
-        "gradients must be finite — nan means the groups mask was empty"
+    assert all(np.isfinite(g).all() for g in grad_list)
     for i in range(len(grad_list)):
         for j in range(i + 1, len(grad_list)):
-            assert not np.allclose(grad_list[i], grad_list[j]), \
-                "distinct pairs must produce distinct gradients"
+            assert not np.allclose(grad_list[i], grad_list[j])

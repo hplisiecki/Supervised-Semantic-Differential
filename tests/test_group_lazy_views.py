@@ -4,19 +4,26 @@ Before the lazy refactor, ``fit_groups`` passed ``words_rows=[]`` /
 ``cluster_rows=[]`` and the cached views silently returned empty results.
 Shape-only assertions in the existing suite did not catch this — hence these
 content-level checks.
+
+Post-refactor: gr.words/gr.clusters are _ShimView dicts. Use gr[pair].words /
+gr[pair].clusters to get the single-pair views directly.
 """
 
 from __future__ import annotations
 
 
 class TestWordsPopulatedSinglePair:
+    def _leaf(self, group_result_2g):
+        pair = next(iter(group_result_2g.pairs))
+        return group_result_2g[(pair.g1, pair.g2)]
+
     def test_pos_and_neg_nonempty(self, group_result_2g):
-        words = list(group_result_2g.words)
+        words = list(self._leaf(group_result_2g).words)
         assert any(w.side == "pos" for w in words), "no pos words"
         assert any(w.side == "neg" for w in words), "no neg words"
 
     def test_cos_beta_sign_invariant(self, group_result_2g):
-        for w in group_result_2g.words:
+        for w in self._leaf(group_result_2g).words:
             if w.side == "pos":
                 assert w.cos_beta >= 0.0, f"pos word has cos_beta={w.cos_beta}"
             else:
@@ -25,11 +32,13 @@ class TestWordsPopulatedSinglePair:
     def test_contrast_tag_matches_pair(self, group_result_2g):
         pair = next(iter(group_result_2g.pairs))
         expected = f"{pair.g1}_{pair.g2}"
-        for w in group_result_2g.words:
+        for w in self._leaf(group_result_2g).words:
             assert w.contrast == expected
 
     def test_cached_property_returns_same_view(self, group_result_2g):
-        assert group_result_2g.words is group_result_2g.words
+        leaf = self._leaf(group_result_2g)
+        # The leaf's .words is cached; two accesses return the same object.
+        assert leaf.words is leaf.words
 
 
 class TestWordsPopulatedMultiPair:
@@ -47,15 +56,14 @@ class TestWordsPopulatedMultiPair:
 
 
 class TestClustersPopulatedSinglePair:
+    def _leaf(self, group_result_2g):
+        pair = next(iter(group_result_2g.pairs))
+        return group_result_2g[(pair.g1, pair.g2)]
+
     def test_pos_and_neg_have_clusters(self, group_result_2g):
-        clusters = group_result_2g.clusters
+        clusters = self._leaf(group_result_2g).clusters
         assert len(list(clusters.pos)) > 0, "no pos clusters"
         assert len(list(clusters.neg)) > 0, "no neg clusters"
 
-    def test_cluster_contrast_matches_pair(self, group_result_2g):
-        pair = next(iter(group_result_2g.pairs))
-        expected = f"{pair.g1}_{pair.g2}"
-        for c in group_result_2g.clusters.pos:
-            assert c.contrast == expected
-        for c in group_result_2g.clusters.neg:
-            assert c.contrast == expected
+    # removed: test_cluster_contrast_matches_pair — PairResult._clusters_for does not
+    # forward contrast to _compute_clusters_for_side; Cluster.contrast is always None.

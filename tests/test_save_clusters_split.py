@@ -1,32 +1,33 @@
-"""Tests for cluster save behaviour: flat file (single-pair) vs subfolder fan-out (multi-pair).
+"""Tests for cluster save behaviour: flat file (single-pair) via leaf path.
+
+Post-refactor: gr.clusters is a _ShimView with no .pos/.neg attributes.
+Use gr[pair].clusters.pos / .neg to access sided cluster views.
 
 Single-pair (group_result_2g):
-  gr.clusters.pos.save(path.csv) → flat file at path, no subfolder.
+  gr[pair].clusters.pos.save(path.csv) → flat file at path, no subfolder.
 
 Multi-pair (group_result_3g):
-  gr.clusters.pos.save(path.csv) → subfolder name hardcoded to 'clusters_pos',
-  one csv per pair inside.
-
-Mirrors the same tests for .neg.
+  gr[pair].clusters.pos.save(path.csv) → flat file for that specific pair.
+  (Multi-pair sided fan-out from a single call is a removed feature.)
 """
 
 from __future__ import annotations
-
-import warnings
-from pathlib import Path
 
 import pytest
 
 
 # ---------------------------------------------------------------------------
-# Single-pair (2-group): flat csv
+# Single-pair (2-group): flat csv via leaf path
 # ---------------------------------------------------------------------------
 
 
 def test_clusters_pos_single_pair_flat_file(group_result_2g, tmp_path):
-    """Single-pair: clusters.pos.save → flat file at the given path, no subfolder."""
+    """Single-pair: gr[pair].clusters.pos.save → flat file at the given path."""
+    gr = group_result_2g
+    pair = next(iter(gr.pairs))
+    leaf = gr[(pair.g1, pair.g2)]
     target = tmp_path / "clusters_pos.csv"
-    group_result_2g.clusters.pos.save(target)
+    leaf.clusters.pos.save(target)
 
     assert target.is_file(), "expected flat csv at target path"
     assert not (tmp_path / "clusters_pos").exists(), \
@@ -34,9 +35,12 @@ def test_clusters_pos_single_pair_flat_file(group_result_2g, tmp_path):
 
 
 def test_clusters_neg_single_pair_flat_file(group_result_2g, tmp_path):
-    """Single-pair: clusters.neg.save → flat file at the given path, no subfolder."""
+    """Single-pair: gr[pair].clusters.neg.save → flat file at the given path."""
+    gr = group_result_2g
+    pair = next(iter(gr.pairs))
+    leaf = gr[(pair.g1, pair.g2)]
     target = tmp_path / "clusters_neg.csv"
-    group_result_2g.clusters.neg.save(target)
+    leaf.clusters.neg.save(target)
 
     assert target.is_file(), "expected flat csv at target path"
     assert not (tmp_path / "clusters_neg").exists(), \
@@ -44,72 +48,23 @@ def test_clusters_neg_single_pair_flat_file(group_result_2g, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Multi-pair (3-group): subfolder fan-out, name hardcoded
+# Multi-pair (3-group): per-pair leaf save
 # ---------------------------------------------------------------------------
 
 
-def test_clusters_pos_multi_pair_subfolder(group_result_3g, tmp_path):
-    """Multi-pair: clusters.pos.save → tmp/clusters_pos/gi_gj.csv for each pair."""
-    target = tmp_path / "clusters_pos.csv"
-    with warnings.catch_warnings(record=True) as recorded:
-        warnings.simplefilter("always")
-        group_result_3g.clusters.pos.save(target)
-
-    # Original path NOT written
-    assert not target.exists(), "original csv path should not be created"
-
-    # Subfolder name is 'clusters_pos' (hardcoded), not derived from caller path
-    folder = tmp_path / "clusters_pos"
-    assert folder.is_dir(), "subfolder 'clusters_pos' should be created"
-
-    for pair in group_result_3g.pairs:
-        expected = folder / f"{pair.g1}_{pair.g2}.csv"
-        assert expected.is_file(), f"expected {expected}"
-
-    assert any(issubclass(w.category, UserWarning) for w in recorded), \
-        "expected a UserWarning on csv fan-out"
+def test_clusters_pos_multi_pair_each_leaf_saves_flat(group_result_3g, tmp_path):
+    """Multi-pair: iterating leaves and saving per pair produces one flat file each."""
+    gr = group_result_3g
+    for (g1, g2), leaf in gr._leaves.items():
+        out = tmp_path / f"clusters_pos_{g1}_{g2}.csv"
+        leaf.clusters.pos.save(out)
+        assert out.is_file(), f"expected flat file at {out}"
 
 
-def test_clusters_neg_multi_pair_subfolder(group_result_3g, tmp_path):
-    """Multi-pair: clusters.neg.save → tmp/clusters_neg/gi_gj.csv for each pair."""
-    target = tmp_path / "clusters_neg.csv"
-    with warnings.catch_warnings(record=True) as recorded:
-        warnings.simplefilter("always")
-        group_result_3g.clusters.neg.save(target)
-
-    assert not target.exists()
-
-    folder = tmp_path / "clusters_neg"
-    assert folder.is_dir(), "subfolder 'clusters_neg' should be created"
-
-    for pair in group_result_3g.pairs:
-        expected = folder / f"{pair.g1}_{pair.g2}.csv"
-        assert expected.is_file(), f"expected {expected}"
-
-    assert any(issubclass(w.category, UserWarning) for w in recorded)
-
-
-def test_clusters_pos_multi_pair_subfolder_name_hardcoded(group_result_3g, tmp_path):
-    """Subfolder name is always 'clusters_pos', regardless of the caller's path stem."""
-    target = tmp_path / "anything.csv"
-    with warnings.catch_warnings(record=True):
-        warnings.simplefilter("always")
-        group_result_3g.clusters.pos.save(target)
-
-    assert not target.exists()
-    assert (tmp_path / "clusters_pos").is_dir(), \
-        "subfolder must be 'clusters_pos', not 'anything'"
-    assert not (tmp_path / "anything").exists(), "unexpected 'anything' subfolder"
-
-
-def test_clusters_neg_multi_pair_subfolder_name_hardcoded(group_result_3g, tmp_path):
-    """Subfolder name is always 'clusters_neg', regardless of the caller's path stem."""
-    target = tmp_path / "anything.csv"
-    with warnings.catch_warnings(record=True):
-        warnings.simplefilter("always")
-        group_result_3g.clusters.neg.save(target)
-
-    assert not target.exists()
-    assert (tmp_path / "clusters_neg").is_dir(), \
-        "subfolder must be 'clusters_neg', not 'anything'"
-    assert not (tmp_path / "anything").exists()
+def test_clusters_neg_multi_pair_each_leaf_saves_flat(group_result_3g, tmp_path):
+    """Multi-pair: iterating leaves and saving neg per pair produces one flat file each."""
+    gr = group_result_3g
+    for (g1, g2), leaf in gr._leaves.items():
+        out = tmp_path / f"clusters_neg_{g1}_{g2}.csv"
+        leaf.clusters.neg.save(out)
+        assert out.is_file(), f"expected flat file at {out}"

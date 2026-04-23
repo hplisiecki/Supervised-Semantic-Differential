@@ -40,7 +40,7 @@ DEFAULT_COLS: dict[str, tuple[str, ...]] = {
     "WordsView":           ("side", "rank", "word", "cos_beta"),
     "WordsViewSided":      ("side", "rank", "word", "cos_beta"),
     "ClustersViewSided":   ("cluster_id", "size", "coherence", "centroid_cos_beta"),
-    "ClusterWordsView":    ("cluster_id", "word", "cos_centroid", "cos_beta"),
+    "ClusterWordsView":    ("cluster_id", "side", "word", "cos_centroid", "cos_beta"),
     "ClusterWordsViewSided": ("cluster_id", "side", "word", "cos_centroid", "cos_beta"),
     "SnippetsView":        ("side", "doc_id", "cosine", "seed", "text_window"),
     "SnippetsViewSided":   ("side", "doc_id", "cosine", "seed", "text_window"),
@@ -72,8 +72,8 @@ DEFAULT_MAX_ROWS_BY_CLASS: dict[str, int] = {
 # ``to_text``/repr only; data exports stay full-width.  ``None`` / missing = no
 # truncation.  Keyed by class ``__name__``, like the other registries.
 DEFAULT_TEXT_TRUNCATE: dict[str, int] = {
-    "SnippetsView":       40,
-    "SnippetsViewSided":  40,
+    "SnippetsView":       80,
+    "SnippetsViewSided":  80,
 }
 
 
