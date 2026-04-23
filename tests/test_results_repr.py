@@ -473,8 +473,8 @@ def test_spec_example_6_sided_clusters_view_includes_words_hint():
     for h in ("cluster_id", "size", "coherence", "centroid_cos_beta"):
         assert h in text
     assert "Words:" in text
-    assert ".words(0)" in text
-    assert ".words(1)" in text
+    assert "(0).words" in text
+    assert "(1).words" in text
 
 
 def test_spec_example_7_docs_view_pos_repr_includes_slice_hint():
@@ -496,7 +496,6 @@ def _shared_group():
         pairs=[Pair(contrast="low_high", g1="low", g2="high",
                     T=0.842, p_raw=0.0001, p_corrected=0.0002,
                     cohens_d=0.512, n_g1=297, n_g2=300, contrast_norm=1.0)],
-        words_rows=[], cluster_rows=[], cluster_words_rows=[], snippets_rows=[],
         x=None, groups=None,
     )
 

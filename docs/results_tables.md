@@ -121,7 +121,7 @@ Same columns + same defaults as `WordsView`. Row cap default = 20 (per side). Us
 | `centroid_cos_beta` | ✓ | |
 | `contrast` |  | group-only |
 
-### `clusters.pos.words(cid)` — `ClusterWordsView`
+### `clusters.pos(cid).words` — `ClusterWordsView`
 
 | column | default | note |
 |---|:---:|---|
@@ -222,27 +222,35 @@ Columns: `k`, `r2`, `r2_adj`, `pvalue`. One row per K tested. Default = full.
 | `p_raw` |  | users should read corrected value |
 | `p_corrected` | ✓ | headline p after correction |
 | `cohens_d` | ✓ | standardized effect size |
-| `n_g1` |  | stable within a GroupResult; on `.stats` / `PairView.stats` |
+| `n_g1` |  | stable within a GroupResult; on `.stats` |
 | `n_g2` |  | same |
 | `contrast_norm` |  | internal diagnostic |
 
-### `pairs["A", "B"].stats` — `PairStatsView` (ScalarView)
+Tuple-key lookup `gr.pairs[('g1', 'g2')]` returns the raw `Pair` dataclass directly. Canonical order only — reverse order raises `KeyError`, no sign-flip.
 
-| column | default | note |
-|---|:---:|---|
-| `T` | ✓ | |
-| `p_raw` |  | corrected is headline |
-| `p_corrected` | ✓ | |
-| `cohens_d` | ✓ | |
-| `n_g1` | ✓ | cell size matters at the pair level |
-| `n_g2` | ✓ | same |
-| `contrast_norm` |  | internal |
+### Per-pair views — `gr[('g1', 'g2')].words` / `.clusters` / `.snippets`
 
-Asymmetry with `PairsListView`: the list is skimmed across many pairs, so cell sizes are a distraction; the per-pair scalar view is read in isolation, where imbalance is informative.
+`gr[('g1', 'g2')]` returns a `PairResult` for that pair. Its `.words`, `.clusters`, and `.snippets` attributes dispatch to the same view classes as continuous results, with the `contrast` column populated (`"g1_g2"`) rather than `None`. Reverse-order access `gr[('g2', 'g1')]` is normalized to canonical order, so it returns the identical view — no sign-flip.
 
-### `pairs["A", "B"].words` / `.clusters.pos` / `.snippets`
+**`gr[('g1', 'g2')].words` — `WordsView`**
 
-Same columns and defaults as the continuous `WordsView` / `SidedClustersView` / `SnippetsView`. The `contrast` column is populated (not `None`), and `side` / `cos_beta` / `T` are sign-flipped when the pair is accessed in reverse order.
+Same columns and defaults as the continuous `WordsView` (see above). `contrast` is `"g1_g2"`.
+
+**`gr[('g1', 'g2')].clusters.pos` / `.neg` — `ClustersViewSided`**
+
+Same columns and defaults as the continuous `ClustersViewSided`. `contrast` is populated on every row.
+
+**`gr[('g1', 'g2')].clusters.pos.words` — `ClusterWordsViewSided`**
+
+Same columns and defaults as the continuous `ClusterWordsViewSided`. `contrast` is populated.
+
+**`gr[('g1', 'g2')].snippets` — `SnippetsView`**
+
+**`gr[('g1', 'g2')].snippets.pos` / `.neg` — `SnippetsViewSided`**
+
+Same columns and defaults as the continuous `SnippetsView` / `SnippetsViewSided`. `contrast` is populated.
+
+*Power-user shortcut:* top-level paired containers also accept tuple indexing directly — `gr.words[('g1', 'g2')]`, `gr.clusters[('g1', 'g2')]`, `gr.snippets[('g1', 'g2')]` — skipping the `PairResult` construction when you only need one view (canonical order only).
 
 ---
 

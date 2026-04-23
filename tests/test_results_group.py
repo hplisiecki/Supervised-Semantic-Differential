@@ -20,7 +20,6 @@ def _fake_group():
         G=3, n_kept=150, n_perm=5000, correction="holm", random_state=42,
         omnibus_T=1.83, omnibus_p=0.001,
         pairs=pairs,
-        words_rows=[], cluster_rows=[], cluster_words_rows=[], snippets_rows=[],
         embeddings=None, corpus=None,
         # groups=None → canonicalization skipped; pairs keep "A"/"B"/"C" labels.
     )

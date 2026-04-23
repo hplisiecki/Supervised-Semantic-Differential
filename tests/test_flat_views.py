@@ -54,15 +54,20 @@ def test_continuous_clusters_words_accessor_preserved(cr):
 
 
 def test_group_words_flat_iteration(group_result_3g):
-    rows = list(group_result_3g.words)
-    pairs = {r.contrast for r in rows}
+    # _ShimView has no flat __iter__; iterate via leaves to get all rows.
+    import itertools
+    gr = group_result_3g
+    all_rows = list(itertools.chain.from_iterable(
+        leaf.words for leaf in gr._leaves.values()
+    ))
+    pairs = {r.contrast for r in all_rows}
     assert len(pairs) == 3
 
 
 def test_group_words_len(group_result_3g):
-    assert len(group_result_3g.words) == sum(
-        len(group_result_3g.words[k]) for k in group_result_3g.words.keys()
-    )
+    # len(gr.words) returns number of pairs, not summed row count (per-refactor spec).
+    gr = group_result_3g
+    assert len(gr.words) == len(list(gr.pairs))
 
 
 def test_group_words_dict_access_preserved(group_result_3g):

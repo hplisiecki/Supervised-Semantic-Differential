@@ -1,9 +1,8 @@
 """Group-side cluster-snippets centroid fix regression tests.
 
 Mirrors tests/test_cluster_snippets_centroid.py for GroupResult's
-single-pair path. All five tests use a 2-group synthetic fixture
-so GroupResult resolves to the single-pair branch (no pair arg
-required on the top-level accessor).
+single-pair path. All five tests use a 2-group synthetic fixture.
+Post-refactor: access clusters via gr[pair].clusters.pos (canonical path).
 """
 
 import pickle
@@ -46,46 +45,58 @@ def gr(tiny_kv, large_docs, large_groups_2, lexicon):
     return ssd.fit_groups(n_perm=50, random_state=42)
 
 
+def _leaf(gr):
+    """Return the single PairResult leaf from a 2-group GroupResult."""
+    pair = next(iter(gr.pairs))
+    return gr[(pair.g1, pair.g2)]
+
+
 def test_cluster_snippets_nonempty_per_cluster(gr):
-    pos_rows = list(gr.clusters.pos.snippets(k=None))
-    pos_cluster_ids = {c.cluster_id for c in gr.clusters.pos}
+    leaf = _leaf(gr)
+    pos_rows = list(leaf.clusters.pos.snippets(k=None))
+    pos_cluster_ids = {c.cluster_id for c in leaf.clusters.pos}
     assert pos_cluster_ids, "test fixture produced no positive clusters"
     seen = {s.cluster_id for s in pos_rows}
     assert pos_cluster_ids.issubset(seen), (
         f"clusters without snippets: {pos_cluster_ids - seen}"
     )
-    neg_rows = list(gr.clusters.neg.snippets(k=None))
-    neg_cluster_ids = {c.cluster_id for c in gr.clusters.neg}
+    neg_rows = list(leaf.clusters.neg.snippets(k=None))
+    neg_cluster_ids = {c.cluster_id for c in leaf.clusters.neg}
     seen_neg = {s.cluster_id for s in neg_rows}
     assert neg_cluster_ids.issubset(seen_neg)
 
 
 def test_centroid_label_maps_to_cluster_id(gr):
-    first_cid = gr.clusters.pos[0].cluster_id
-    filtered = gr.clusters.pos.snippets(cluster_id=first_cid)
+    leaf = _leaf(gr)
+    first_cid = leaf.clusters.pos[0].cluster_id
+    filtered = leaf.clusters.pos.snippets(cluster_id=first_cid)
     assert len(filtered) > 0
     assert all(s.cluster_id == first_cid for s in filtered)
 
 
 def test_cache_key_respects_cluster_params(gr):
-    _ = gr.clusters.pos.snippets
-    _ = gr.cluster_snippets(side="pos", top_per_cluster=50)
-    entries = [k for k in gr._cache if k[0] == "cluster_snippets"]
+    leaf = _leaf(gr)
+    _ = leaf.clusters.pos.snippets
+    _ = leaf.cluster_snippets(side="pos", top_per_cluster=50)
+    entries = [k for k in leaf._cache if k[0] == "cluster_snippets"]
     assert len(entries) == 2, f"expected 2 cache entries, got {entries}"
 
 
 def test_top_level_accessor_matches_property(gr):
-    a = list(gr.clusters.pos.snippets)
-    b = list(gr.cluster_snippets(side="pos"))
+    leaf = _leaf(gr)
+    a = list(leaf.clusters.pos.snippets)
+    b = list(leaf.cluster_snippets(side="pos"))
     assert len(a) == len(b)
     assert all(x.snippet_id == y.snippet_id and x.cosine == y.cosine
                for x, y in zip(a, b))
 
 
 def test_pickle_roundtrip_preserves_cluster_snippets(gr):
-    _ = gr.clusters.pos.snippets
+    leaf = _leaf(gr)
+    _ = leaf.clusters.pos.snippets
     data = pickle.dumps(gr)
     gr2 = pickle.loads(data)
     gr2.attach(corpus=gr.corpus, embeddings=gr.embeddings)
-    rows = list(gr2.clusters.pos.snippets)
+    leaf2 = _leaf(gr2)
+    rows = list(leaf2.clusters.pos.snippets)
     assert len(rows) > 0

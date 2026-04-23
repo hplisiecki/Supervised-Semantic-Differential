@@ -87,19 +87,23 @@ class TestPCAOLSSurface:
 
 
 class TestGroupAlignmentScores:
-    """Top-level ``gr.alignment_scores`` accessor."""
+    """Top-level ``gr.alignment_scores`` accessor — always a dict now."""
 
     def test_alignment_scores_shape_single_pair(self, group_result_2g):
         gr = group_result_2g
         scores = gr.alignment_scores
-        # Single pair → plain ndarray
-        assert scores.shape == (gr.n_kept,)
+        # Single pair → dict with one entry
+        assert isinstance(scores, dict)
+        assert len(scores) == 1
+        arr = next(iter(scores.values()))
+        assert arr.shape == (gr.n_kept,)
 
     def test_alignment_scores_values_single_pair(self, group_result_2g):
         gr = group_result_2g
         scores = gr.alignment_scores
         # Equals x @ (c_g1 - c_g2) / ||c_g1 - c_g2||
         pair = next(iter(gr.pairs))
+        arr = scores[(pair.g1, pair.g2)]
         x = gr.x
         groups = gr.groups
         c1 = x[groups == pair.g1].mean(axis=0)
@@ -107,21 +111,23 @@ class TestGroupAlignmentScores:
         contrast = c1 - c2
         grad = contrast / np.linalg.norm(contrast)
         expected = (x @ grad).ravel()
-        np.testing.assert_allclose(scores, expected, rtol=1e-10, atol=1e-10)
+        np.testing.assert_allclose(arr, expected, rtol=1e-10, atol=1e-10)
 
     def test_alignment_scores_requires_x(self, group_result_2g):
-        """When x is None (e.g. after detach), the per-pair computation raises."""
+        """When _x/_groups are None, building PairResult raises RuntimeError."""
+        from ssdiff.results.group_result import PairResult
         gr = group_result_2g
-        saved_x, saved_groups = gr.x, gr.groups
+        pair = next(iter(gr.pairs))
+        # Temporarily null out the container arrays.
+        saved_x, saved_groups = gr._x, gr._groups
         try:
-            gr.x = None
-            gr.groups = None
-            pair = next(iter(gr.pairs))
-            with pytest.raises(RuntimeError, match="require the original x"):
-                _ = gr._compute_pair_arrays((pair.g1, pair.g2))
+            gr._x = None
+            gr._groups = None
+            with pytest.raises(RuntimeError):
+                PairResult(container=gr, g1=pair.g1, g2=pair.g2)
         finally:
-            gr.x = saved_x
-            gr.groups = saved_groups
+            gr._x = saved_x
+            gr._groups = saved_groups
 
     def test_alignment_scores_three_groups_is_dict(self, group_result_3g):
         """3-group result → dict keyed by canonical pair tuples."""
@@ -131,39 +137,55 @@ class TestGroupAlignmentScores:
         assert len(scores) == 3
         for key, arr in scores.items():
             assert isinstance(key, tuple) and len(key) == 2
-            assert arr.shape == (gr.n_kept,)
+            # Shape is per-pair n (n_g1 + n_g2), not total n_kept.
+            leaf = gr[key]
+            assert arr.shape == (len(leaf.x),)
 
 
 class TestGroupBetaGradient:
-    """Top-level ``gr.beta``, ``gr.gradient``, ``gr.beta_norm`` accessors."""
+    """Top-level ``gr.beta``, ``gr.gradient``, ``gr.beta_norm`` accessors — always dicts."""
 
     def test_beta_equals_centroid_difference_single_pair(self, group_result_2g):
         gr = group_result_2g
         pair = next(iter(gr.pairs))
         c1 = gr.x[gr.groups == pair.g1].mean(axis=0)
         c2 = gr.x[gr.groups == pair.g2].mean(axis=0)
-        np.testing.assert_allclose(gr.beta, c1 - c2, rtol=1e-10, atol=1e-10)
+        beta = gr.beta[(pair.g1, pair.g2)]
+        np.testing.assert_allclose(beta, c1 - c2, rtol=1e-10, atol=1e-10)
 
     def test_gradient_is_unit_length_single_pair(self, group_result_2g):
         gr = group_result_2g
-        np.testing.assert_allclose(np.linalg.norm(gr.gradient), 1.0, rtol=1e-10)
+        pair = next(iter(gr.pairs))
+        grad = gr.gradient[(pair.g1, pair.g2)]
+        np.testing.assert_allclose(np.linalg.norm(grad), 1.0, rtol=1e-10)
 
     def test_gradient_equals_beta_over_norm_single_pair(self, group_result_2g):
         gr = group_result_2g
+        pair = next(iter(gr.pairs))
+        beta = gr.beta[(pair.g1, pair.g2)]
+        grad = gr.gradient[(pair.g1, pair.g2)]
         np.testing.assert_allclose(
-            gr.gradient, gr.beta / np.linalg.norm(gr.beta),
+            grad, beta / np.linalg.norm(beta),
             rtol=1e-10, atol=1e-10,
         )
 
     def test_beta_norm_matches_norm_of_beta_single_pair(self, group_result_2g):
         gr = group_result_2g
-        assert gr.beta_norm == pytest.approx(float(np.linalg.norm(gr.beta)))
+        pair = next(iter(gr.pairs))
+        beta = gr.beta[(pair.g1, pair.g2)]
+        bn = gr.beta_norm[(pair.g1, pair.g2)]
+        assert bn == pytest.approx(float(np.linalg.norm(beta)))
 
     def test_alignment_scores_consumes_gradient_single_pair(self, group_result_2g):
         """alignment_scores must equal x @ gradient (refactor symmetry check)."""
         gr = group_result_2g
-        expected = (gr.x @ gr.gradient).ravel()
-        np.testing.assert_allclose(gr.alignment_scores, expected, rtol=1e-10, atol=1e-10)
+        pair = next(iter(gr.pairs))
+        grad = gr.gradient[(pair.g1, pair.g2)]
+        scores = gr.alignment_scores[(pair.g1, pair.g2)]
+        # The leaf's x is the slice belonging to both groups.
+        leaf = gr[(pair.g1, pair.g2)]
+        expected = (leaf.x @ grad).ravel()
+        np.testing.assert_allclose(scores, expected, rtol=1e-10, atol=1e-10)
 
     def test_beta_dict_three_groups(self, group_result_3g):
         """3-group result → gr.beta is dict[tuple, ndarray]."""

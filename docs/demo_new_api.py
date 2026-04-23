@@ -26,8 +26,8 @@ print("======= PLS =======")
 pls = ssd.fit_pls(verbose=True)
 pls.stats
 pls.words
-pls.clusters.pos
-pls.snippets(side="pos")
+pls.snippets.pos
+pls.clusters.neg.words
 pls.docs.pos(5)
 
 print("======= PLS: rerun split test =======")
@@ -38,9 +38,10 @@ pls.report(top_words=10, clusters=50)
 # pls.report(top_words=10, clusters=50).save("report_pls.md")
 
 print("======= Groups (median split) =======")
-gr = ssd.fit_groups(median_split=True, verbose=True)
+gr = ssd.fit_groups(verbose=True)
 gr.test
 gr.pairs
+gr[('g1','g2')].words
 gr.report(top_words=10, clusters=50)
 # gr.report(top_words=10, clusters=50).save("report_groups.md")
 
