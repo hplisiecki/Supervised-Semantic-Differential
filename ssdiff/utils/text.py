@@ -43,6 +43,21 @@ def load_stopwords(lang: str = "pl", *, lowercase: bool = True) -> list[str]:
 
 # ---------- spaCy loader ----------
 
+class SpacyModelNotInstalledError(RuntimeError):
+    """Raised when a requested spaCy model is not installed.
+
+    Callers can catch this to offer auto-download. The missing model name is
+    available on the ``.model`` attribute.
+    """
+
+    def __init__(self, model: str):
+        self.model = model
+        super().__init__(
+            f"spaCy model '{model}' is not installed. "
+            f"Install with: python -m spacy download {model}"
+        )
+
+
 def load_spacy(
     model: str,
     *,
@@ -64,11 +79,16 @@ def load_spacy(
 
     Raises
     ------
+    SpacyModelNotInstalledError
+        If the model is not installed. Callers can catch this to offer
+        auto-download.
     RuntimeError
-        If the model cannot be loaded (e.g. not installed).
+        If the model exists but fails to load for any other reason.
     """
     if not model or not isinstance(model, str) or not model.strip():
         raise ValueError("Provide a spaCy model name (e.g. 'pl_core_news_lg').")
+    if not spacy.util.is_package(model):
+        raise SpacyModelNotInstalledError(model)
     try:
         nlp = spacy.load(model, disable=list(disable))
         if "parser" not in nlp.pipe_names and "sentencizer" not in nlp.pipe_names:
@@ -78,6 +98,12 @@ def load_spacy(
         raise RuntimeError(
             f"Could not load spaCy model '{model}': {e}. See https://spacy.io/models"
         ) from e
+
+
+def download_spacy_model(model: str) -> None:
+    """Download a spaCy model via ``spacy.cli.download``."""
+    from spacy.cli import download as _spacy_download
+    _spacy_download(model)
 
 
 # ---------- Token filter ----------
