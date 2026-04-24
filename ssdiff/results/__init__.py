@@ -1,8 +1,8 @@
 """Public API of the ``ssdiff.results`` package.
 
 Re-exports the result classes (``PLSResult``, ``PCAOLSResult``,
-``GroupResult``, ``LexiconResult``), their shared base ``Result``,
-the sided view classes (``WordsViewSided``, ``ClustersViewSided``,
+``GroupResult``, ``LexiconResult``, ``UMAPVisResult``), their shared base
+``Result``, the sided view classes (``WordsViewSided``, ``ClustersViewSided``,
 ``SnippetsViewSided``), and the ``set_repr_hints`` display toggle.
 """
 

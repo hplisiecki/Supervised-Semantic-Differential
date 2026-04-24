@@ -67,7 +67,10 @@ class _ShimView:
         header = f"{cont_name}.{self._view_name} shim — {n} pair view(s)"
         if not self._leaves:
             return header + "\n\n(no pairs)"
-        return header + "\n\nPairs:\n" + self._format_keys()
+        body = header + "\n\nPairs:\n" + self._format_keys()
+        if self._view_name == "words":
+            body += "\n\n" + self._format_words_preview()
+        return body
 
     def _format_keys(self) -> str:
         reprs = [repr(k) for k in self._leaves]
@@ -77,6 +80,20 @@ class _ShimView:
             for i in range(0, len(reprs), per_row)
         ]
         return "\n".join(rows)
+
+    def _format_words_preview(self, limit: int = 10, per_side: int = 5) -> str:
+        n_shown = min(limit, len(self._leaves))
+        lines = [f"Preview (first {n_shown} pair(s), top {per_side} per side):"]
+        for i, (key, view) in enumerate(self._leaves.items()):
+            if i >= limit:
+                break
+            rows = getattr(view, "_rows", [])
+            pos = [r.word for r in rows if getattr(r, "side", None) == "pos"][:per_side]
+            neg = [r.word for r in rows if getattr(r, "side", None) == "neg"][:per_side]
+            lines.append(f"  {self._container._key_repr(key)}")
+            lines.append(f"    pos: {', '.join(pos) if pos else 'none'}")
+            lines.append(f"    neg: {', '.join(neg) if neg else 'none'}")
+        return "\n".join(lines)
 
     def _save_hint(self) -> str:
         first = next(iter(self._leaves), None)

@@ -8,12 +8,43 @@ from typing import Union
 import numpy as _np
 
 from ssdiff.utils.text import (
+    SpacyModelNotInstalledError,
     build_docs_from_preprocessed,
+    download_spacy_model,
     lang_to_model,
     load_spacy,
     load_stopwords,
     preprocess_texts,
 )
+
+
+def _resolve_spacy_model(model: str, auto_download: bool | None) -> "object":
+    """Load *model*, optionally downloading if missing.
+
+    ``auto_download=True`` downloads without prompting; ``False`` re-raises
+    immediately; ``None`` prompts interactively, declining if stdin is not a
+    TTY.
+    """
+    try:
+        return load_spacy(model)
+    except SpacyModelNotInstalledError:
+        if auto_download is False:
+            raise
+        if auto_download is None:
+            import sys
+            if not sys.stdin.isatty():
+                raise
+            try:
+                ans = input(
+                    f"spaCy model '{model}' is not installed. "
+                    f"Download now? [y/N]: "
+                ).strip().lower()
+            except EOFError:
+                raise
+            if ans not in ("y", "yes"):
+                raise
+        download_spacy_model(model)
+        return load_spacy(model)
 
 
 class Corpus:
@@ -34,6 +65,7 @@ class Corpus:
         nlp=None,
         stopwords: Sequence[str] | None = None,
         pretokenized: bool = False,
+        auto_download: bool | None = None,
     ) -> None:
         """Tokenize and lemmatize texts using spaCy.
 
@@ -58,12 +90,21 @@ class Corpus:
         pretokenized : bool, default False
             If ``True``, skip spaCy processing -- *texts* are already
             token lists.
+        auto_download : bool or None, default None
+            Behavior when the required spaCy model is not installed.
+            ``True`` downloads it silently; ``False`` raises
+            :class:`~ssdiff.utils.text.SpacyModelNotInstalledError`;
+            ``None`` (default) prompts interactively when running in a
+            TTY and raises otherwise.
 
         Raises
         ------
         ValueError
             If none of *lang*, *model*, or *nlp* is provided (and
             ``pretokenized`` is ``False``).
+        SpacyModelNotInstalledError
+            If the required spaCy model is not installed and
+            auto-download was declined or unavailable.
         """
         if pretokenized:
             self.docs: list = list(texts)  # type: ignore
@@ -73,10 +114,9 @@ class Corpus:
 
         if nlp is None:
             if model is not None:
-                nlp = load_spacy(model)
+                nlp = _resolve_spacy_model(model, auto_download)
             elif lang is not None:
-                spacy_model = lang_to_model(lang)
-                nlp = load_spacy(spacy_model)
+                nlp = _resolve_spacy_model(lang_to_model(lang), auto_download)
             else:
                 raise ValueError("Provide lang=, model=, or nlp=.")
 
