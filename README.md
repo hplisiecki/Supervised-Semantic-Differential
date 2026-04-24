@@ -32,13 +32,14 @@ https://doi.org/10.31234/osf.io/gvrsb_v1
 - [Preprocessing (Corpus)](#preprocessing-corpus)
 - [Lexicon Utilities](#lexicon-utilities)
 - [Fitting SSD](#fitting-ssd)
-  - [PCA + OLS](#pca--ols)
   - [PLS](#pls)
-- [Choosing PCA Dimensionality (PCA Sweep)](#choosing-pca-dimensionality-pca-sweep)
+  - [Multi-component PLS (in development)](#multi-component-pls-in-development)
+  - [PCA + OLS](#pca--ols)
+  - [Cross-Group Comparison](#cross-group-comparison)
+  - [Inspecting results](#inspecting-results)
 - [Neighbors & Clustering](#neighbors--clustering)
 - [Interpreting with Snippets](#interpreting-with-snippets)
 - [Per-Document SSD Scores](#per-document-ssd-scores)
-- [Cross-Group Comparison](#cross-group-comparison)
 - [API Summary](#api-summary)
 - [Citing & License](#citing--license)
 
@@ -252,7 +253,7 @@ Returns `(summary_dict, per_token_list)`:
 ## Fitting SSD
 
 Create an SSD instance with embeddings, corpus, outcome, and lexicon.
-The constructor builds document vectors but does **not** fit a model — call `fit_pls()`, `fit_ols()`, or `fit_groups()` explicitly.
+The constructor builds document vectors but does **not** fit a model — call `fit_pls()`, `fit_multipls()`, `fit_ols()`, or `fit_groups()` explicitly.
 
 ```python
 from ssdiff import Embeddings, Corpus, SSD
@@ -270,33 +271,9 @@ ssd = SSD(
 )
 ```
 
-### PCA + OLS
-
-Original SSD algorithm from the paper.
-
-```python
-result = ssd.fit_ols(
-    fixed_k=None,         # None = auto-select via interpretability+stability sweep
-    k_min=2,
-    k_max=120,
-    k_step=2,
-    verbose=False,
-)
-```
-
-| Argument | Type | Default | Description |
-|----------|------|---------|-------------|
-| `fixed_k` | `int \| None` | `None` | Fixed PCA components. `None` = auto-select via sweep |
-| `k_min` | `int` | `2` | Minimum PCA-K for sweep |
-| `k_max` | `int` | `120` | Maximum PCA-K for sweep |
-| `k_step` | `int` | `2` | Step size |
-| `verbose` | `bool` | `False` | Print progress |
-
 ### PLS
 
 New proposed algorithm. PLS regression operates directly in the full embedding space, finding latent directions that maximize covariance between document vectors and the outcome without a separate dimensionality-reduction step. With the default single component it recovers one semantic gradient in a single pass, sidestepping the researcher degree of freedom in choosing PCA dimensionality. When more than one component is needed, automatic selection via cross-validation is available. Several significance testing methods are provided, including a split-half replication test and a permutation-calibrated variant with exact false-positive-rate control.
-
-> **Multi-component variant — `fit_multipls()` (in development).** Fits `k` PLS components, rotates the W-subspace (`varimax` / `promax` / `raw`), and returns a container of per-dim leaves (`"dim-1"`, …, `"dim-k"`, `"combined"`). Useful when you expect more than one interpretable semantic axis related to the outcome. API is stable for research use but feature parity with `PLSResult` (per-leaf clusters, snippets, misdiagnosed docs, per-dim diagnostics) is still being rolled out. See [`examples/demo_multipls.py`](examples/demo_multipls.py) and [`docs/api_reference.md`](docs/api_reference.md#fit_multipls--rotated-multi-component-pls-in-development).
 
 ```python
 result = ssd.fit_pls(
@@ -328,6 +305,130 @@ result = ssd.fit_pls(
 | `"split_cal"` | Permutation-calibrated split-half (exact FPR control, slower) |
 | `None` | Skip significance testing (p-value = NaN) |
 
+### Multi-component PLS (in development)
+
+When you expect more than one interpretable semantic axis related to the outcome, `fit_multipls()` fits `k` PLS components, rotates the W-subspace (`"varimax"`, `"promax"`, or `"raw"`), and returns a container of per-dim leaves — one per rotated axis plus a `"combined"` leaf for the (rotation-invariant) unrotated prediction β.
+
+```python
+result = ssd.fit_multipls(
+    n_components=2,       # required, no default
+    rotate="varimax",     # or "promax" / "raw"
+    p_method="auto",
+    verbose=False,
+)
+
+print(result.stats)             # r², pvalue, n, n_components, rotate
+print(result.pls_info)          # rotation diagnostics
+result.words                    # top words per dim (pivoted view)
+result["dim-1"].words           # zoom into rotated axis 1
+result["combined"].words        # zoom into unrotated prediction β
+```
+
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `n_components` | `int` | — (required) | Number of PLS components to extract |
+| `rotate` | `"raw" \| "varimax" \| "promax"` | `"varimax"` | Rotation applied to the W-subspace |
+| `kappa` | `int \| float` | `4` | Promax exaggeration exponent (ignored for other rotations) |
+| `pca_preprocess`, `p_method`, `n_perm`, `n_splits`, `split_ratio`, `random_state`, `verbose` | — | — | Same meaning and defaults as `fit_pls` |
+
+> **Status.** API is stable for research use but feature parity with `PLSResult` (per-leaf clusters, snippets, misdiagnosed docs, per-dim diagnostics) is still being rolled out. See [`examples/demo_multipls.py`](examples/demo_multipls.py) and [`docs/api_reference.md`](docs/api_reference.md#fit_multipls--rotated-multi-component-pls-in-development).
+
+### PCA + OLS
+
+Original SSD algorithm from the paper.
+
+```python
+result = ssd.fit_ols(
+    fixed_k=None,         # None = auto-select via interpretability+stability sweep
+    k_min=2,
+    k_max=120,
+    k_step=2,
+    verbose=False,
+)
+```
+
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `fixed_k` | `int \| None` | `None` | Fixed PCA components. `None` = auto-select via sweep |
+| `k_min` | `int` | `2` | Minimum PCA-K for sweep |
+| `k_max` | `int` | `120` | Maximum PCA-K for sweep |
+| `k_step` | `int` | `2` | Step size |
+| `verbose` | `bool` | `False` | Print progress |
+
+#### Automatic K selection (PCA sweep)
+
+Selecting the number of PCA components (`fixed_k = K`) can be a researcher degree of freedom. Pass `fixed_k=None` (the default) to run an automatic **PCA sweep** that evaluates a range of K values and selects the most robust solution.
+
+For each candidate PCA dimensionality K, the sweep fits SSD and tracks:
+
+1. **Interpretability quality** — based on clustering the nearest neighbors at each pole of the semantic gradient and computing aggregate cluster coherence and alignment with beta.
+
+2. **Stability of the semantic gradient** — measured as the cosine change between consecutive gradients: `beta_delta = 1 - cos(gradient(K-1), gradient(K))`. Smaller values mean more stable gradients.
+
+These signals are smoothed using an AUCK window.
+
+```python
+result = ssd.fit_ols(fixed_k=None, k_min=2, k_max=120, verbose=True)
+print(f"Selected K = {result.n_components}")
+print(result.summary())
+
+result.plot_sweep("sweep.png")   # save sweep plot
+result.plot_sweep()              # display interactively
+```
+
+The **blue curve** shows **detrended interpretability** as a function of K. The **orange curve** shows **solution stability**. The **red vertical line** marks the selected K.
+
+### Cross-Group Comparison
+
+When your research question involves **categorical groups** rather than a continuous outcome, use `ssd.fit_groups()`.
+
+| Scenario | Use |
+|---|---|
+| Continuous outcome (scale score, rating) | `fit_pls()` or `fit_ols()` |
+| Categorical groups (diagnosis, condition) | `fit_groups()` |
+| Continuous outcome AND group labels | Both — `fit_pls()` for the continuous analysis, `fit_groups()` for the group comparison |
+
+```python
+# Categorical groups
+ssd = SSD(emb, corpus, y=group_labels, lexicon=lexicon)
+result = ssd.fit_groups(n_perm=5000, correction="holm")
+
+# Or: median split on continuous y
+ssd = SSD(emb, corpus, y=scores, lexicon=lexicon)
+result = ssd.fit_groups(median_split=True, n_perm=5000)
+```
+
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `median_split` | `bool` | `False` | Split continuous y into "low"/"high" at median |
+| `n_perm` | `int` | `5000` | Permutation iterations |
+| `correction` | `str` | `"holm"` | P-value correction: `"holm"`, `"bonferroni"`, `"fdr_bh"`, `"none"` |
+| `random_state` | `int` | `2137` | Random seed |
+
+Groups with fewer than 20 documents are automatically dropped.
+
+#### Interpreting group results
+
+```python
+print(result.summary())
+
+# Pairwise results
+result.results_table()     # list[dict] with T, p_raw, p_corrected, cohens_d, ...
+
+# Interpretation (works across all contrasts, adds "contrast" key)
+result.top_words(20)
+result.cluster_neighbors("pos", topn=100)
+result.snippets(corpus.pre_docs)
+
+# Filter to specific groups (returns new GroupResult, no recomputation)
+r = result.filter_groups("A", "B")
+```
+
+Key attributes:
+- `result.omnibus_T` — mean pairwise cosine distance between centroids
+- `result.omnibus_p` — permutation p-value for omnibus test
+- `result.pairwise` — dict mapping `(g1, g2)` to result dicts with `T`, `p_raw`, `p_corrected`, `gradient`, `cohens_d`, etc.
+
 ### Inspecting results
 
 Both `PLSResult` and `PCAOLSResult` share the same interpretation API:
@@ -356,34 +457,7 @@ For a comprehensive text report:
 print(result.report(top_words=10, clusters=100, extreme_docs=30, misdiagnosed=20))
 ```
 
----
-
-## Choosing PCA Dimensionality (PCA Sweep)
-
-When using `fit_ols()`, selecting the number of PCA components (`fixed_k = K`) can be a researcher degree of freedom. Pass `fixed_k=None` (the default) to run an automatic **PCA sweep** that evaluates a range of K values and selects the most robust solution.
-
-### What PCA Sweep optimizes
-
-For each candidate PCA dimensionality K, the sweep fits SSD and tracks:
-
-1. **Interpretability quality** — based on clustering the nearest neighbors at each pole of the semantic gradient and computing aggregate cluster coherence and alignment with beta.
-
-2. **Stability of the semantic gradient** — measured as the cosine change between consecutive gradients: `beta_delta = 1 - cos(gradient(K-1), gradient(K))`. Smaller values mean more stable gradients.
-
-These signals are smoothed using an AUCK window.
-
-### Example
-
-```python
-result = ssd.fit_ols(fixed_k=None, k_min=2, k_max=120, verbose=True)
-print(f"Selected K = {result.n_components}")
-print(result.summary())
-
-result.plot_sweep("sweep.png")   # save sweep plot
-result.plot_sweep()              # display interactively
-```
-
-The **blue curve** shows **detrended interpretability** as a function of K. The **orange curve** shows **solution stability**. The **red vertical line** marks the selected K.
+For `MultiPLSResult` and `GroupResult`, see the "Multi-component PLS" and "Cross-Group Comparison" sections above.
 
 ---
 
@@ -481,63 +555,6 @@ result.misdiagnosed(k=20, side="under")    # model under-predicts
 
 ---
 
-## Cross-Group Comparison
-
-When your research question involves **categorical groups** rather than a continuous outcome, use `ssd.fit_groups()`.
-
-### When to use fit_groups vs fit_pls/fit_ols
-
-| Scenario | Use |
-|---|---|
-| Continuous outcome (scale score, rating) | `fit_pls()` or `fit_ols()` |
-| Categorical groups (diagnosis, condition) | `fit_groups()` |
-| Continuous outcome AND group labels | Both — `fit_pls()` for the continuous analysis, `fit_groups()` for the group comparison |
-
-### Fitting groups
-
-```python
-# Categorical groups
-ssd = SSD(emb, corpus, y=group_labels, lexicon=lexicon)
-result = ssd.fit_groups(n_perm=5000, correction="holm")
-
-# Or: median split on continuous y
-ssd = SSD(emb, corpus, y=scores, lexicon=lexicon)
-result = ssd.fit_groups(median_split=True, n_perm=5000)
-```
-
-| Argument | Type | Default | Description |
-|----------|------|---------|-------------|
-| `median_split` | `bool` | `False` | Split continuous y into "low"/"high" at median |
-| `n_perm` | `int` | `5000` | Permutation iterations |
-| `correction` | `str` | `"holm"` | P-value correction: `"holm"`, `"bonferroni"`, `"fdr_bh"`, `"none"` |
-| `random_state` | `int` | `2137` | Random seed |
-
-Groups with fewer than 20 documents are automatically dropped.
-
-### Interpreting group results
-
-```python
-print(result.summary())
-
-# Pairwise results
-result.results_table()     # list[dict] with T, p_raw, p_corrected, cohens_d, ...
-
-# Interpretation (works across all contrasts, adds "contrast" key)
-result.top_words(20)
-result.cluster_neighbors("pos", topn=100)
-result.snippets(corpus.pre_docs)
-
-# Filter to specific groups (returns new GroupResult, no recomputation)
-r = result.filter_groups("A", "B")
-```
-
-Key attributes:
-- `result.omnibus_T` — mean pairwise cosine distance between centroids
-- `result.omnibus_p` — permutation p-value for omnibus test
-- `result.pairwise` — dict mapping `(g1, g2)` to result dicts with `T`, `p_raw`, `p_corrected`, `gradient`, `cohens_d`, etc.
-
----
-
 ## API Summary
 
 The `ssdiff` top-level package exports three classes:
@@ -568,9 +585,9 @@ from ssdiff import Embeddings, Corpus, SSD
 
 - `SSD(embeddings, corpus, y, lexicon, *, window=3, sif_a=1e-3, use_full_doc=False)`
 - `.fit_pls(n_components=1, p_method="auto", ...)` -> `PLSResult`
+- `.fit_multipls(n_components, rotate="varimax", ...)` -> `MultiPLSResult` *(in development)*
 - `.fit_ols(fixed_k=None, ...)` -> `PCAOLSResult`
 - `.fit_groups(median_split=False, n_perm=5000, correction="holm", ...)` -> `GroupResult`
-- `.fit_multipls(n_components, rotate="varimax", ...)` -> `MultiPLSResult` *(in development)*
 
 ### `PLSResult` / `PCAOLSResult`
 
