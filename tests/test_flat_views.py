@@ -80,7 +80,8 @@ def test_group_words_dict_access_preserved(group_result_3g):
 
 def test_paired_save_csv_fanout_multi(tmp_path, group_result_3g):
     target = tmp_path / "words.csv"
-    group_result_3g.words.save(str(target))
+    with pytest.warns(UserWarning, match="multi-pair csv save fans out"):
+        group_result_3g.words.save(str(target))
     out_dir = tmp_path / "words"
     assert out_dir.exists()
     files = sorted(p.name for p in out_dir.glob("*.csv"))

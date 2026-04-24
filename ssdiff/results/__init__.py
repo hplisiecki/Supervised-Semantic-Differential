@@ -23,6 +23,10 @@ from ssdiff.results.core import Result
 from ssdiff.results.display import set_repr_hints
 from ssdiff.results.group_result import GroupResult, PairResult
 from ssdiff.results.lexicon_result import LexiconResult
+from ssdiff.results.multi_pls_result import (
+    MultiPLSResult,
+    _PLSComponentResult as PLSComponentResult,
+)
 
 __all__ = [
     "ClusterWordsView",
@@ -32,7 +36,9 @@ __all__ = [
     "ContinuousResult",
     "GroupResult",
     "LexiconResult",
+    "MultiPLSResult",
     "PairResult",
+    "PLSComponentResult",
     "PCAOLSResult",
     "PLSResult",
     "Result",

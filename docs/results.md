@@ -14,6 +14,7 @@ For per-view column lists and how to change defaults, see [`results_tables.md`](
 - [`PLSResult`](#plsresult)
 - [`PCAOLSResult`](#pcaolsresult)
 - [`GroupResult`](#groupresult)
+- [`MultiPLSResult` *(in development)*](#multiplsresult-in-development)
 - [`LexiconResult`](#lexiconresult)
 - [Picking columns — `cols=`](#picking-columns--cols)
 - [Resizing tables](#resizing-tables)
@@ -36,6 +37,7 @@ For per-view column lists and how to change defaults, see [`results_tables.md`](
 | `SSD.fit_pls()` | `PLSResult` |
 | `SSD.fit_ols()` | `PCAOLSResult` |
 | `SSD.fit_groups()` | `GroupResult` |
+| `SSD.fit_multipls()` *(in development)* | `MultiPLSResult` |
 | `Corpus.suggest_lexicon()` / `.evaluate_lexicon()` | `LexiconResult` |
 
 ```python
@@ -187,6 +189,58 @@ gr.cluster_snippets(
 ```
 
 `pair=` is optional for 2-group fits.
+
+---
+
+## `MultiPLSResult` *(in development)*
+
+Returned by `fit_multipls()`. A container of per-component leaves plus a `"combined"` leaf for the unrotated prediction direction. Mirrors the `GroupResult` / `PairResult` pattern.
+
+> **Status**: API is stable for research use. Per-leaf feature parity with `PLSResult` (clusters, snippets, misdiagnosed docs, per-dim diagnostics) is still being rolled out. Runnable example: [`../examples/demo_multipls.py`](../examples/demo_multipls.py).
+
+**Scalars:** `.n_components`, `.random_state`.
+
+**Scalar views:** `.stats`, `.pls_info`, `.test` (shared, whole-model).
+
+**Arrays:** `.W`, `.P`, `.Q` (unrotated PLS), `.W_rot`, `.T_rot` (rotated), `.beta_combined` (unrotated prediction β), `.x`, `.y`.
+
+### Leaves
+
+Each leaf is a `_PLSComponentResult` (a `_SingleResult`), so its interpretation views mirror `PLSResult`:
+
+```python
+res = ssd.fit_multipls(n_components=2, rotate="varimax")
+
+res["dim-1"].words          # top neighbors along the first rotated axis
+res["dim-1"].beta           # W_rot[:, 0]  (the axis direction)
+res["dim-2"].words.pos(20)
+res["combined"].words       # neighbors along the unrotated prediction β
+res["combined"].beta        # β = W(P'W)⁻¹Q  — rotation-invariant
+```
+
+Leaf keys are `"dim-1"`, …, `"dim-k"`, `"combined"` (strings). `res.words` / `res.clusters` / `res.snippets` fan out across leaves via `_ShimView`, same as `GroupResult`.
+
+### Shared test
+
+`res.test(...)` runs one whole-model test — CV-R² is a model-level quantity, rotation is free for prediction. Same three backends as `PLSResult`:
+
+```python
+res.test("split",     n_splits=100)
+res.test("perm",      n_perm=2000)
+res.test("split_cal", n_splits=50, n_perm=2000)
+```
+
+### Rotation diagnostics
+
+`res.pls_info` exposes: `n_components`, `rotate`, `pca_k`, `order`, `signs`, `kaiser_normalized`, `sweeps`, `V_converged`, `kappa`, `pvalue_source`, `random_state`.
+
+### Minimal report (v1)
+
+```python
+res.report(top_words=5).save("multipls.md")
+```
+
+Clusters / snippets / misdiagnosed sections are reserved for a later milestone — passing them here is a no-op.
 
 ---
 
@@ -425,6 +479,9 @@ Missing deps raise `ImportError` with an install hint.
 | Zoom to one pair | `gr[('g1','g2')]` |
 | Per-pair top words | `gr[('g1','g2')].words.pos(20)` |
 | Per-pair raw stats | `gr.pairs[('g1','g2')]` |
+| Zoom to one rotated dim | `res['dim-1']` |
+| Per-dim top words | `res['dim-1'].words.pos(20)` |
+| Combined (unrotated) β words | `res['combined'].words` |
 | Drop cache | `result.clear_cache()` |
 | Re-wire after unpickle | `result.attach(corpus=c, embeddings=e)` |
 | Silence repr footers | `ssdiff.set_repr_hints(False)` |
@@ -436,4 +493,5 @@ Missing deps raise `ImportError` with an install hint.
 - [`api_reference.md`](api_reference.md) — `Embeddings`, `Corpus`, `SSD`, fit methods
 - [`results_tables.md`](results_tables.md) — every view's columns and defaults
 - [`architecture.md`](architecture.md) — backends, cache internals, how views compose
-- [`demo_new_api.py`](demo_new_api.py) — runnable end-to-end demo
+- [`../examples/demo_api.py`](../examples/demo_api.py) — runnable end-to-end demo
+- [`../examples/demo_multipls.py`](../examples/demo_multipls.py) — rotated multi-component PLS (in development)

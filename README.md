@@ -50,10 +50,13 @@ https://doi.org/10.31234/osf.io/gvrsb_v1
 pip install ssdiff
 ```
 
-Dependencies (installed automatically): `numpy`, `spacy`, `matplotlib`.
+**Python**: 3.10 – 3.14.
 
-Optional:
-- `gensim` — needed only for saving embeddings in `.kv` format: `pip install ssdiff[gensim]`
+Core dependencies (installed automatically): `numpy`, `spacy`.
+
+Optional extras:
+- `ssdiff[results]` — pandas / openpyxl / python-docx / matplotlib for `to_df()`, `.xlsx`/`.docx` export, and `plot_sweep()`.
+- `ssdiff[gensim]` — only needed to *save* embeddings in `.kv` format.
 
 > Loading `.kv` files works without gensim (handled by an internal unpickler shim).
 
@@ -292,6 +295,8 @@ result = ssd.fit_ols(
 ### PLS
 
 New proposed algorithm. PLS regression operates directly in the full embedding space, finding latent directions that maximize covariance between document vectors and the outcome without a separate dimensionality-reduction step. With the default single component it recovers one semantic gradient in a single pass, sidestepping the researcher degree of freedom in choosing PCA dimensionality. When more than one component is needed, automatic selection via cross-validation is available. Several significance testing methods are provided, including a split-half replication test and a permutation-calibrated variant with exact false-positive-rate control.
+
+> **Multi-component variant — `fit_multipls()` (in development).** Fits `k` PLS components, rotates the W-subspace (`varimax` / `promax` / `raw`), and returns a container of per-dim leaves (`"dim-1"`, …, `"dim-k"`, `"combined"`). Useful when you expect more than one interpretable semantic axis related to the outcome. API is stable for research use but feature parity with `PLSResult` (per-leaf clusters, snippets, misdiagnosed docs, per-dim diagnostics) is still being rolled out. See [`examples/demo_multipls.py`](examples/demo_multipls.py) and [`docs/api_reference.md`](docs/api_reference.md#fit_multipls--rotated-multi-component-pls-in-development).
 
 ```python
 result = ssd.fit_pls(
@@ -565,6 +570,7 @@ from ssdiff import Embeddings, Corpus, SSD
 - `.fit_pls(n_components=1, p_method="auto", ...)` -> `PLSResult`
 - `.fit_ols(fixed_k=None, ...)` -> `PCAOLSResult`
 - `.fit_groups(median_split=False, n_perm=5000, correction="holm", ...)` -> `GroupResult`
+- `.fit_multipls(n_components, rotate="varimax", ...)` -> `MultiPLSResult` *(in development)*
 
 ### `PLSResult` / `PCAOLSResult`
 

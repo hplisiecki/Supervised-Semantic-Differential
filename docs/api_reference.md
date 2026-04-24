@@ -3,7 +3,7 @@
 Public API of the `ssdiff` package: main classes, their methods, and arguments.
 
 **Install**: `pip install ssdiff` (core), `pip install ssdiff[results]` (pandas/Excel/docx/matplotlib export).
-**Python**: 3.10+.
+**Python**: 3.10 – 3.14.
 **Imports**: `from ssdiff import Embeddings, Corpus, SSD`.
 
 For result objects (views, exports, reports) see [`results.md`](results.md).
@@ -24,6 +24,7 @@ ssd = SSD(emb, corpus, y=scores, lexicon=["happy", "sad", "joy", "anger"])
 result = ssd.fit_ols()         # PCA + OLS
 # result = ssd.fit_pls()       # PLS
 # result = ssd.fit_groups()    # categorical y
+# result = ssd.fit_multipls(n_components=2)  # rotated multi-component PLS (in development)
 
 print(result.stats)
 print(result.words)
@@ -250,6 +251,40 @@ result = ssd.fit_groups(*,
 Groups with < 20 documents are dropped with a warning. Fewer than 2 surviving groups raises `ValueError`. `fit_groups()` does not mutate `ssd.x` / `ssd.y`, so continuous fits remain callable on the same instance.
 
 Returns a `GroupResult`.
+
+### `fit_multipls()` — rotated multi-component PLS *(in development)*
+
+> **Status**: API is stable for research use. Per-leaf feature parity with `PLSResult` (clusters, snippets, misdiagnosed docs, per-dim diagnostics) is still being rolled out. See [multi-PLS roadmap](../../docs/multiPLSRoadmap.md).
+
+Fits `n_components` PLS dimensions, rotates the W-subspace for interpretability, and returns a container of per-dim leaves plus a `"combined"` leaf for the (rotation-invariant) prediction direction. Numeric outcomes only; requires attached `Embeddings` (rotation is applied against the full vocabulary).
+
+```python
+result = ssd.fit_multipls(*,
+    n_components,                    # required — no default
+    rotate="varimax",                # "varimax" | "promax" | "raw"
+    kappa=4,                         # promax exaggeration exponent
+    pca_preprocess=None,
+    p_method="auto",
+    n_perm=1000, n_splits=50, split_ratio=0.5,
+    random_state=2137, verbose=False,
+)
+```
+
+| Argument | Type | Default | Description |
+|---|---|---|---|
+| `n_components` | `int` | — | Number of PLS components to rotate. Required. Raises if NIPALS deflation produces fewer (no silent truncation). |
+| `rotate` | `str` | `"varimax"` | `"varimax"` (orthogonal), `"promax"` (oblique, correlated factors), `"raw"` (no rotation — still reorders dims by `|corr(t_i, y)|` and sign-flips). |
+| `kappa` | `int \| float` | `4` | Promax exaggeration exponent. Ignored for other rotations. |
+| `pca_preprocess`, `p_method`, `n_perm`, `n_splits`, `split_ratio`, `random_state`, `verbose` | — | — | Same meaning and defaults as `fit_pls`. |
+
+Returns a `MultiPLSResult` with:
+
+- `result["dim-1"]`, `result["dim-2"]`, …, `result["dim-k"]` — per-rotated-axis leaves (each a `_PLSComponentResult` with its own `.words`)
+- `result["combined"]` — the unrotated PLS prediction direction β = W(P′W)⁻¹Q (rotation-invariant)
+- `result.stats`, `result.pls_info`, `result.test` — shared model-level views
+- `result.report(top_words=5)` — minimal v1 report (stats + rotation + per-leaf words tables)
+
+Runnable example: [`examples/demo_multipls.py`](../examples/demo_multipls.py).
 
 ---
 
