@@ -10,16 +10,22 @@ For the results surface see [`results.md`](results.md).
 ## Top-level pieces
 
 ```
-SSD                          — driver; prepares PCVs, dispatches to backends
-  ├── .fit_pls()    → PLSResult       (ContinuousResult → Result)
-  ├── .fit_ols()    → PCAOLSResult    (ContinuousResult → Result)
-  └── .fit_groups() → GroupResult     (Result)
+SSD                           — driver; prepares PCVs, dispatches to backends
+  ├── .fit_pls()      → PLSResult        (ContinuousResult → _SingleResult → Result)
+  ├── .fit_ols()      → PCAOLSResult     (ContinuousResult → _SingleResult → Result)
+  ├── .fit_groups()   → GroupResult      (_MultiContainer → Result)
+  │                         └── dict[(g1, g2), PairResult]       (_SingleResult leaves)
+  └── .fit_multipls() → MultiPLSResult   (_MultiContainer → Result)   ← in development
+                            └── dict[str, _PLSComponentResult]  (_SingleResult leaves,
+                                                                 keys "dim-1" … "dim-k" + "combined")
 
-Embeddings                   — word-vector store + normalization, no gensim dep
-Corpus                       — spaCy tokenize/lemmatize + lexicon helpers
+Embeddings                    — word-vector store + normalization, no gensim dep
+Corpus                        — spaCy tokenize/lemmatize + lexicon helpers
 ```
 
 Composition, not inheritance — `SSD.__init__` only builds per-document vectors (PCVs). Each `fit_*` is a separate, explicit step and returns its own immutable result object, so multiple backends can be run on the same `SSD` instance without rebuilding doc vectors.
+
+Result classes compose the same way: one **leaf** base (`_SingleResult`, "one gradient direction + its derived views") and one **container** base (`_MultiContainer`, "dict of leaves + shared test"). `PairResult` is a leaf plugged into `GroupResult`; the same `_SingleResult` code path renders `.words` / `.clusters` / `.snippets` whether it lives standalone as a `ContinuousResult` or nested as a `PairResult`. See [§ Leaf + container bases](#leaf--container-bases).
 
 ---
 
@@ -37,13 +43,17 @@ ssdiff/
 │   ├── pls.py         — PLS1 NIPALS, CV selection, perm / split / split_cal tests
 │   ├── pca_sweep.py   — PCA + OLS; joint interpretability/stability sweep
 │   ├── _sweep_math.py — sweep scoring primitives
-│   └── group.py       — unified permutation test (omnibus + pairwise)
+│   ├── group.py       — unified permutation test (omnibus + pairwise)
+│   └── multipls.py    — varimax / promax rotation of the PLS W-subspace (in development)
 ├── results/
 │   ├── __init__.py       — public result exports
 │   ├── core.py           — Result ABC, View / ScalarView / TestView, save()/to_* helpers, parameter-keyed cache
+│   ├── single_result.py      — _SingleResult: key-agnostic leaf base — one (β, gradient) + lazy .words/.clusters/.snippets
+│   ├── multi_container.py    — _MultiContainer: dict-of-leaves base + _ShimView aggregate wrappers
 │   ├── schema.py         — frozen dataclasses: Word, Cluster, ClusterWord, Snippet, Doc, Pair, Suggestion, Stats, FitInfo, Summary
-│   ├── continuous_result.py  — ContinuousResult, PLSResult, PCAOLSResult, and their views
-│   ├── group_result.py       — GroupResult, PairsListView, GroupStatsView, GroupTestView, per-pair helpers
+│   ├── continuous_result.py  — ContinuousResult (_SingleResult subclass), PLSResult, PCAOLSResult, and their views
+│   ├── group_result.py       — GroupResult (_MultiContainer), PairResult (_SingleResult leaf), PairsListView, GroupStatsView, GroupTestView
+│   ├── multi_pls_result.py   — MultiPLSResult (_MultiContainer), _PLSComponentResult (leaf), MultiPLSStatsView, PLSInfoView, MultiPLSTestView (in development)
 │   ├── paired_view.py        — ``_paired_save`` helper: unified multi-key save dispatch used by ``_ShimView``
 │   ├── lexicon_result.py     — LexiconResult + lexicon views
 │   ├── report.py             — Report / Section builders + text/md/html/tex/docx/json renderers
@@ -138,6 +148,31 @@ ssd.x (n × D), ssd.y (n)
          PCAOLSResult
 ```
 
+### `fit_multipls()` *(in development)*
+
+```
+ssd.x (n × D), ssd.y (n), ssd.embeddings
+        │
+        ├─ standardize X and y (caller-side — mpls_fit expects standardised input)
+        ├─ project vocabulary into the same column space → E_target
+        ├─ optional PCA preprocess → Z, E_target reduced to PCA space
+        ├─ backends.multipls.mpls_fit(Xs, ys, n_components, rotate, E_target, kappa):
+        │    NIPALS PLS1 → W, P, Q  (raise if returned k < n_components)
+        │    β_combined = W(P'W)⁻¹Q                    ← unrotated, rotation-invariant
+        │    L = E_target @ W                          ← full-vocab projection (rotation target)
+        │    rotate("varimax" | "promax" | "raw") → W_pre
+        │    recompute dim scores: T_pre[:, i] = Xs @ W_pre[:, i]
+        │    reorder dims by |corr(T_pre_i, ys)| desc; sign-flip so corr > 0
+        │    → W_rot, T_rot, rotation_meta (R, order, signs, sweeps, phi, pattern, …)
+        ├─ shared model-level p-value: perm / split / split_cal (same backends as fit_pls)
+        └─ wrap into MultiPLSResult with leaves:
+             "dim-1", …, "dim-k"  → β_i = W_rot[:, i]   (pattern column for promax)
+             "combined"           → β   = β_combined    (unrotated prediction direction)
+                │
+                ▼
+          MultiPLSResult
+```
+
 ### `fit_groups()`
 
 ```
@@ -183,6 +218,65 @@ class Result:
 ```
 
 `_access` entries with `(...)` render as methods; bare names render as views. Prefixing every entry with `.` turns the repr into a copy-paste prompt (`result.clusters`, `result.test(...)`).
+
+### Leaf + container bases
+
+Every result is either a **leaf** (one direction in embedding space + its interpretation views) or a **container** (a keyed dict of leaves + one shared test). Two small base classes express this split, and all concrete result classes are built from them.
+
+```
+Result                                          (core.py)
+ ├─ _SingleResult                               (single_result.py)   — leaf base
+ │   ├─ ContinuousResult                        (continuous_result.py)
+ │   │   ├─ PLSResult
+ │   │   └─ PCAOLSResult
+ │   ├─ PairResult                              (group_result.py — leaf inside GroupResult)
+ │   └─ _PLSComponentResult                     (multi_pls_result.py — leaf inside MultiPLSResult)
+ │
+ └─ _MultiContainer                             (multi_container.py) — container base
+     ├─ GroupResult                             (group_result.py)
+     │   └─ self._leaves : dict[(g1, g2), PairResult]
+     └─ MultiPLSResult                          (multi_pls_result.py) — in development
+         └─ self._leaves : dict[str, _PLSComponentResult]
+                           # keys "dim-1", …, "dim-k", "combined"
+```
+
+#### `_SingleResult` — the leaf (in `single_result.py`)
+
+Holds **everything derivable from one gradient direction**: `beta`, `gradient = unit(beta)`, `beta_norm`, `x`, `alignment_scores = x · gradient`, plus four lazy views:
+
+| attribute | computes |
+|---|---|
+| `.words` | nearest neighbors to `±gradient`, filtered by part-of-speech / lexicon |
+| `.clusters` | KMeans over top neighbors, per side (`.pos` / `.neg`) |
+| `.snippets` | SIF-scored context windows along `±gradient` |
+| `.cluster_snippets(side=...)` | snippets grouped by cluster centroid |
+
+**Key-agnostic by design.** `_SingleResult` knows nothing about whether it lives standalone (`ContinuousResult`) or nested inside a container (`PairResult`). It never references a key, a group label, a component index, or a pair. Subclasses plug in their own state — `ContinuousResult` adds `y`, `fit_info`, `.docs`, `.test`; `PairResult` adds `g1 / g2 / contrast` and computes `beta = mean(x[g1]) − mean(x[g2])` from a container-held `x` slice.
+
+All four views are parameter-keyed in `Result._cache` (e.g. `result.clusters.pos(topn=50)` gets its own cache entry distinct from the default `topn=100`). The base reports "embeddings required for .words" / "corpus required for .snippets" via `_require_resource()` with a fix hint if `.attach(embeddings=..., corpus=...)` hasn't been called.
+
+#### `_MultiContainer` — the container (in `multi_container.py`)
+
+Wraps `self._leaves : dict[Hashable, _SingleResult]` and exposes **aggregate shim views** that fan out across leaves:
+
+| property | yields |
+|---|---|
+| `container[key]` | the leaf (`_SingleResult`) |
+| `container.beta` / `.gradient` / `.beta_norm` / `.alignment_scores` | plain `dict[key, …]` |
+| `container.words` / `.clusters` / `.snippets` | `_ShimView` (dict of per-leaf views) |
+
+`_ShimView` is not a tabular view — it's a dict wrapper that supports `shim[key] → leaf view`, a preview repr ("10 pair(s), top 5 per side: …"), and a fan-out `save('words.csv')` that writes one file per key via the shared `_paired_save` helper in `paired_view.py`. Iteration over flat rows is intentionally not supported — each key's leaf view is self-contained, and mixing them would need a `contrast` column that subclasses annotate independently.
+
+**Two small hooks** let subclasses customize key rendering without touching the base:
+
+- `_key_to_str(key) -> str` — filename / sheet / JSON-key form (e.g. `"g1_g2"` for a pair tuple)
+- `_key_repr(key) -> str` — human-readable heading (e.g. `"g1 vs g2"`)
+
+The subclass is responsible for: (1) populating `self._leaves`, (2) attaching the **shared** `.stats` and `.test` views (the container owns the one omnibus test; individual leaves don't get independent `.test`), and (3) providing any key validation (`GroupResult.__getitem__` rejects reversed pair tuples with a canonical-order hint).
+
+#### Why this split
+
+Having one leaf code path makes nested views behave identically to standalone ones. `PairResult.words` and `ContinuousResult.words` run the same `_compute_words_rows()`, cache with the same key scheme, and render with the same column defaults. Adding a new multi-result class (e.g. multi-component PLS with a shared permutation test) means writing one tiny leaf subclass + one tiny container subclass — no changes to the base classes, the cache, the save fan-out, or the renderers.
 
 ### `View[T]`, `ScalarView`, `TestView` (in `core.py`)
 
@@ -270,111 +364,18 @@ A `Report` is a multi-section builder (title + optional subtitle + list of `Sect
 ## Pipeline flow diagram
 
 ```mermaid
-flowchart TD
-    subgraph INPUT["1. Input"]
-        direction LR
-        texts["Texts (list[str])"]
-        y["Outcome y"]
-        emb["Embeddings (.ssdembed/.kv/.bin/.txt)"]
-        lex["Lexicon (seed words)"]
-    end
+flowchart LR
+    inputs["Texts + y + Embeddings + Lexicon"] --> pcv["SSD.__init__<br/>Corpus → SIF-weighted PCVs → X (n × D)"]
+    pcv --> fit{"SSD.fit_*"}
+    fit --> backend["Backend<br/>PLS / PCA+OLS / Groups / MultiPLS"]
+    backend --> beta["β (or per-leaf β)<br/>+ p-value"]
+    beta --> interp["Result views<br/>.words / .clusters / .snippets / .docs"]
 
-    subgraph PREPROCESS["2. Preprocessing"]
-        direction LR
-        load_emb["Embeddings.load()\nL2 + optional ABTT"]
-        corpus["Corpus(texts, lang)\nspaCy → lemma → stopwords"]
-        filter["filter NaN/Inf\nalign docs ↔ y"]
-    end
-
-    texts --> corpus
-    emb --> load_emb
-    y --> filter
-    lex --> filter
-
-    subgraph DOCVEC["3. PCV construction"]
-        sif["global SIF weights"]
-        sif --> mode{"use_full_doc?"}
-        mode -- "False" --> seed_mode["SEED: per-seed context window\nSIF-weighted mean of neighbors"]
-        mode -- "True" --> full_mode["FULL: SIF-weighted mean of all tokens"]
-        seed_mode --> l2["L2-normalize → X (n × D)"]
-        full_mode --> l2
-    end
-
-    load_emb --> sif
-    corpus --> sif
-    filter --> sif
-
-    subgraph STD["4. Standardize + dispatch"]
-        std_xy["z-score X (columns) and y"]
-        std_xy --> split{{"backend"}}
-    end
-
-    l2 --> std_xy
-
-    subgraph PLS["5A. PLS backend"]
-        pca_pre{"PCA preprocess?"}
-        pca_pre -- "yes" --> pca_reduce["PCA reduce"]
-        pca_pre -- "no" --> cv_select
-        pca_reduce --> cv_select["auto-select n_components\n(K-fold CV, argmax R²)"]
-        cv_select --> nipals["NIPALS PLS1"]
-        nipals --> pls_coef["β = W(P'W)⁻¹Q\nback-project + unscale"]
-        pls_coef --> pls_orient["orient β  (corr(ŷ,y) > 0)"]
-        pls_orient --> pls_test["perm / split / split_cal p-value"]
-        pls_test --> pls_done["PLSResult"]
-    end
-
-    subgraph PCAOLS["5B. PCA+OLS backend"]
-        sweep{"fixed_k?"}
-        sweep -- "no" --> pca_sweep["PCA sweep K=k_min..k_max\ncluster both poles per K"]
-        pca_sweep --> score_k["joint AUC(interp, stab) → best_k"]
-        score_k --> final_pca
-        sweep -- "yes" --> final_pca["PCA(K) + OLS"]
-        final_pca --> backproj["β = V'w / X_scale"]
-        backproj --> ols_orient["orient β"]
-        ols_orient --> ols_test["F-test p-value"]
-        ols_test --> ols_done["PCAOLSResult"]
-    end
-
-    subgraph GROUP["5C. Group backend"]
-        med{"median_split?"}
-        med -- "yes" --> bins["low / high bins"]
-        med -- "no" --> labels["use raw labels"]
-        bins --> small
-        labels --> small["drop groups with n<20"]
-        small --> perm["unified permutation test\nomnibus + pairwise\ncorrect p-values"]
-        perm --> gr_done["GroupResult"]
-    end
-
-    split -- ".fit_pls()"    --> pca_pre
-    split -- ".fit_ols()"    --> sweep
-    split -- ".fit_groups()" --> med
-
-    subgraph RESULT["6. Interpretation (shared)"]
-        beta["β / gradient (D,)"]
-        beta --> topw["result.words\nnearest neighbors to ±β"]
-        beta --> cluster["result.clusters.pos/neg\nKMeans over neighbors"]
-        beta --> effects["result.docs\nalignment + prediction"]
-        beta --> snip["result.snippets\ncontext windows along β"]
-    end
-
-    pls_done --> beta
-    ols_done --> beta
-    gr_done  --> beta
-
-    classDef input fill:#e8f4f8,stroke:#2196F3,stroke-width:2px
-    classDef shared fill:#f3e5f5,stroke:#9C27B0,stroke-width:2px
-    classDef pls fill:#e8f5e9,stroke:#4CAF50,stroke-width:2px
-    classDef pcaols fill:#fff3e0,stroke:#FF9800,stroke-width:2px
-    classDef group fill:#fde7e7,stroke:#D32F2F,stroke-width:2px
-    classDef result fill:#fce4ec,stroke:#E91E63,stroke-width:2px
-
-    class INPUT input
-    class PREPROCESS,DOCVEC,STD shared
-    class PLS pls
-    class PCAOLS pcaols
-    class GROUP group
-    class RESULT result
+    classDef step fill:#f7f7f7,stroke:#555,stroke-width:1px,color:#111
+    class inputs,pcv,backend,beta,interp step
 ```
+
+The backend box covers all four fit methods — each has its own file in `backends/` and its own result class, but they share the same upstream (PCV construction) and downstream (result-view) machinery. See the per-backend subsections above for the internal step sequences.
 
 ---
 
@@ -394,6 +395,8 @@ Analytic F-test from OLS in PCA space. Tests the null that all PCA-space regress
 | `"auto"` | `"split"` for `n_components=1`, `"perm"` otherwise | — | — |
 
 All three are exposed as `result.test(name, **params)` for reruns; `result.stats.pvalue` is propagated by the `_on_rerun` hook.
+
+`fit_multipls()` (in development) reuses the same three options at the container level — CV-R² is a whole-model quantity, and rotation is free for prediction, so there is no per-dim hypothesis to test.
 
 ### `fit_groups()` — permutation omnibus + pairwise
 

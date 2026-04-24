@@ -12,8 +12,9 @@ This folder holds four tiers of documentation plus a runnable demo. Start wherev
 
 | Read this | When you want to… |
 |---|---|
-| [`api_reference.md`](api_reference.md) | Fit a model. It covers `Embeddings`, `Corpus`, `SSD`, and the three fit methods (`fit_ols`, `fit_pls`, `fit_groups`) with argument tables and a full workflow example. Results are only sketched here. |
-| [`demo_new_api.py`](demo_new_api.py) | See the whole pipeline in ~50 lines — load embeddings, build a corpus, fit PLS / PCA+OLS / groups, print stats, export a report. |
+| [`api_reference.md`](api_reference.md) | Fit a model. Covers `Embeddings`, `Corpus`, `SSD`, and the fit methods (`fit_ols`, `fit_pls`, `fit_groups`, plus the in-development `fit_multipls`) with argument tables and a full workflow example. Results are only sketched here. |
+| [`../examples/demo_api.py`](../examples/demo_api.py) | See the whole pipeline in ~50 lines — load embeddings, build a corpus, fit PLS / PCA+OLS / groups, print stats, export a report. |
+| [`../examples/demo_multipls.py`](../examples/demo_multipls.py) | Minimal runnable example for the in-development `fit_multipls` (rotated multi-component PLS). |
 
 ### For power users — making results do what you want
 
@@ -49,13 +50,14 @@ ssd    = SSD(emb, corpus, y=scores, lexicon=["happy", "sad", "joy"])
 result = ssd.fit_ols()          # PCA + OLS, F-test p-value
 # result = ssd.fit_pls()        # PLS with split-half test
 # result = ssd.fit_groups()     # categorical outcome, permutation test
+# result = ssd.fit_multipls(n_components=2)  # rotated multi-component PLS — in development
 
 print(result.stats)             # headline r², p, n_kept, iqr_effect
 print(result.words.pos)         # top 20 β-pos neighbors
 result.report().save("report.md")
 ```
 
-See [`demo_new_api.py`](demo_new_api.py) for a runnable script with a real dataset.
+See [`../examples/demo_api.py`](../examples/demo_api.py) for a runnable end-to-end script, and [`../examples/demo_multipls.py`](../examples/demo_multipls.py) for the rotated multi-component variant.
 
 ---
 

@@ -290,6 +290,7 @@ def pls1_permutation_test(
     rng = np.random.default_rng(seed)
 
     n = X.shape[0]
+    n_folds = max(min(n_folds, n), 2)
     indices = np.arange(n)
     rng.shuffle(indices)
     fold_indices = list(np.array_split(indices, n_folds))

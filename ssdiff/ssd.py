@@ -47,7 +47,7 @@ class SSD:
         embeddings: Embeddings,
         corpus: Corpus,
         y,
-        lexicon: Sequence[str] | set[str],
+        lexicon: Sequence[str] | set[str] | None = None,
         *,
         window: int = 3,
         sif_a: float = 1e-3,
@@ -66,8 +66,9 @@ class SSD:
         y : array-like of float
             Outcome variable. Entries with NaN are silently dropped together
             with the corresponding documents.
-        lexicon : sequence or set of str
-            Seed words used for context-window extraction.
+        lexicon : sequence or set of str, optional
+            Seed words used for context-window extraction. Required in the
+            default seed-context mode; ignored when ``use_full_doc=True``.
         window : int, default 3
             Context window size (tokens) around each seed word.
         sif_a : float, default 1e-3
@@ -79,7 +80,8 @@ class SSD:
         Raises
         ------
         ValueError
-            If ``len(y) != len(corpus)``.
+            If ``len(y) != len(corpus)``, or if ``lexicon`` is empty and
+            ``use_full_doc=False``.
         """
         if window < 1:
             raise ValueError(f"window must be >= 1, got {window}")
@@ -88,7 +90,12 @@ class SSD:
 
         self.embeddings = embeddings
         self.corpus = corpus
-        self.lexicon = set(lexicon)
+        self.lexicon = set(lexicon) if lexicon is not None else set()
+        if not use_full_doc and not self.lexicon:
+            raise ValueError(
+                "lexicon is required when use_full_doc=False "
+                "(seed-context mode needs seed words)."
+            )
         self.window = window
         self.sif_a = sif_a
         self.lang = getattr(corpus, "lang", None)
@@ -447,6 +454,203 @@ class SSD:
             **kwargs,
         )
 
+    # ── Multi-dimensional PLS backend ──────────────────────────
+
+    def fit_multipls(
+        self,
+        *,
+        n_components: int,
+        rotate: Literal["raw", "varimax", "promax"] = "varimax",
+        kappa: int | float = 4,
+        pca_preprocess: int | str | None = None,
+        p_method: Literal["auto", "split", "perm", "split_cal"] | None = "auto",
+        n_perm: int = 1000,
+        n_splits: int = 50,
+        split_ratio: float = 0.5,
+        random_state: int = 2137,
+        verbose: bool = False,
+    ):
+        """Fit PLS1, rotate the W-subspace, return a :class:`MultiPLSResult`.
+
+        Mirrors :meth:`fit_pls` but returns a container of per-dim leaves
+        keyed ``"dim-1"``, ``"dim-2"``, …, ``"combined"`` — one leaf per
+        rotated axis plus one for the (rotation-invariant) unrotated
+        prediction β.
+
+        Parameters
+        ----------
+        n_components : int
+            Number of PLS components to extract. Required — no default.
+            Raises if NIPALS deflation produces fewer (no silent truncation).
+        rotate : {"raw", "varimax", "promax"}, default "varimax"
+            Rotation applied to the W-subspace. ``"raw"`` still reorders
+            dims by ``|corr(t_i, y)|`` and sign-flips; the subspace is
+            preserved.
+        kappa : int or float, default 4
+            Promax exaggeration exponent. Ignored for other rotations.
+        pca_preprocess, p_method, n_perm, n_splits, split_ratio,
+        random_state, verbose
+            Same meaning and defaults as :meth:`fit_pls`.
+
+        Returns
+        -------
+        MultiPLSResult
+        """
+        from ssdiff.backends.multipls import mpls_fit
+        from ssdiff.results.multi_pls_result import MultiPLSResult
+
+        if not self.is_numeric:
+            raise ValueError(
+                "fit_multipls() requires numeric y. This SSD was constructed "
+                "with categorical labels — use fit_groups() instead."
+            )
+        if self.embeddings is None:
+            raise RuntimeError(
+                "fit_multipls() rotates against the full vocabulary, which "
+                "requires Embeddings; none attached. Call result.attach("
+                "embeddings=...) or re-construct SSD with embeddings."
+            )
+
+        # Standardise X and y here (mpls_fit expects pre-standardised inputs).
+        Xs, X_mean, X_scale = standardize(self.x)
+        ys_2d, _, _ = standardize(self.y.reshape(-1, 1))
+        ys = ys_2d.ravel()
+
+        # Build E_target in whatever column space Xs ends up in.
+        # Stay in float32 — one (V, D) allocation, in-place centre/scale.
+        # float32 is sufficient: E_target is consumed once as L = E_target @ W
+        # to produce a tiny (V, k) matrix that is upcast to float64 inside
+        # mpls_fit for the downstream rotation math.
+        scale = np.where(X_scale > 1e-12, X_scale, 1.0)
+        vectors_dtype = self.embeddings.vectors.dtype
+        X_mean_v = X_mean.astype(vectors_dtype, copy=False)
+        scale_v = scale.astype(vectors_dtype, copy=False)
+        E_std = self.embeddings.vectors.copy()
+        E_std -= X_mean_v
+        E_std /= scale_v
+
+        pca_k: int | None
+        if pca_preprocess is not None:
+            n, D = Xs.shape
+            if isinstance(pca_preprocess, str) and pca_preprocess.startswith("var"):
+                try:
+                    target = float(pca_preprocess[3:]) / 100.0
+                except ValueError:
+                    raise ValueError(
+                        f"pca_preprocess={pca_preprocess!r} must be 'varNN' "
+                        f"where NN is a number (e.g. 'var95')"
+                    ) from None
+                max_k = min(n - 1, D)
+                _, _, evr_full = pca_fit_transform(Xs, max_k)
+                cum_var = np.cumsum(evr_full)
+                pca_k = min(int(np.searchsorted(cum_var, target) + 1), max_k)
+            else:
+                pca_k = int(pca_preprocess)
+            pca_k = min(pca_k, n - 1, D)
+            Z_pca, pca_components, _ = pca_fit_transform(Xs, pca_k)
+            X_for_mpls = Z_pca
+            # Project E into the same PCA space; drop the full-vocab block.
+            E_target = E_std @ pca_components.T.astype(E_std.dtype, copy=False)
+            del E_std
+        else:
+            X_for_mpls = Xs
+            pca_k = None
+            E_target = E_std
+
+        mp_out = mpls_fit(
+            X_for_mpls, ys,
+            n_components=n_components, rotate=rotate,
+            E_target=E_target, kappa=kappa,
+        )
+        del E_target  # free the (V, D) / (V, pca_k) block before perm/split tests
+
+        # Standardised-space R² (matches fit_pls.r2 semantics).
+        y_pred = X_for_mpls @ mp_out["beta_combined"]
+        stats = self._compute_fit_stats(ys, y_pred, n_components)
+        r2 = stats["r2"]
+
+        # Resolve p-method and run, mirroring fit_pls.
+        resolved = p_method
+        if resolved == "auto":
+            resolved = "split" if n_components == 1 else "perm"
+
+        split_mean_r = None
+        if resolved == "perm":
+            from ssdiff.backends.pls import pls1_permutation_test
+            p_val, _, _ = pls1_permutation_test(
+                self.x, self.y, n_components,
+                n_perm=n_perm, seed=random_state, verbose=verbose,
+                pca_k=pca_k,
+            )
+            pvalue = p_val
+            test_name = "perm"
+            test_info = {
+                "pvalue": float(pvalue),
+                "n_perm": n_perm,
+                "random_state": random_state,
+            }
+        elif resolved == "split":
+            from ssdiff.backends.pls import pls1_split_test
+            pvalue, split_mean_r = pls1_split_test(
+                self.x, self.y, n_components,
+                n_splits=n_splits, split_ratio=split_ratio,
+                seed=random_state, pca_k=pca_k, verbose=verbose,
+            )
+            test_name = "split"
+            test_info = {
+                "pvalue": float(pvalue),
+                "split_r2": float(split_mean_r),
+                "n_splits": n_splits,
+                "split_ratio": split_ratio,
+                "random_state": random_state,
+            }
+        elif resolved == "split_cal":
+            from ssdiff.backends.pls import pls1_split_test_calibrated
+            pvalue, split_mean_r = pls1_split_test_calibrated(
+                self.x, self.y, n_components,
+                n_splits=n_splits, split_ratio=split_ratio,
+                n_perm=n_perm, seed=random_state, pca_k=pca_k,
+                verbose=verbose,
+            )
+            test_name = "split_cal"
+            test_info = {
+                "pvalue": float(pvalue),
+                "split_r2": float(split_mean_r),
+                "n_splits": n_splits,
+                "split_ratio": split_ratio,
+                "n_perm": n_perm,
+                "random_state": random_state,
+            }
+        elif resolved is None:
+            pvalue = float("nan")
+            test_name = None
+            test_info = {"pvalue": pvalue}
+        else:
+            raise ValueError(
+                f"Unknown p_method {p_method!r}. "
+                "Choose 'perm', 'split', 'split_cal', or None."
+            )
+
+        return MultiPLSResult(
+            x=self.x, y=self.y,
+            W=mp_out["W"], P=mp_out["P"], Q=mp_out["Q"],
+            W_rot=mp_out["W_rot"], T_rot=mp_out["T_rot"],
+            beta_combined=mp_out["beta_combined"],
+            n_components=n_components,
+            pca_k=pca_k,
+            rotation_meta=mp_out["rotation_meta"],
+            r2=r2,
+            test_name=test_name,
+            test_info=test_info,
+            embeddings=self.embeddings,
+            corpus=self.corpus,
+            lexicon=self.lexicon,
+            window=self.window,
+            sif_a=self.sif_a,
+            lang=self.lang,
+            random_state=random_state,
+        )
+
     # ── PCA + OLS backend ─────────────────────────────────────
 
     def fit_ols(
@@ -679,7 +883,7 @@ class SSD:
             f"D={dim}  |L|={len(self.lexicon)}  lang={self.lang}"
         )
         arrays = "  arrays:  .x  .y"
-        methods = "  methods: .fit_pls()  .fit_ols()  .fit_groups()"
+        methods = "  methods: .fit_pls()  .fit_multipls()  .fit_ols()  .fit_groups()"
         return "\n".join([header, arrays, methods])
 
     def _repr_html_(self) -> str:

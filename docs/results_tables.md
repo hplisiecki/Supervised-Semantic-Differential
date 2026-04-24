@@ -254,6 +254,46 @@ Same columns and defaults as the continuous `SnippetsView` / `SnippetsViewSided`
 
 ---
 
+## `MultiPLSResult` *(in development)*
+
+Shared model-level views. Per-leaf views (`res['dim-1'].words` etc.) reuse the continuous `WordsView` / `SidedWordsView` classes and their defaults documented above.
+
+### `stats` — `MultiPLSStatsView` (ScalarView)
+
+| column | default | note |
+|---|:---:|---|
+| `r2` | ✓ | model-level R² from the unrotated combined β |
+| `pvalue` | ✓ | shared whole-model p (perm / split / split_cal) |
+| `n` | ✓ | documents in fit |
+| `n_components` | ✓ | number of rotated dims |
+| `rotate` | ✓ | `"varimax"` / `"promax"` / `"raw"` |
+
+### `pls_info` — `PLSInfoView` (ScalarView)
+
+| column | default | note |
+|---|:---:|---|
+| `n_components` | ✓ | |
+| `rotate` | ✓ | |
+| `pca_k` | ✓ | `None` unless `pca_preprocess` was set |
+| `order` |  | dim permutation applied post-rotation (identity once returned) |
+| `signs` |  | per-dim sign flips applied for `corr(t_i, y) > 0` |
+| `kaiser_normalized` |  | varimax Kaiser row-normalisation flag |
+| `sweeps` |  | varimax pairwise-sweep count |
+| `V_converged` |  | final varimax criterion value |
+| `kappa` |  | promax exponent (`None` for varimax / raw) |
+| `pvalue_source` | ✓ | which test produced `stats.pvalue` |
+| `random_state` | ✓ | reproducibility anchor |
+
+### `test` — `MultiPLSTestView` (ScalarView)
+
+Same columns and semantics as `PLSTestView` (see above) — it delegates to the same `pls1_permutation_test` / `pls1_split_test` / `pls1_split_test_calibrated` backends.
+
+### Per-leaf — `res['dim-i'].words`, `res['combined'].words`
+
+Same columns and defaults as the continuous `WordsView` (see [Continuous results](#continuous-results--plsresult--pcaolsresult)). Per-leaf `.clusters` / `.snippets` / `.docs` are reserved for a later milestone.
+
+---
+
 ## `LexiconResult`
 
 ### `stats` — `LexiconStatsView` (ScalarView)
