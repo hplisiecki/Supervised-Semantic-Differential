@@ -219,13 +219,11 @@ class SSD:
     def fit_pls(
         self,
         *,
-        n_components: int | str = 1,
-        cv_folds: int = 10,
-        pca_preprocess: int | str | None = None,
-        p_method: Literal["auto", "split", "perm", "split_cal"] | None = "auto",
+        k: int | Literal["auto"] = "auto",
+        k_max: int = 5,
+        test_method: Literal["raw_perm", "split_nb", "split_perm", "score", "e"] = "split_nb",
         n_perm: int = 1000,
         n_splits: int = 50,
-        split_ratio: float = 0.5,
         random_state: int = 2137,
         verbose: bool = False,
     ):
@@ -233,39 +231,50 @@ class SSD:
 
         Parameters
         ----------
-        n_components : int or "auto"
-            Number of PLS components. Default 1. "auto" = select via CV
-            (argmax mean CV R²).
-        cv_folds : int
-            Number of CV folds for component selection.
-        pca_preprocess : int or str or None
-            Optional PCA dim reduction before PLS (e.g., 50 or "var95").
-        p_method : str or None, default "auto"
-            Significance test method:
+        k : int or ``"auto"``, default ``"auto"``
+            Number of PLS components.
 
-            - ``"auto"`` — ``"split"`` when n_components=1,
-              ``"perm"`` otherwise.
-            - ``"perm"`` — permutation test on cross-validated R².
-            - ``"split"`` — split-half test with overlap-corrected
-              t-test (Lenartowicz, 2026).
-            - ``"split_cal"`` — permutation-calibrated split-half test.
-            - ``None`` — skip significance testing (p-value = NaN).
-        n_perm : int
-            Permutation iterations for ``"perm"`` and ``"split_cal"``.
-        n_splits : int
-            Number of random splits for ``"split"`` and ``"split_cal"``.
-        split_ratio : float
-            Train fraction for ``"split"`` and ``"split_cal"``.
-        random_state : int
+            - ``int`` — fit at exactly this k; p-value comes from
+              ``plskit.pls1_confirmatory_test`` at this k.
+            - ``"auto"`` — let ``plskit.pls1_find_k_optimal`` pick
+              ``k_star`` (selector ``"r2_se"``) and report the FWER
+              p-value at that k as the SSD p-value. This is the only
+              auto-selection mode SSD exposes; the alternatives in
+              plskit are not reliable enough to default to.
+        k_max : int, default 5
+            Cap for ``k="auto"``. Further clamped to ``min(k_max, n-1, D)``.
+            Ignored when ``k`` is an int.
+        test_method : str, default ``"split_nb"``
+            Significance test method. Used as ``method`` for the
+            confirmatory test (``k=int``) and as ``fwer_method`` for
+            ``find_k_optimal`` (``k="auto"``). ``"score"`` is only
+            valid for the confirmatory path.
+
+            - ``"raw_perm"`` — permutation test on CV R² (uses ``n_perm``).
+            - ``"split_nb"`` — split-half overlap-corrected t-test
+              (Lenartowicz, 2026; uses ``n_splits``).
+            - ``"split_perm"`` — permutation-calibrated split-half
+              (uses ``n_perm`` and ``n_splits``).
+            - ``"score"`` — analytic score test (k=int only).
+            - ``"e"`` — e-value test.
+        n_perm : int, default 1000
+            Permutation iterations for ``"raw_perm"`` / ``"split_perm"``.
+        n_splits : int, default 50
+            Random splits for ``"split_nb"`` / ``"split_perm"``.
+        random_state : int, default 2137
             Random seed.
         verbose : bool
-            Print progress.
 
         Returns
         -------
         PLSResult
         """
-        from ssdiff.backends.pls import pls1_cv_select, pls1_fit
+        import plskit
+
+        from ssdiff.backends.pls import (
+            confirmatory_test,
+            find_k_optimal_with_fwer,
+        )
         from ssdiff.results.continuous_result import PLSResult
 
         if not self.is_numeric:
@@ -281,173 +290,70 @@ class SSD:
         # Standardize X
         Xs, X_mean, X_scale = standardize(self.x)
 
-        # Optional PCA preprocessing
-        if pca_preprocess is not None:
-            n, D = Xs.shape
-            if isinstance(pca_preprocess, str) and pca_preprocess.startswith("var"):
-                try:
-                    target = float(pca_preprocess[3:]) / 100.0
-                except ValueError:
-                    raise ValueError(
-                        f"pca_preprocess={pca_preprocess!r} must be 'varNN' "
-                        f"where NN is a number (e.g. 'var95')"
-                    ) from None
-                max_k = min(n - 1, D)
-                Z_full, _, evr_full = pca_fit_transform(Xs, max_k)
-                cum_var = np.cumsum(evr_full)
-                pca_k = min(int(np.searchsorted(cum_var, target) + 1), max_k)
-            else:
-                pca_k = int(pca_preprocess)
-            pca_k = min(pca_k, n - 1, D)
-            Z_pca, pca_comps, _ = pca_fit_transform(Xs, pca_k)
-            X_for_pls = Z_pca
-            pca_preprocess_components = pca_comps
-        else:
-            X_for_pls = Xs
-            pca_k = None
-            pca_preprocess_components = None
+        n_kept, D = Xs.shape
 
-        # Component selection
-        if n_components is None or n_components == "auto":
-            cv_result = pls1_cv_select(
-                self.x, self.y,
-                max_components=15,
-                n_folds=cv_folds,
-                seed=random_state,
-                verbose=verbose,
-                pca_k=pca_k,
+        # Resolve k → (n_comp, test_name, test_info, find_k_raw)
+        if k == "auto":
+            eff_k_max = max(min(int(k_max), n_kept - 1, D), 1)
+            n_comp, _, test_info, find_k_raw = find_k_optimal_with_fwer(
+                Xs, ys, eff_k_max,
+                fwer_method=test_method,
+                n_perm=n_perm, n_splits=n_splits,
+                seed=random_state, verbose=verbose,
             )
-            n_comp = cv_result.best_n_components
-            cv_scores = cv_result.cv_scores
+            test_name = test_method
+        elif isinstance(k, int):
+            if k < 1:
+                raise ValueError(f"k must be >= 1, got {k}")
+            n_comp = min(int(k), n_kept - 1, D)
+            if n_comp < 1:
+                raise ValueError(
+                    f"Cannot fit PLS: need at least 2 samples and 1 feature, "
+                    f"got n={n_kept}, features={D}, requested k={k}"
+                )
+            test_name, test_info = confirmatory_test(
+                self.x, self.y, n_comp,
+                method=test_method,
+                n_perm=n_perm, n_splits=n_splits,
+                seed=random_state, verbose=verbose,
+            )
+            find_k_raw = None
         else:
-            n_comp = int(n_components)
-            cv_result = None
-            cv_scores = None
+            raise ValueError(f"k must be int or 'auto', got {k!r}")
 
-        # Fit PLS
-        n = X_for_pls.shape[0]
-        max_comp = min(n_comp, n - 1, X_for_pls.shape[1])
-        if max_comp < 1:
-            raise ValueError(
-                f"Cannot fit PLS: need at least 2 samples and 1 feature, "
-                f"got n={n}, features={X_for_pls.shape[1]}, requested components={n_comp}"
-            )
-        T, P, W, Q, coef = pls1_fit(X_for_pls, ys, max_comp)
-        actual_comp = W.shape[1]
+        # Fit PLS at the resolved k.
+        m = plskit.pls1_fit(Xs, ys, k=n_comp, pre_standardized_X=True, seed=random_state)
+        T, P, W, Q, coef = m.T, m.P, m.W, m.Q, m.coef
 
         # Statistics
-        y_pred = X_for_pls @ coef
-        stats = self._compute_fit_stats(ys, y_pred, actual_comp)
+        y_pred = Xs @ coef
+        stats = self._compute_fit_stats(ys, y_pred, W.shape[1])
 
         # Back-project to embedding space
-        if pca_preprocess_components is not None:
-            coef_emb = pca_preprocess_components.T @ coef
-        else:
-            coef_emb = coef
         scale = np.where(X_scale > 1e-12, X_scale, 1.0)
-        beta = coef_emb / scale
-
-        # Orient beta
+        beta = coef / scale
         beta = self._orient_beta(beta, ys)
-
-        # Resolve p_method
-        resolved = p_method
-        if resolved == "auto":
-            resolved = "split" if n_comp == 1 else "perm"
-
-        perm_null = None
-        split_mean_r = None
-
-        if resolved == "perm":
-            from ssdiff.backends.pls import pls1_permutation_test
-            p_val, _, cv_r2_null = pls1_permutation_test(
-                self.x, self.y, n_comp,
-                n_perm=n_perm, seed=random_state, verbose=verbose,
-                pca_k=pca_k,
-            )
-            pvalue = p_val
-            perm_null = cv_r2_null
-        elif resolved == "split":
-            from ssdiff.backends.pls import pls1_split_test
-            pvalue, split_mean_r = pls1_split_test(
-                self.x, self.y, n_comp,
-                n_splits=n_splits, split_ratio=split_ratio,
-                seed=random_state, pca_k=pca_k,
-                verbose=verbose,
-            )
-        elif resolved == "split_cal":
-            from ssdiff.backends.pls import pls1_split_test_calibrated
-            pvalue, split_mean_r = pls1_split_test_calibrated(
-                self.x, self.y, n_comp,
-                n_splits=n_splits, split_ratio=split_ratio,
-                n_perm=n_perm, seed=random_state, pca_k=pca_k,
-                verbose=verbose,
-            )
-        elif resolved is None:
-            pvalue = float("nan")
-        else:
-            raise ValueError(
-                f"Unknown p_method {p_method!r}. "
-                "Choose 'perm', 'split', 'split_cal', or None."
-            )
 
         kwargs = self._base_result_kwargs()
         kwargs["_y_mean"] = _y_mean
         kwargs["_y_scale"] = _y_scale
 
-        # Build initial TestView info based on resolved p_method.
-        test_name = resolved
-        test_info: dict | None = None
-        if resolved == "perm":
-            test_info = {
-                "pvalue": pvalue,
-                "n_perm": n_perm,
-                "random_state": random_state,
-            }
-        elif resolved == "split":
-            test_info = {
-                "pvalue": pvalue,
-                "split_r2": split_mean_r,
-                "n_splits": n_splits,
-                "split_ratio": split_ratio,
-                "random_state": random_state,
-            }
-        elif resolved == "split_cal":
-            test_info = {
-                "pvalue": pvalue,
-                "split_r2": split_mean_r,
-                "n_splits": n_splits,
-                "split_ratio": split_ratio,
-                "n_perm": n_perm,
-                "random_state": random_state,
-            }
-
-        if pca_preprocess_components is not None:
-            W_out = pca_preprocess_components.T @ W
-        else:
-            W_out = W
-        T_out = T
-
         return PLSResult(
             beta=beta,
-            pvalue=pvalue,
+            pvalue=test_info["pvalue"],
             r2=stats["r2"],
             fit_info={
                 "n_components": n_comp,
-                "pca_k": pca_k,
-                "p_method": resolved,
-                "split_mean_r": split_mean_r,
-                "n_perm": n_perm,
-                "n_splits": n_splits,
-                "split_ratio": split_ratio,
+                "p_method": test_name,
+                "split_mean_r": test_info.get("split_r2"),
+                "n_perm": test_info.get("n_perm"),
+                "n_splits": test_info.get("n_splits"),
                 "random_state": random_state,
             },
             raw_diagnostics={
-                "cv_result": cv_result,
-                "cv_scores": cv_scores,
-                "perm_null": perm_null,
-                "component_scores": T_out,
-                "component_weights": W_out,
+                "find_k_result": find_k_raw,
+                "component_scores": T,
+                "component_weights": W,
             },
             test_name=test_name,
             test_info=test_info,
@@ -459,14 +365,12 @@ class SSD:
     def fit_multipls(
         self,
         *,
-        n_components: int,
-        rotate: Literal["raw", "varimax", "promax"] = "varimax",
-        kappa: int | float = 4,
-        pca_preprocess: int | str | None = None,
-        p_method: Literal["auto", "split", "perm", "split_cal"] | None = "auto",
+        k: int | Literal["auto"] = "auto",
+        k_max: int = 5,
+        rotate: Literal["raw", "varimax"] = "varimax",
+        test_method: Literal["raw_perm", "split_nb", "split_perm", "score", "e"] = "split_nb",
         n_perm: int = 1000,
         n_splits: int = 50,
-        split_ratio: float = 0.5,
         random_state: int = 2137,
         verbose: bool = False,
     ):
@@ -479,24 +383,27 @@ class SSD:
 
         Parameters
         ----------
-        n_components : int
-            Number of PLS components to extract. Required — no default.
-            Raises if NIPALS deflation produces fewer (no silent truncation).
-        rotate : {"raw", "varimax", "promax"}, default "varimax"
+        k : int or ``"auto"``, default ``"auto"``
+            Same semantics as :meth:`fit_pls`. Raises if NIPALS deflation
+            produces fewer than the resolved count.
+        k_max : int, default 5
+            Cap for ``k="auto"``. Clamped to ``min(k_max, n-1, D)``.
+        rotate : {"raw", "varimax"}, default "varimax"
             Rotation applied to the W-subspace. ``"raw"`` still reorders
             dims by ``|corr(t_i, y)|`` and sign-flips; the subspace is
             preserved.
-        kappa : int or float, default 4
-            Promax exaggeration exponent. Ignored for other rotations.
-        pca_preprocess, p_method, n_perm, n_splits, split_ratio,
-        random_state, verbose
+        test_method, n_perm, n_splits, random_state, verbose
             Same meaning and defaults as :meth:`fit_pls`.
 
         Returns
         -------
         MultiPLSResult
         """
-        from ssdiff.backends.multipls import mpls_fit
+        from ssdiff.backends.pls import (
+            confirmatory_test,
+            find_k_optimal_with_fwer,
+            mpls_fit,
+        )
         from ssdiff.results.multi_pls_result import MultiPLSResult
 
         if not self.is_numeric:
@@ -516,128 +423,70 @@ class SSD:
         ys_2d, _, _ = standardize(self.y.reshape(-1, 1))
         ys = ys_2d.ravel()
 
-        # Build E_target in whatever column space Xs ends up in.
-        # Stay in float32 — one (V, D) allocation, in-place centre/scale.
-        # float32 is sufficient: E_target is consumed once as L = E_target @ W
-        # to produce a tiny (V, k) matrix that is upcast to float64 inside
-        # mpls_fit for the downstream rotation math.
-        scale = np.where(X_scale > 1e-12, X_scale, 1.0)
-        vectors_dtype = self.embeddings.vectors.dtype
-        X_mean_v = X_mean.astype(vectors_dtype, copy=False)
-        scale_v = scale.astype(vectors_dtype, copy=False)
-        E_std = self.embeddings.vectors.copy()
-        E_std -= X_mean_v
-        E_std /= scale_v
+        n_kept, D = Xs.shape
 
-        pca_k: int | None
-        if pca_preprocess is not None:
-            n, D = Xs.shape
-            if isinstance(pca_preprocess, str) and pca_preprocess.startswith("var"):
-                try:
-                    target = float(pca_preprocess[3:]) / 100.0
-                except ValueError:
-                    raise ValueError(
-                        f"pca_preprocess={pca_preprocess!r} must be 'varNN' "
-                        f"where NN is a number (e.g. 'var95')"
-                    ) from None
-                max_k = min(n - 1, D)
-                _, _, evr_full = pca_fit_transform(Xs, max_k)
-                cum_var = np.cumsum(evr_full)
-                pca_k = min(int(np.searchsorted(cum_var, target) + 1), max_k)
-            else:
-                pca_k = int(pca_preprocess)
-            pca_k = min(pca_k, n - 1, D)
-            Z_pca, pca_components, _ = pca_fit_transform(Xs, pca_k)
-            X_for_mpls = Z_pca
-            # Project E into the same PCA space; drop the full-vocab block.
-            E_target = E_std @ pca_components.T.astype(E_std.dtype, copy=False)
-            del E_std
+        if k == "auto":
+            eff_k_max = max(min(int(k_max), n_kept - 1, D), 1)
+            n_comp, _, test_info, _ = find_k_optimal_with_fwer(
+                Xs, ys, eff_k_max,
+                fwer_method=test_method,
+                n_perm=n_perm, n_splits=n_splits,
+                seed=random_state, verbose=verbose,
+            )
+            test_name = test_method
+        elif isinstance(k, int):
+            if k < 1:
+                raise ValueError(f"k must be >= 1, got {k}")
+            n_comp = min(int(k), n_kept - 1, D)
+            if n_comp < 1:
+                raise ValueError(
+                    f"Cannot fit PLS: need at least 2 samples and 1 feature, "
+                    f"got n={n_kept}, features={D}, requested k={k}"
+                )
+            test_name, test_info = confirmatory_test(
+                self.x, self.y, n_comp,
+                method=test_method,
+                n_perm=n_perm, n_splits=n_splits,
+                seed=random_state, verbose=verbose,
+            )
         else:
-            X_for_mpls = Xs
-            pca_k = None
-            E_target = E_std
+            raise ValueError(f"k must be int or 'auto', got {k!r}")
+
+        # mpls_fit receives a callable rotation target that lazily projects
+        # the full vocabulary onto the W-subspace:
+        #   L = ((E - X_mean) / X_scale) @ W
+        # Folding the centring/scaling into a tiny (D, k) factor avoids
+        # materialising a (V, D) standardised copy of the embeddings —
+        # for GloVe-800 that's hundreds of MB of peak RAM saved per call.
+        emb = self.embeddings.vectors
+        emb_dtype = emb.dtype
+        X_mean_v = X_mean.astype(emb_dtype, copy=False)
+        scale_v = X_scale.astype(emb_dtype, copy=False)
+
+        def project_target(W: np.ndarray) -> np.ndarray:
+            M = (W / scale_v[:, None]).astype(emb_dtype, copy=False)
+            offset = X_mean_v @ M  # (k,)
+            L = emb @ M
+            L -= offset
+            return L
 
         mp_out = mpls_fit(
-            X_for_mpls, ys,
-            n_components=n_components, rotate=rotate,
-            E_target=E_target, kappa=kappa,
+            Xs, ys,
+            n_components=n_comp, rotate=rotate,
+            E_target=project_target,
         )
-        del E_target  # free the (V, D) / (V, pca_k) block before perm/split tests
 
         # Standardised-space R² (matches fit_pls.r2 semantics).
-        y_pred = X_for_mpls @ mp_out["beta_combined"]
-        stats = self._compute_fit_stats(ys, y_pred, n_components)
+        y_pred = Xs @ mp_out["beta_combined"]
+        stats = self._compute_fit_stats(ys, y_pred, n_comp)
         r2 = stats["r2"]
-
-        # Resolve p-method and run, mirroring fit_pls.
-        resolved = p_method
-        if resolved == "auto":
-            resolved = "split" if n_components == 1 else "perm"
-
-        split_mean_r = None
-        if resolved == "perm":
-            from ssdiff.backends.pls import pls1_permutation_test
-            p_val, _, _ = pls1_permutation_test(
-                self.x, self.y, n_components,
-                n_perm=n_perm, seed=random_state, verbose=verbose,
-                pca_k=pca_k,
-            )
-            pvalue = p_val
-            test_name = "perm"
-            test_info = {
-                "pvalue": float(pvalue),
-                "n_perm": n_perm,
-                "random_state": random_state,
-            }
-        elif resolved == "split":
-            from ssdiff.backends.pls import pls1_split_test
-            pvalue, split_mean_r = pls1_split_test(
-                self.x, self.y, n_components,
-                n_splits=n_splits, split_ratio=split_ratio,
-                seed=random_state, pca_k=pca_k, verbose=verbose,
-            )
-            test_name = "split"
-            test_info = {
-                "pvalue": float(pvalue),
-                "split_r2": float(split_mean_r),
-                "n_splits": n_splits,
-                "split_ratio": split_ratio,
-                "random_state": random_state,
-            }
-        elif resolved == "split_cal":
-            from ssdiff.backends.pls import pls1_split_test_calibrated
-            pvalue, split_mean_r = pls1_split_test_calibrated(
-                self.x, self.y, n_components,
-                n_splits=n_splits, split_ratio=split_ratio,
-                n_perm=n_perm, seed=random_state, pca_k=pca_k,
-                verbose=verbose,
-            )
-            test_name = "split_cal"
-            test_info = {
-                "pvalue": float(pvalue),
-                "split_r2": float(split_mean_r),
-                "n_splits": n_splits,
-                "split_ratio": split_ratio,
-                "n_perm": n_perm,
-                "random_state": random_state,
-            }
-        elif resolved is None:
-            pvalue = float("nan")
-            test_name = None
-            test_info = {"pvalue": pvalue}
-        else:
-            raise ValueError(
-                f"Unknown p_method {p_method!r}. "
-                "Choose 'perm', 'split', 'split_cal', or None."
-            )
 
         return MultiPLSResult(
             x=self.x, y=self.y,
             W=mp_out["W"], P=mp_out["P"], Q=mp_out["Q"],
             W_rot=mp_out["W_rot"], T_rot=mp_out["T_rot"],
             beta_combined=mp_out["beta_combined"],
-            n_components=n_components,
-            pca_k=pca_k,
+            n_components=n_comp,
             rotation_meta=mp_out["rotation_meta"],
             r2=r2,
             test_name=test_name,

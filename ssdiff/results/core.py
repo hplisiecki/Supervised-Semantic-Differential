@@ -595,7 +595,7 @@ class TestView(ScalarView):
         parent : Result or None
             The owning result object; required for ``__call__`` reruns.
         name : str or None
-            Test name from the last run (e.g. ``"split"``).
+            Test name from the last run (e.g. ``"split_nb"``).
         info : dict or None
             Key/value result from the last run, must contain ``"pvalue"``.
         """
@@ -606,7 +606,7 @@ class TestView(ScalarView):
 
     @property
     def name(self) -> str | None:
-        """Name of the last test run (e.g. ``"split"``), or None if not yet run."""
+        """Name of the last test run (e.g. ``"split_nb"``), or None if not yet run."""
         return self._test_name
 
     @property
@@ -637,7 +637,7 @@ class TestView(ScalarView):
         Parameters
         ----------
         name : str or None
-            Test variant to run (e.g. ``"perm"``, ``"split"``).  Defaults to
+            Test variant to run (e.g. ``"raw_perm"``, ``"split_nb"``).  Defaults to
             the previously used test name, then to ``_default_name``.
         **params
             Override test-specific parameters (e.g. ``n_perm=5000``).

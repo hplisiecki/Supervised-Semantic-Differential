@@ -208,22 +208,23 @@ Returns a `PCAOLSResult`. Significance is reported as the OLS F-test. Sweep diag
 result = ssd.fit_pls(*,
     n_components=1,
     cv_folds=10,
-    pca_preprocess=None,
+    k_cap=5,
+    selection_kwargs=None,
     p_method="auto",
-    n_perm=1000, n_splits=50, split_ratio=0.5,
+    n_perm=1000, n_splits=50,
     random_state=2137, verbose=False,
 )
 ```
 
 | Argument | Type | Default | Description |
 |---|---|---|---|
-| `n_components` | `int \| "auto"` | `1` | Number of PLS components. `"auto"` picks argmax mean CV R² over `cv_folds`-fold CV. |
-| `cv_folds` | `int` | `10` | CV folds for `"auto"` component selection. |
-| `pca_preprocess` | `int \| str \| None` | `None` | Pre-PLS PCA reduction. Int = component count; `"var95"` retains 95 % of variance. |
-| `p_method` | `str \| None` | `"auto"` | `"perm"`, `"split"`, `"split_cal"`, `"auto"` (= `"split"` for 1 component, `"perm"` otherwise), or `None` to skip. |
-| `n_perm` | `int` | `1000` | Permutations for `"perm"` / `"split_cal"`. |
-| `n_splits` | `int` | `50` | Splits for `"split"` / `"split_cal"`. |
-| `split_ratio` | `float` | `0.5` | Train fraction for split-based tests. |
+| `n_components` | `int \| "sequence" \| "postselection"` | `1` | Number of PLS components. Pass a string to delegate K-selection to `plskit.pls1_find_k`: `"sequence"` (sequential incremental tests) or `"postselection"` (split-based selection + calibrated certificate). |
+| `cv_folds` | `int` | `10` | CV folds for `selector="cv_q2"` under `n_components="postselection"`. Ignored otherwise. |
+| `k_cap` | `int` | `5` | Maximum K considered when `n_components` is a string (further capped at `n − 1` and `D`). |
+| `selection_kwargs` | `dict \| None` | `None` | Extra keyword arguments forwarded to `plskit.pls1_find_k` (e.g. `test_method`, `selector`, `alpha`). |
+| `p_method` | `str \| None` | `"auto"` | `"raw_perm"`, `"split_nb"`, `"split_perm"`, `"auto"` (= `"split_nb"` for 1 component, `"raw_perm"` otherwise), or `None` to skip. |
+| `n_perm` | `int` | `1000` | Permutations for `"raw_perm"` / `"split_perm"`. |
+| `n_splits` | `int` | `50` | Splits for `"split_nb"` / `"split_perm"`. |
 | `random_state` | `int` | `2137` | Seed. |
 | `verbose` | `bool` | `False` | Print progress. |
 
@@ -261,11 +262,9 @@ Fits `n_components` PLS dimensions, rotates the W-subspace for interpretability,
 ```python
 result = ssd.fit_multipls(*,
     n_components,                    # required — no default
-    rotate="varimax",                # "varimax" | "promax" | "raw"
-    kappa=4,                         # promax exaggeration exponent
-    pca_preprocess=None,
+    rotate="varimax",                # "varimax" | "raw"
     p_method="auto",
-    n_perm=1000, n_splits=50, split_ratio=0.5,
+    n_perm=1000, n_splits=50,
     random_state=2137, verbose=False,
 )
 ```
@@ -273,9 +272,8 @@ result = ssd.fit_multipls(*,
 | Argument | Type | Default | Description |
 |---|---|---|---|
 | `n_components` | `int` | — | Number of PLS components to rotate. Required. Raises if NIPALS deflation produces fewer (no silent truncation). |
-| `rotate` | `str` | `"varimax"` | `"varimax"` (orthogonal), `"promax"` (oblique, correlated factors), `"raw"` (no rotation — still reorders dims by `|corr(t_i, y)|` and sign-flips). |
-| `kappa` | `int \| float` | `4` | Promax exaggeration exponent. Ignored for other rotations. |
-| `pca_preprocess`, `p_method`, `n_perm`, `n_splits`, `split_ratio`, `random_state`, `verbose` | — | — | Same meaning and defaults as `fit_pls`. |
+| `rotate` | `str` | `"varimax"` | `"varimax"` (orthogonal) or `"raw"` (no rotation — still reorders dims by `|corr(t_i, y)|` and sign-flips). |
+| `p_method`, `n_perm`, `n_splits`, `random_state`, `verbose` | — | — | Same meaning and defaults as `fit_pls`. |
 
 Returns a `MultiPLSResult` with:
 
@@ -357,7 +355,7 @@ ols.plot_sweep("sweep.png")
 ols.report(top_words=10, clusters=50).save("report_ols.md")
 
 # Continuous fit — PLS on the same SSD
-pls = ssd.fit_pls(n_components="auto", p_method="split")
+pls = ssd.fit_pls(n_components="postselection", p_method="split_nb")
 pls.report(top_words=10, clusters=50).save("report_pls.md")
 
 # Group comparison

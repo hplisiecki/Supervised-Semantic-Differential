@@ -292,7 +292,7 @@ def ssd_instance(tiny_kv, sample_docs, sample_y, lexicon):
 @pytest.fixture(scope="session")
 def pls_result(ssd_instance):
     """Fitted PLSResult from SSD.fit_pls()."""
-    return ssd_instance.fit_pls(n_components=2, p_method="perm", n_perm=50, random_state=42)
+    return ssd_instance.fit_pls(k=2, test_method="raw_perm", n_perm=50, random_state=42)
 
 
 @pytest.fixture(scope="session")

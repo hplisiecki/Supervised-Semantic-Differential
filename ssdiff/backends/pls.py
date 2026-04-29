@@ -1,517 +1,299 @@
-"""Pure-numpy NIPALS PLS1 + cross-validated component selection."""
+"""PLS backend — orchestration helpers over plskit.
+
+* ``mpls_fit`` — multi-component PLS1 + W-subspace rotation (varimax / raw),
+  reordered by ``|corr(t_i, y)|`` with sign-flip so ``corr > 0``.
+* ``confirmatory_test`` — wrap ``plskit.pls1_confirmatory_test``;
+  returns the resolved test name and an info dict ready for ``TestView``.
+* ``find_k_optimal_with_fwer`` — wrap ``plskit.pls1_find_k_optimal``
+  with ``return_fwer=True``; returns ``(k_star, fwer_alpha, info, raw)``.
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from typing import Any, Callable, Literal
 
 import numpy as np
 
-from ssdiff.utils.math import standardize
+import plskit
 
 
-@dataclass(frozen=True)
-class PLSCVResult:
-    """Result from PLS component selection via cross-validation.
-
-    Attributes
-    ----------
-    best_n_components : int
-        Selected number of components.
-    cv_scores : dict
-        Mapping n_components -> mean CV R².
-    cv_scores_se : dict
-        Mapping n_components -> standard error of CV R².
-    best_cv_r2 : float
-        CV R² at the selected number of components.
-    """
-    best_n_components: int
-    cv_scores: dict
-    cv_scores_se: dict
-    best_cv_r2: float
+__all__ = (
+    "confirmatory_test",
+    "find_k_optimal_with_fwer",
+    "mpls_fit",
+    "TEST_METHODS",
+    "FWER_METHODS",
+)
 
 
-def pls1_fit(
+TEST_METHODS = ("raw_perm", "split_nb", "split_perm", "score", "e")
+FWER_METHODS = ("raw_perm", "split_nb", "split_perm", "e")
+
+
+def _confirmatory_args(
+    method: str, *, n_perm: int, n_splits: int,
+) -> dict | None:
+    if method == "raw_perm":
+        return {"n_perm": int(n_perm)}
+    if method == "split_nb":
+        return {"n_splits": int(n_splits)}
+    if method == "split_perm":
+        return {"n_perm": int(n_perm), "n_splits": int(n_splits)}
+    return None  # score, e take no args
+
+
+def _split_r2_from(r) -> float | None:
+    # split_nb / split_perm: statistic is the back-transformed mean Fisher-z.
+    if r.method in ("split_nb", "split_perm"):
+        return float(r.statistic)
+    return None
+
+
+def confirmatory_test(
     X: np.ndarray,
     y: np.ndarray,
-    n_components: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """NIPALS PLS1 for a single outcome variable.
-
-    Parameters
-    ----------
-    X : (n, D) centered/standardized.
-    y : (n,) centered/standardized.
-    n_components : latent components to extract.
-
-    Returns
-    -------
-    T : (n, n_components)   X-scores
-    P : (D, n_components)   X-loadings
-    W : (D, n_components)   X-weights (unit-normed)
-    Q : (n_components,)     y-loadings
-    coef : (D,)             regression coefficients
-    """
-    n, D = X.shape
-    n_components = min(n_components, n - 1, D)
-
-    T = np.zeros((n, n_components), dtype=np.float64)
-    P = np.zeros((D, n_components), dtype=np.float64)
-    W = np.zeros((D, n_components), dtype=np.float64)
-    Q = np.zeros(n_components, dtype=np.float64)
-
-    Xk = X.copy()
-    yk = y.copy()
-
-    for a in range(n_components):
-        w = Xk.T @ yk
-        w_norm = float(np.linalg.norm(w))
-        if w_norm < 1e-14:
-            T, P, W, Q = T[:, :a], P[:, :a], W[:, :a], Q[:a]
-            break
-        w = w / w_norm
-
-        t = Xk @ w
-        tt = float(t @ t)
-        if tt < 1e-14:
-            T, P, W, Q = T[:, :a], P[:, :a], W[:, :a], Q[:a]
-            break
-
-        p = Xk.T @ t / tt
-        q = float(yk @ t / tt)
-
-        T[:, a] = t
-        P[:, a] = p
-        W[:, a] = w
-        Q[a] = q
-
-        Xk = Xk - np.outer(t, p)
-        yk = yk - q * t
-
-    coef = _pls1_coef_at_k(W, P, Q, W.shape[1])
-    return T, P, W, Q, coef
-
-
-def _pls1_coef_at_k(W, P, Q, k):
-    """Regression coefficient using first k PLS components."""
-    Wk, Pk, Qk = W[:, :k], P[:, :k], Q[:k]
-    return Wk @ np.linalg.solve(Pk.T @ Wk, Qk)
-
-
-def pls1_cv_select(
-    X: np.ndarray,
-    y: np.ndarray,
-    max_components: int = 15,
+    k: int,
     *,
-    n_folds: int = 10,
-    seed: int | None = None,
-    verbose: bool = False,
-    pca_k: int | None = None,
-) -> PLSCVResult:
-    """K-fold CV to select optimal n_components for PLS1 by argmax CV R².
-
-    Parameters
-    ----------
-    X : ndarray of shape (n, D)
-        Raw (unstandardized) feature matrix.
-    y : ndarray of shape (n,)
-        Raw outcome variable.
-    max_components : int, default 15
-        Maximum number of components to evaluate.
-    n_folds : int, default 10
-        Number of CV folds.
-    seed : int or None
-        Random seed for fold assignment.
-    verbose : bool, default False
-        If True, print a diagnostic summary of the selected component.
-    pca_k : int or None, default None
-        If set, apply PCA dimensionality reduction (to *pca_k* components)
-        inside each CV fold before fitting PLS.  This ensures the CV
-        selects components in the same feature space as the final fit.
-
-    Returns
-    -------
-    PLSCVResult
-    """
-    n = X.shape[0]
-    if n < 2:
-        raise ValueError(f"CV requires at least 2 samples, got n={n}")
-    rng = np.random.default_rng(seed)
-    # Cap n_folds at n so np.array_split can't produce empty folds
-    n_folds = max(min(n_folds, n), 2)
-    max_comp = max(min(max_components, n // n_folds - 2), 1)
-
-    indices = np.arange(n)
-    rng.shuffle(indices)
-    folds = np.array_split(indices, n_folds)
-
-    r2_matrix = np.full((n_folds, max_comp), np.nan, dtype=np.float64)
-
-    for fi in range(n_folds):
-        val_idx = folds[fi]
-        train_idx = np.concatenate([folds[j] for j in range(n_folds) if j != fi])
-
-        X_train, y_train = X[train_idx], y[train_idx]
-        X_val, y_val = X[val_idx], y[val_idx]
-
-        Xs_tr, x_mean, x_scale = standardize(X_train)
-        Xs_val = (X_val - x_mean) / x_scale
-
-        # Optional PCA reduction inside the fold
-        if pca_k is not None:
-            from ssdiff.utils.math import pca_fit_transform
-            k = min(pca_k, Xs_tr.shape[0] - 1, Xs_tr.shape[1])
-            Xs_tr, comps, _ = pca_fit_transform(Xs_tr, k)
-            Xs_val = Xs_val @ comps.T
-
-        ys_tr_2d, y_mean, y_scale = standardize(y_train.reshape(-1, 1))
-        ys_tr = ys_tr_2d.ravel()
-
-        _, P, W, Q, _ = pls1_fit(Xs_tr, ys_tr, max_comp)
-        actual_comp = W.shape[1]
-
-        y_scale_val = float(y_scale[0]) if y_scale[0] > 0 else 1.0
-        ys_val = (y_val - float(y_mean[0])) / y_scale_val
-
-        ss_tot = float(np.sum((ys_val - np.mean(ys_val)) ** 2))
-
-        for k in range(1, actual_comp + 1):
-            coef_k = _pls1_coef_at_k(W, P, Q, k)
-            ys_pred = Xs_val @ coef_k
-            ss_res = float(np.sum((ys_val - ys_pred) ** 2))
-            r2_matrix[fi, k - 1] = 1.0 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
-
-    cv_scores, cv_scores_se = {}, {}
-    for k in range(1, max_comp + 1):
-        vals = r2_matrix[:, k - 1]
-        finite = vals[np.isfinite(vals)]
-        if len(finite) > 0:
-            cv_scores[k] = float(np.mean(finite))
-            cv_scores_se[k] = float(np.std(finite, ddof=1) / np.sqrt(len(finite)))
-        else:
-            cv_scores[k] = float("nan")
-            cv_scores_se[k] = float("nan")
-
-    valid = {k: v for k, v in cv_scores.items() if np.isfinite(v)}
-    if not valid:
-        best_k, best_r2 = 1, float("nan")
-    else:
-        best_k = max(valid, key=valid.get)
-        best_r2 = valid[best_k]
-
-    from ssdiff.utils import _diagnostic
-    _diagnostic(verbose, f"[cv] n_components={best_k} (CV R²={best_r2:.4f})")
-
-    return PLSCVResult(
-        best_n_components=best_k,
-        cv_scores=cv_scores,
-        cv_scores_se=cv_scores_se,
-        best_cv_r2=best_r2,
-    )
-
-
-def _pls1_cv_r2(X, y, n_components, n_folds, fold_indices, pca_k=None) -> float:
-    """Cross-validated R² for PLS1 with fixed fold splits (used by permutation test)."""
-    ss_res_total = 0.0
-    ss_tot_total = 0.0
-
-    for fi in range(n_folds):
-        val_idx = fold_indices[fi]
-        train_idx = np.concatenate([fold_indices[j] for j in range(n_folds) if j != fi])
-
-        X_tr, y_tr = X[train_idx], y[train_idx]
-        X_val, y_val = X[val_idx], y[val_idx]
-
-        Xs_tr, x_mean, x_scale = standardize(X_tr)
-        Xs_val = (X_val - x_mean) / x_scale
-
-        if pca_k is not None:
-            from ssdiff.utils.math import pca_fit_transform
-            k = min(pca_k, Xs_tr.shape[0] - 1, Xs_tr.shape[1])
-            Xs_tr, comps, _ = pca_fit_transform(Xs_tr, k)
-            Xs_val = Xs_val @ comps.T
-
-        ys_tr_2d, y_mean, y_scale = standardize(y_tr.reshape(-1, 1))
-        ys_tr = ys_tr_2d.ravel()
-
-        _, _, _, _, coef = pls1_fit(Xs_tr, ys_tr, n_components)
-
-        y_scale_val = float(y_scale[0]) if y_scale[0] > 0 else 1.0
-        ys_val = (y_val - float(y_mean[0])) / y_scale_val
-
-        ys_pred = Xs_val @ coef
-        ss_res_total += float(np.sum((ys_val - ys_pred) ** 2))
-        ss_tot_total += float(np.sum((ys_val - np.mean(ys_val)) ** 2))
-
-    return 1.0 - (ss_res_total / ss_tot_total) if ss_tot_total > 0 else 0.0
-
-
-def pls1_permutation_test(
-    X: np.ndarray,
-    y: np.ndarray,
-    n_components: int,
-    *,
+    method: Literal["raw_perm", "split_nb", "split_perm", "score", "e"],
     n_perm: int = 1000,
-    n_folds: int = 5,
+    n_splits: int = 50,
+    pre_standardized_X: bool = False,
     seed: int | None = None,
     verbose: bool = False,
-    pca_k: int | None = None,
-) -> tuple[float, float, np.ndarray]:
-    """Permutation test for PLS1 significance using cross-validated R².
+) -> tuple[str, dict]:
+    """Run ``plskit.pls1_confirmatory_test`` and assemble a TestView-ready dict.
 
     Parameters
     ----------
-    X : ndarray of shape (n, D)
-        Raw feature matrix.
-    y : ndarray of shape (n,)
-        Raw outcome variable.
-    n_components : int
-        Number of PLS components.
-    n_perm : int, default 1000
-        Number of permutations.
-    n_folds : int, default 5
-        CV folds for R² computation.
+    X, y : ndarray
+        Feature matrix ``(n, D)`` and outcome ``(n,)``.
+    k : int
+        Component count to test.
+    method : str
+        ``"raw_perm" | "split_nb" | "split_perm" | "score" | "e"``.
+    n_perm, n_splits : int
+        Resampling kwargs (used only by the methods that consume them).
+    pre_standardized_X : bool
+        Forwarded to plskit; default ``False`` so plskit standardises
+        internally (necessary for honest CV / split resampling).
     seed : int or None
-        Random seed.
-    verbose : bool, default False
-        If True, show a tqdm progress bar over permutations.
-    pca_k : int or None
-        Optional PCA preprocessing before PLS.
+    verbose : bool
 
     Returns
     -------
-    p_perm : float
-        Permutation p-value, computed with the (b+1)/(m+1) formula
-        (Phipson & Smyth, 2010).
-    cv_r2_obs : float
-        Observed cross-validated R².
-    cv_r2_null : ndarray of shape (n_perm,)
-        Null distribution of cross-validated R².
+    method : str
+        Resolved test name (echoes ``method``).
+    info : dict
+        ``pvalue``, ``statistic``, ``split_r2`` (Optional), ``n_perm``,
+        ``n_splits``, ``random_state``.
     """
-    rng = np.random.default_rng(seed)
-
-    n = X.shape[0]
-    n_folds = max(min(n_folds, n), 2)
-    indices = np.arange(n)
-    rng.shuffle(indices)
-    fold_indices = list(np.array_split(indices, n_folds))
-
-    cv_r2_obs = _pls1_cv_r2(X, y, n_components, n_folds, fold_indices, pca_k=pca_k)
-
-    from ssdiff.utils import _progress
-
-    cv_r2_null = np.empty(n_perm, dtype=np.float64)
-    for i in _progress(range(n_perm), verbose=verbose, total=n_perm,
-                       desc="Permutation test"):
-        y_perm = rng.permutation(y)
-        cv_r2_null[i] = _pls1_cv_r2(X, y_perm, n_components, n_folds, fold_indices, pca_k=pca_k)
-
-    p_perm = float((np.sum(cv_r2_null >= cv_r2_obs) + 1) / (n_perm + 1))
-
-    from ssdiff.results.format import fmt_p
-    from ssdiff.utils import _diagnostic
-    _diagnostic(verbose, f"[perm] p={fmt_p(p_perm)} (observed CV R²={cv_r2_obs:.4f}, {n_perm} perms)")
-
-    return p_perm, cv_r2_obs, cv_r2_null
-
-
-def _split_half_correlations(
-    X: np.ndarray,
-    y: np.ndarray,
-    n_components: int,
-    n_splits: int,
-    split_ratio: float,
-    rng: np.random.Generator,
-    pca_k: int | None = None,
-) -> np.ndarray:
-    """Run split-half PLS and return per-split Pearson r values.
-
-    Internal helper shared by all split-test aggregation methods.
-    """
-    from ssdiff.utils.math import pca_fit_transform
-
-    n = X.shape[0]
-    n_train = max(int(n * split_ratio), n_components + 2)
-    n_train = min(n_train, n - 3)
-
-    r_splits = np.empty(n_splits, dtype=np.float64)
-
-    for i in range(n_splits):
-        perm = rng.permutation(n)
-        train_idx, test_idx = perm[:n_train], perm[n_train:]
-
-        X_tr, y_tr = X[train_idx], y[train_idx]
-        X_te, y_te = X[test_idx], y[test_idx]
-
-        Xs_tr, x_mean, x_scale = standardize(X_tr)
-        Xs_te = (X_te - x_mean) / x_scale
-
-        if pca_k is not None:
-            k = min(pca_k, Xs_tr.shape[0] - 1, Xs_tr.shape[1])
-            Xs_tr, comps, _ = pca_fit_transform(Xs_tr, k)
-            Xs_te = Xs_te @ comps.T
-
-        ys_tr_2d, _, _ = standardize(y_tr.reshape(-1, 1))
-        ys_tr = ys_tr_2d.ravel()
-
-        _, _, _, _, coef = pls1_fit(Xs_tr, ys_tr, n_components)
-
-        scores_te = (Xs_te @ coef).ravel()
-        scores_c = scores_te - scores_te.mean()
-        y_te_c = y_te - y_te.mean()
-        ss_s = float(scores_c @ scores_c)
-        ss_y = float(y_te_c @ y_te_c)
-
-        if ss_s < 1e-15 or ss_y < 1e-15:
-            r_splits[i] = 0.0
-            continue
-
-        r = float(scores_c @ y_te_c) / np.sqrt(ss_s * ss_y)
-        r_splits[i] = max(-1.0, min(1.0, r))
-
-    return r_splits
-
-
-def pls1_split_test(
-    X: np.ndarray,
-    y: np.ndarray,
-    n_components: int,
-    *,
-    n_splits: int = 50,
-    split_ratio: float = 0.5,
-    seed: int | None = None,
-    pca_k: int | None = None,
-    verbose: bool = False,
-) -> tuple[float, float]:
-    """Split-half significance test for PLS1 with overlap-corrected t-test.
-
-    Aggregates per-split Pearson r values via Fisher z-transform and
-    applies a variance correction to account for overlap between splits.
-
-    The corrected standard error is:
-        se = std(z, ddof=1) * sqrt(1/n_splits + n_test/n_train)
-
-    The n_test/n_train term prevents the SE from vanishing as n_splits
-    grows, honestly reflecting that correlated splits add limited new
-    information.
-
-    References: Lenartowicz P. (2026). New tests for PLS (In preparation).
-
-    Returns
-    -------
-    p_split : corrected one-sided p-value.
-    mean_r : mean Pearson r across splits (back-transformed from z).
-    """
-    from ssdiff.utils.math import t_sf
-
-    rng = np.random.default_rng(seed)
-    r_splits = _split_half_correlations(
-        X, y, n_components, n_splits, split_ratio, rng, pca_k,
-    )
-
-    # Fisher z-transform (clamp to avoid inf)
-    r_clamped = np.clip(r_splits, -0.9999, 0.9999)
-    z_splits = np.arctanh(r_clamped)
-
-    z_mean = float(np.mean(z_splits))
-    z_std = float(np.std(z_splits, ddof=1))
-
-    n = X.shape[0]
-    n_train = max(int(n * split_ratio), n_components + 2)
-    n_train = min(n_train, n - 3)
-    n_test = n - n_train
-
-    # Overlap-corrected SE
-    se = z_std * np.sqrt(1.0 / n_splits + n_test / n_train)
-
-    if se < 1e-15:
-        p_split = 1.0 if z_mean <= 0 else 0.0
-    else:
-        t_stat = z_mean / se
-        p_split = t_sf(t_stat, float(n_splits - 1))
-
-    mean_r = float(np.tanh(z_mean))
-
-    from ssdiff.results.format import fmt_p
-    from ssdiff.utils import _diagnostic
-    _diagnostic(verbose, f"[split] p={fmt_p(p_split)}, mean r={mean_r:.4f} ({n_splits} splits)")
-
-    return p_split, mean_r
-
-
-def pls1_split_test_calibrated(
-    X: np.ndarray,
-    y: np.ndarray,
-    n_components: int,
-    *,
-    n_splits: int = 50,
-    split_ratio: float = 0.5,
-    n_perm: int = 200,
-    seed: int | None = None,
-    pca_k: int | None = None,
-    verbose: bool = False,
-    early_stop_alpha: float = 0.05,
-) -> tuple[float, float]:
-    """Permutation-calibrated split-half test for PLS1.
-
-    Runs the full split-half procedure on the observed data and on
-    permuted y to build an exact null distribution of the mean split-half
-    correlation.  Guarantees correct FPR control regardless of
-    dependence between splits.
-
-    Early stopping: after a minimum of 50 permutations, checks every 25
-    whether a 99 % Wald CI for the p-value excludes *early_stop_alpha*.
-    If so, the result is already conclusive and remaining permutations
-    are skipped.
-
-    References: Lenartowicz P. (2026). New tests for PLS (In preparation).
-    Phipson & Smyth (2010) for the (b+1)/(m+1) formula.
-
-    Returns
-    -------
-    p_cal : permutation-calibrated p-value.
-    mean_r_obs : mean Pearson r on observed data.
-    """
-    rng = np.random.default_rng(seed)
-
-    # Observed statistic
-    r_obs = _split_half_correlations(
-        X, y, n_components, n_splits, split_ratio, rng, pca_k,
-    )
-    mean_r_obs = float(np.mean(r_obs))
-
-    # Null distribution with early stopping
-    _MIN_PERM = min(50, n_perm)
-    _CHECK_EVERY = 25
-    _Z99 = 2.576  # z for 99 % two-sided CI
-
-    from ssdiff.utils import _progress
-
-    exceedances = 0
-    m = 0  # permutations completed
-
-    perm_iter = _progress(range(1, n_perm + 1), verbose=verbose,
-                          total=n_perm, desc="Calibrated permutation")
-    for m in perm_iter:
-        y_perm = rng.permutation(y)
-        r_null = _split_half_correlations(
-            X, y_perm, n_components, n_splits, split_ratio, rng, pca_k,
+    if method not in TEST_METHODS:
+        raise ValueError(
+            f"Unknown test method {method!r}. Choose from {TEST_METHODS}."
         )
-        if float(np.mean(r_null)) >= mean_r_obs:
-            exceedances += 1
+    r = plskit.pls1_confirmatory_test(
+        np.asarray(X, dtype=np.float64),
+        np.asarray(y, dtype=np.float64),
+        int(k),
+        method=method,
+        args=_confirmatory_args(method, n_perm=n_perm, n_splits=n_splits),
+        pre_standardized_X=pre_standardized_X,
+        seed=seed,
+        verbose=verbose,
+    )
+    return method, {
+        "pvalue": float(r.pvalue),
+        "statistic": float(r.statistic),
+        "split_r2": _split_r2_from(r),
+        "n_perm": r.n_perm,
+        "n_splits": r.n_splits,
+        "random_state": r.seed,
+    }
 
-        # Early stopping: 99 % Wald CI excludes alpha → conclusive
-        if m >= _MIN_PERM and m % _CHECK_EVERY == 0:
-            p_est = (exceedances + 1) / (m + 1)
-            se = np.sqrt(p_est * (1.0 - p_est) / m)
-            if se > 0 and (p_est - _Z99 * se > early_stop_alpha
-                           or p_est + _Z99 * se < early_stop_alpha):
-                break
 
-    # Phipson & Smyth (2010)
-    p_cal = float((exceedances + 1) / (m + 1))
+def find_k_optimal_with_fwer(
+    Xs: np.ndarray,
+    ys: np.ndarray,
+    k_max: int,
+    *,
+    fwer_method: Literal["raw_perm", "split_nb", "split_perm", "e"] = "split_nb",
+    selector: Literal["r2_se", "r2_max", "bic"] = "r2_se",
+    n_folds: int = 5,
+    n_perm: int = 1000,
+    n_splits: int = 50,
+    seed: int | None = None,
+    verbose: bool = False,
+) -> tuple[int, float, dict, Any]:
+    """Run ``plskit.pls1_find_k_optimal(return_fwer=True)``.
 
-    from ssdiff.results.format import fmt_p
-    from ssdiff.utils import _diagnostic
-    _diagnostic(verbose, f"[split_cal] p={fmt_p(p_cal)}, mean r={mean_r_obs:.4f} ({m}/{n_perm} perms)")
+    Inputs ``Xs, ys`` are assumed already-standardised (forwarded with
+    ``pre_standardized_X=True``).
 
-    return p_cal, mean_r_obs
+    Returns
+    -------
+    k_star : int
+        Selected component count.
+    fwer_alpha : float
+        FWER-corrected p-value at ``k_star`` — used as the SSD p-value.
+    info : dict
+        ``pvalue`` (= ``fwer_alpha``), ``fwer_method``, ``selector``,
+        ``k_star``, plus ``n_perm`` / ``n_splits`` when applicable, and
+        ``random_state``.
+    raw : plskit.FindKOptimalResult
+        Full plskit output — kept around for diagnostics.
+    """
+    if fwer_method not in FWER_METHODS:
+        raise ValueError(
+            f"Unknown fwer_method {fwer_method!r}. "
+            f"Choose from {FWER_METHODS}."
+        )
+    args: dict = {}
+    if selector != "bic":
+        args["n_folds"] = int(n_folds)
+    if fwer_method in ("raw_perm", "split_perm"):
+        args["fwer_n_perm"] = int(n_perm)
+    if fwer_method in ("split_nb", "split_perm"):
+        args["fwer_n_splits"] = int(n_splits)
+
+    r = plskit.pls1_find_k_optimal(
+        np.asarray(Xs, dtype=np.float64),
+        np.asarray(ys, dtype=np.float64),
+        int(k_max),
+        selector=selector,
+        return_fwer=True,
+        fwer_method=fwer_method,
+        args=args or None,
+        pre_standardized_X=True,
+        seed=seed,
+        verbose=verbose,
+    )
+
+    info: dict = {
+        "pvalue": float(r.fwer_alpha),
+        "split_r2": None,
+        "fwer_method": r.fwer_method,
+        "selector": r.selector,
+        "k_star": int(r.k_star),
+        "random_state": r.seed,
+    }
+    if fwer_method in ("raw_perm", "split_perm"):
+        info["n_perm"] = int(n_perm)
+    if fwer_method in ("split_nb", "split_perm"):
+        info["n_splits"] = int(n_splits)
+    return int(r.k_star), float(r.fwer_alpha), info, r
+
+
+def mpls_fit(
+    Xs: np.ndarray,
+    ys: np.ndarray,
+    *,
+    n_components: int,
+    rotate: Literal["raw", "varimax"],
+    E_target: np.ndarray | Callable[[np.ndarray], np.ndarray],
+) -> dict:
+    """Fit PLS1 on already-standardised inputs, then rotate the W-subspace.
+
+    Parameters
+    ----------
+    Xs, ys : ndarray
+        Already-standardised ``X`` / ``y``. The caller standardises
+        upstream (matches ``plskit.pls1_fit``'s ``pre_standardized_X=True``
+        path).
+    n_components : int
+        Exact number of components. Raises if NIPALS deflation collapses.
+    rotate : {"raw", "varimax"}
+        Rotation applied to W. ``"raw"`` still reorders by
+        ``|corr(t_i, y)|`` and sign-flips.
+    E_target : ndarray ``(V, D)`` or callable ``(W) -> (V, k)``
+        Loading basis (or projector) used as the simple-structure target.
+        Callable form lets the caller fold standardisation into the
+        matmul to avoid materialising a full ``(V, D)`` standardised copy.
+
+    Returns
+    -------
+    dict
+        Keys: ``W``, ``P``, ``Q``, ``W_rot``, ``T_rot``, ``beta_combined``,
+        ``order``, ``signs``, ``rotation_meta``.
+    """
+    Xs = np.asarray(Xs, dtype=np.float64)
+    ys = np.asarray(ys, dtype=np.float64)
+
+    try:
+        model = plskit.pls1_fit(Xs, ys, k=n_components, pre_standardized_X=True)
+    except plskit.PlsKitError as exc:
+        raise ValueError(
+            f"plskit.pls1_fit rejected n_components={n_components}: {exc}. "
+            f"Reduce n_components or check for near-duplicate rows / "
+            f"near-zero variance columns in X."
+        ) from exc
+
+    actual_k = model.W.shape[1]
+    if actual_k < n_components:
+        raise ValueError(
+            f"plskit.pls1_fit returned {actual_k} components but "
+            f"n_components={n_components} was requested (NIPALS deflation "
+            f"collapsed). Reduce n_components or check for near-duplicate "
+            f"rows / near-zero variance columns in X."
+        )
+
+    if rotate == "raw":
+        R_rot = np.eye(n_components)
+        W_pre = model.W.copy()
+        rot_meta_pre: dict = {"rotate": "raw", "sweeps": 0,
+                              "V_converged": 0.0, "kaiser_normalized": False}
+    elif rotate == "varimax":
+        if callable(E_target):
+            L = np.asarray(E_target(model.W), dtype=np.float64)
+        else:
+            E_arr = np.asarray(E_target)
+            L = (E_arr @ model.W.astype(E_arr.dtype, copy=False)).astype(
+                np.float64, copy=False
+            )
+        rot = plskit.rotate(model.W, method="varimax", L=L)
+        R_rot = rot.spec.R
+        W_pre = rot.W_rot
+        rot_meta_pre = {
+            "rotate": "varimax",
+            "sweeps": rot.spec.sweeps,
+            "V_converged": rot.spec.V_converged,
+            "kaiser_normalized": rot.spec.args["kaiser_normalize"],
+        }
+    else:
+        raise ValueError(f"rotate must be 'raw' or 'varimax'; got {rotate!r}")
+
+    # Order by |corr(T_pre[:, i], y)| desc, sign-flip so corr > 0.
+    T_pre = Xs @ W_pre
+    y_c = ys - ys.mean()
+    y_norm = float(np.linalg.norm(y_c))
+    if y_norm < 1e-12:
+        y_norm = 1.0
+
+    corrs = np.zeros(n_components)
+    signs = np.ones(n_components)
+    for i in range(n_components):
+        ti = T_pre[:, i] - T_pre[:, i].mean()
+        t_norm = float(np.linalg.norm(ti))
+        if t_norm < 1e-12:
+            corrs[i] = 0.0
+            signs[i] = 1.0
+        else:
+            c = float(ti @ y_c) / (t_norm * y_norm)
+            corrs[i] = abs(c)
+            signs[i] = 1.0 if c >= 0 else -1.0
+
+    order = np.argsort(-corrs)
+    R_rot = R_rot[:, order] * signs[order][np.newaxis, :]
+
+    W_rot = W_pre[:, order] * signs[order][np.newaxis, :]
+    T_rot = T_pre[:, order] * signs[order][np.newaxis, :]
+
+    rotation_meta = {**rot_meta_pre, "R": R_rot,
+                     "order": order, "signs": signs[order]}
+
+    return {
+        "W": model.W, "P": model.P, "Q": model.Q,
+        "W_rot": W_rot, "T_rot": T_rot,
+        "beta_combined": model.coef,
+        "order": order, "signs": signs[order],
+        "rotation_meta": rotation_meta,
+    }

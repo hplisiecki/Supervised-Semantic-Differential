@@ -49,7 +49,7 @@ class FitInfoView(ScalarView):
     _name = "fit_info"
     _columns = (
         "n_components", "pca_k", "p_method", "n_perm", "n_splits",
-        "split_ratio", "split_mean_r", "random_state",
+        "split_mean_r", "random_state",
         "k_min", "k_max", "k_step", "best_k", "pca_k_source",
     )
 
@@ -793,22 +793,24 @@ class SweepView(View[SweepRow]):
 
 
 class PLSTestView(TestView):
-    """`.test` for PLSResult — supports perm / split / split_cal."""
+    """`.test` for PLSResult — confirmatory test at the fitted k."""
 
-    _columns = ("name", "pvalue", "split_r2", "n_splits", "split_ratio",
+    _columns = ("name", "pvalue", "split_r2", "n_splits",
                 "n_perm", "random_state")
-    _default_name = "split"
+    _default_name = "split_nb"
 
     _DEFAULTS = {
-        "perm":      dict(n_perm=2000, seed=None, verbose=False),
-        "split":     dict(n_splits=50, split_ratio=0.5, seed=None,
-                          verbose=False),
-        "split_cal": dict(n_splits=50, split_ratio=0.5, n_perm=2000,
-                          seed=None, verbose=False),
+        "raw_perm":   dict(n_perm=2000, seed=None, verbose=False),
+        "split_nb":   dict(n_splits=50, seed=None, verbose=False),
+        "split_perm": dict(n_splits=50, n_perm=2000, seed=None, verbose=False),
+        "score":      dict(seed=None, verbose=False),
+        "e":          dict(seed=None, verbose=False),
     }
 
     def _run(self, name, params):
-        """Dispatch to the appropriate PLS test backend and return (name, info_dict)."""
+        """Dispatch to plskit and return (name, info_dict)."""
+        from ssdiff.backends.pls import confirmatory_test
+
         if name not in self._DEFAULTS:
             raise ValueError(
                 f"Unknown PLS test {name!r}. "
@@ -817,61 +819,24 @@ class PLSTestView(TestView):
         merged = {**self._DEFAULTS[name], **params}
         parent = self._parent
         n_comp = parent.fit_info.n_components or 1
-        pca_k = parent.fit_info.pca_k
-
-        if name == "perm":
-            from ssdiff.backends.pls import pls1_permutation_test
-            p, _, _null = pls1_permutation_test(
-                parent.x, parent.y, n_comp,
-                n_perm=merged["n_perm"], seed=merged["seed"],
-                verbose=merged["verbose"], pca_k=pca_k,
-            )
-            info = {
-                "pvalue": float(p),
-                "n_perm": merged["n_perm"],
-                "random_state": merged["seed"],
-            }
-        elif name == "split":
-            from ssdiff.backends.pls import pls1_split_test
-            p, mean_r = pls1_split_test(
-                parent.x, parent.y, n_comp,
-                n_splits=merged["n_splits"],
-                split_ratio=merged["split_ratio"],
-                seed=merged["seed"], pca_k=pca_k,
-                verbose=merged["verbose"],
-            )
-            info = {
-                "pvalue": float(p),
-                "split_r2": float(mean_r),
-                "n_splits": merged["n_splits"],
-                "split_ratio": merged["split_ratio"],
-                "random_state": merged["seed"],
-            }
-        else:  # split_cal
-            from ssdiff.backends.pls import pls1_split_test_calibrated
-            p, mean_r = pls1_split_test_calibrated(
-                parent.x, parent.y, n_comp,
-                n_splits=merged["n_splits"],
-                split_ratio=merged["split_ratio"],
-                n_perm=merged["n_perm"], seed=merged["seed"],
-                pca_k=pca_k, verbose=merged["verbose"],
-            )
-            info = {
-                "pvalue": float(p),
-                "split_r2": float(mean_r),
-                "n_splits": merged["n_splits"],
-                "split_ratio": merged["split_ratio"],
-                "n_perm": merged["n_perm"],
-                "random_state": merged["seed"],
-            }
-        return name, info
+        return confirmatory_test(
+            parent.x, parent.y, n_comp,
+            method=name,
+            n_perm=merged.get("n_perm", 2000),
+            n_splits=merged.get("n_splits", 50),
+            seed=merged["seed"],
+            verbose=merged["verbose"],
+        )
 
     def _on_rerun(self):
         """Propagate the updated p-value back to parent stats after a rerun."""
         self._parent._refresh_stats_pvalue(self.pvalue)
 
     def _rerun_hint(self) -> str:
-        return "Rerun: .test('perm'|'split'|'split_cal', n_perm=..., n_splits=...)"
+        return (
+            "Rerun: .test('raw_perm'|'split_nb'|'split_perm'|'score'|'e', "
+            "n_perm=..., n_splits=...)"
+        )
 
 
 class PCAOLSTestView(TestView):
@@ -1223,9 +1188,13 @@ class PLSResult(ContinuousResult):
         latent components.
     component_weights : ndarray of shape (D, A)
         PLS1 X-weights W in embedding space (unit-normed).
-    cv_result : PLSCVResult | None
+    find_k_result : plskit.FindKOptimalResult | None
+        Full ``plskit.pls1_find_k_optimal`` output when ``k="auto"``;
+        ``None`` otherwise. Inspect ``find_k_result.k_star``,
+        ``find_k_result.cv_scores``, ``find_k_result.fwer_pvalues``.
     cv_scores : dict | None
-    perm_null : ndarray | None
+        Flat ``{k: cv_score}`` dict — convenience copy of
+        ``find_k_result.cv_scores`` (None when ``k`` was an int).
     """
 
     _arrays = (
@@ -1252,9 +1221,13 @@ class PLSResult(ContinuousResult):
             parent=self, name=test_name, info=test_info,
         )
         raw = self._raw_diagnostics
-        self.cv_result = raw.get("cv_result")
-        self.cv_scores = raw.get("cv_scores")
-        self.perm_null = raw.get("perm_null")
+        self.find_k_result = raw.get("find_k_result")
+        self.cv_scores = (
+            dict(self.find_k_result.cv_scores)
+            if self.find_k_result is not None
+            and self.find_k_result.cv_scores is not None
+            else None
+        )
         self.n_components = int(self.fit_info.n_components or 0)
         self.component_scores = raw.get("component_scores")
         self.component_weights = raw.get("component_weights")

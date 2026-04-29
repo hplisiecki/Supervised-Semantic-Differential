@@ -32,6 +32,7 @@ classifiers = [
 dependencies = [
   "numpy>=1.26.4",
   "spacy>=3.7.2",
+  "plskit>=0.0.1",
 ]
 
 [project.optional-dependencies]

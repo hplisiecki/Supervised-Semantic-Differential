@@ -277,7 +277,7 @@ New proposed algorithm. PLS regression operates directly in the full embedding s
 
 ```python
 result = ssd.fit_pls(
-    n_components=1,       # or "auto" for CV-based selection
+    n_components=1,       # or "sequence" / "postselection" for K-selection
     p_method="auto",      # significance test (see below)
     verbose=False,
 )
@@ -285,13 +285,13 @@ result = ssd.fit_pls(
 
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
-| `n_components` | `int \| "auto"` | `1` | Number of PLS components. `"auto"` picks argmax CV R² over 10-fold CV |
-| `cv_folds` | `int` | `10` | CV folds for component selection |
-| `pca_preprocess` | `int \| str \| None` | `None` | Optional PCA preprocessing (e.g. `50` or `"var95"`) |
+| `n_components` | `int \| "sequence" \| "postselection"` | `1` | Number of PLS components. Pass a string to delegate K-selection to `plskit.pls1_find_k` |
+| `cv_folds` | `int` | `10` | CV folds for `selector="cv_q2"` under `"postselection"` |
+| `k_cap` | `int` | `5` | Maximum K considered when `n_components` is a string |
+| `selection_kwargs` | `dict \| None` | `None` | Forwarded to `plskit.pls1_find_k` (e.g. `test_method`, `selector`, `alpha`) |
 | `p_method` | `str \| None` | `"auto"` | Significance test method |
 | `n_perm` | `int` | `1000` | Permutation iterations |
 | `n_splits` | `int` | `50` | Split-half iterations |
-| `split_ratio` | `float` | `0.5` | Training fraction for split-based tests |
 | `random_state` | `int` | `2137` | Random seed |
 | `verbose` | `bool` | `False` | Print progress |
 
@@ -299,20 +299,20 @@ result = ssd.fit_pls(
 
 | Value | Description |
 |-------|-------------|
-| `"auto"` | `"split"` when `n_components=1`, `"perm"` otherwise |
-| `"perm"` | Permutation test on cross-validated R-squared |
-| `"split"` | Split-half test with overlap-corrected t-test |
-| `"split_cal"` | Permutation-calibrated split-half (exact FPR control, slower) |
+| `"auto"` | `"split_nb"` when `n_components=1`, `"raw_perm"` otherwise |
+| `"raw_perm"` | Permutation test on cross-validated R-squared |
+| `"split_nb"` | Split-half test with overlap-corrected t-test |
+| `"split_perm"` | Permutation-calibrated split-half (exact FPR control, slower) |
 | `None` | Skip significance testing (p-value = NaN) |
 
 ### Multi-component PLS (in development)
 
-When you expect more than one interpretable semantic axis related to the outcome, `fit_multipls()` fits `k` PLS components, rotates the W-subspace (`"varimax"`, `"promax"`, or `"raw"`), and returns a container of per-dim leaves — one per rotated axis plus a `"combined"` leaf for the (rotation-invariant) unrotated prediction β.
+When you expect more than one interpretable semantic axis related to the outcome, `fit_multipls()` fits `k` PLS components, rotates the W-subspace (`"varimax"` or `"raw"`), and returns a container of per-dim leaves — one per rotated axis plus a `"combined"` leaf for the (rotation-invariant) unrotated prediction β.
 
 ```python
 result = ssd.fit_multipls(
     n_components=2,       # required, no default
-    rotate="varimax",     # or "promax" / "raw"
+    rotate="varimax",     # or "raw"
     p_method="auto",
     verbose=False,
 )
@@ -327,9 +327,8 @@ result["combined"].words        # zoom into unrotated prediction β
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
 | `n_components` | `int` | — (required) | Number of PLS components to extract |
-| `rotate` | `"raw" \| "varimax" \| "promax"` | `"varimax"` | Rotation applied to the W-subspace |
-| `kappa` | `int \| float` | `4` | Promax exaggeration exponent (ignored for other rotations) |
-| `pca_preprocess`, `p_method`, `n_perm`, `n_splits`, `split_ratio`, `random_state`, `verbose` | — | — | Same meaning and defaults as `fit_pls` |
+| `rotate` | `"raw" \| "varimax"` | `"varimax"` | Rotation applied to the W-subspace |
+| `p_method`, `n_perm`, `n_splits`, `random_state`, `verbose` | — | — | Same meaning and defaults as `fit_pls` |
 
 > **Status.** API is stable for research use but feature parity with `PLSResult` (per-leaf clusters, snippets, misdiagnosed docs, per-dim diagnostics) is still being rolled out. See [`examples/demo_multipls.py`](examples/demo_multipls.py) and [`docs/api_reference.md`](docs/api_reference.md#fit_multipls--rotated-multi-component-pls-in-development).
 
@@ -604,7 +603,7 @@ Methods:
 - `.misdiagnosed(k=20, side="both")` -> `list[dict]`
 - `.snippets(pre_docs, top_per_side=200)` -> `dict`
 - `.snippets_extreme(pre_docs, k=50, by="predicted")` -> `dict`
-- `.split_test(n_splits=50, method="split")` — mutates in place: overwrites `pvalue`, `p_method`, `split_mean_r` (PLSResult only). Returns `self`.
+- `.split_test(n_splits=50, method="split_nb")` — mutates in place: overwrites `pvalue`, `p_method`, `split_mean_r` (PLSResult only). Returns `self`.
 - `.plot_sweep(path=None)` — PCA-K sweep plot (PCAOLSResult only)
 
 ### `GroupResult`

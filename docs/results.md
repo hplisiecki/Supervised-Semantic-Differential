@@ -57,7 +57,7 @@ Every result exposes its data through **views** — small objects you can print,
 |---|---|---|
 | `View[T]` | Tabular. Iterates frozen dataclasses. | `result.words`, `result.docs` |
 | `ScalarView` | Single row. Field access via `.r2` or `["r2"]`. | `result.stats`, `result.fit_info` |
-| `TestView` | Callable ScalarView — calling it reruns the test. | `result.test("perm", n_perm=5000)` |
+| `TestView` | Callable ScalarView — calling it reruns the test. | `result.test("raw_perm", n_perm=5000)` |
 
 All views share the same output methods:
 
@@ -225,14 +225,14 @@ Leaf keys are `"dim-1"`, …, `"dim-k"`, `"combined"` (strings). `res.words` / `
 `res.test(...)` runs one whole-model test — CV-R² is a model-level quantity, rotation is free for prediction. Same three backends as `PLSResult`:
 
 ```python
-res.test("split",     n_splits=100)
-res.test("perm",      n_perm=2000)
-res.test("split_cal", n_splits=50, n_perm=2000)
+res.test("split_nb",   n_splits=100)
+res.test("raw_perm",   n_perm=2000)
+res.test("split_perm", n_splits=50, n_perm=2000)
 ```
 
 ### Rotation diagnostics
 
-`res.pls_info` exposes: `n_components`, `rotate`, `pca_k`, `order`, `signs`, `kaiser_normalized`, `sweeps`, `V_converged`, `kappa`, `pvalue_source`, `random_state`.
+`res.pls_info` exposes: `n_components`, `rotate`, `order`, `signs`, `kaiser_normalized`, `sweeps`, `V_converged`, `pvalue_source`, `random_state`.
 
 ### Minimal report (v1)
 
@@ -328,12 +328,12 @@ Unsupported extensions raise `ValueError` with the list of supported ones.
 
 **PLS:**
 ```python
-result.test("perm",      n_perm=5000, seed=0)
-result.test("split",     n_splits=100, split_ratio=0.5)
-result.test("split_cal", n_splits=50, n_perm=2000)
+result.test("raw_perm",   n_perm=5000, seed=0)
+result.test("split_nb",   n_splits=100)
+result.test("split_perm", n_splits=50, n_perm=2000)
 
 result.test.pvalue         # current p-value
-result.test.name           # "perm" | "split" | "split_cal"
+result.test.name           # "raw_perm" | "split_nb" | "split_perm"
 ```
 
 **Groups:**
@@ -474,7 +474,7 @@ Missing deps raise `ImportError` with an install hint.
 | Doc + raw text | `result.docs.id(42)` |
 | Recompute snippets | `result.snippets(top_per_side=200, min_cosine=0.4)` |
 | Snippets inside cluster 3 | `result.clusters.pos.snippets(cluster_id=3)` |
-| Rerun PLS test | `result.test("perm", n_perm=5000)` |
+| Rerun PLS test | `result.test("raw_perm", n_perm=5000)` |
 | Rerun group test | `gr.test(n_perm=10000, correction="fdr_bh")` |
 | Zoom to one pair | `gr[('g1','g2')]` |
 | Per-pair top words | `gr[('g1','g2')].words.pos(20)` |

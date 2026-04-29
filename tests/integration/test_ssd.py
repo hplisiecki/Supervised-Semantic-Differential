@@ -65,48 +65,19 @@ def test_construction_shapes(ssd_instance):
 
 def test_fit_pls_returns_plsresult(ssd_instance):
     from ssdiff.results.continuous_result import PLSResult
-    result = ssd_instance.fit_pls(n_components=2, p_method=None)
+    result = ssd_instance.fit_pls(k=2, test_method="score")
     assert isinstance(result, PLSResult)
 
 
 def test_fit_pls_r2_in_range(ssd_instance):
     """PLSResult.stats.r2 is in [0, 1]."""
-    result = ssd_instance.fit_pls(n_components=2, p_method=None)
+    result = ssd_instance.fit_pls(k=2, test_method="score")
     assert 0.0 <= result.stats.r2 <= 1.0
 
 
 def test_fit_pls_beta_shape(ssd_instance, tiny_kv):
     """beta shape is (D,) where D == embeddings.dim."""
-    result = ssd_instance.fit_pls(n_components=2, p_method=None)
-    D = tiny_kv.vectors.shape[1]
-    assert result.beta.shape == (D,)
-
-
-# ---------------------------------------------------------------------------
-# 3. fit_pls with pca_preprocess=int
-# ---------------------------------------------------------------------------
-
-def test_fit_pls_pca_preprocess_int(ssd_instance, tiny_kv):
-    """fit_pls(pca_preprocess=5) runs and produces valid r2."""
-    result_pca = ssd_instance.fit_pls(
-        n_components=1, pca_preprocess=5, p_method=None
-    )
-    assert 0.0 <= result_pca.stats.r2 <= 1.0
-    # beta shape still matches embedding dim
-    D = tiny_kv.vectors.shape[1]
-    assert result_pca.beta.shape == (D,)
-
-
-# ---------------------------------------------------------------------------
-# 4. fit_pls with pca_preprocess="var95"
-# ---------------------------------------------------------------------------
-
-def test_fit_pls_pca_preprocess_var95(ssd_instance, tiny_kv):
-    """fit_pls(pca_preprocess='var95') runs successfully."""
-    result = ssd_instance.fit_pls(
-        n_components=1, pca_preprocess="var95", p_method=None
-    )
-    assert 0.0 <= result.stats.r2 <= 1.0
+    result = ssd_instance.fit_pls(k=2, test_method="score")
     D = tiny_kv.vectors.shape[1]
     assert result.beta.shape == (D,)
 
@@ -157,10 +128,10 @@ def test_fit_multipls_beta_combined_agrees_with_fit_pls(ssd_instance):
     from ssdiff.results.multi_pls_result import MultiPLSResult
 
     pls_result = ssd_instance.fit_pls(
-        n_components=2, p_method=None, random_state=42
+        k=2, test_method="score", random_state=42
     )
     mpls_result = ssd_instance.fit_multipls(
-        n_components=2, p_method=None, random_state=42
+        k=2, test_method="score", random_state=42
     )
 
     assert isinstance(mpls_result, MultiPLSResult)
@@ -173,22 +144,6 @@ def test_fit_multipls_beta_combined_agrees_with_fit_pls(ssd_instance):
     assert abs(cos) > 0.95, (
         f"beta_combined vs fit_pls beta: |cos|={abs(cos):.4f} < 0.95"
     )
-
-
-# ---------------------------------------------------------------------------
-# 8. fit_multipls with promax rotation
-# ---------------------------------------------------------------------------
-
-def test_fit_multipls_promax(ssd_instance):
-    """fit_multipls(rotate='promax', kappa=2.0) runs successfully."""
-    from ssdiff.results.multi_pls_result import MultiPLSResult
-    result = ssd_instance.fit_multipls(
-        n_components=2, rotate="promax", kappa=2.0, p_method=None
-    )
-    assert isinstance(result, MultiPLSResult)
-    assert result.n_components == 2
-    assert "dim-1" in result._leaves
-    assert "combined" in result._leaves
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +169,7 @@ def test_fit_pls_constant_y(tiny_kv, sample_docs, lexicon):
     corpus = Corpus(sample_docs, pretokenized=True, lang="pl")
     ssd = SSD(tiny_kv, corpus, constant_y, lexicon)
     # constant y → ss_tot = 0 → r2 = 0.0 (no crash)
-    result = ssd.fit_pls(n_components=1, p_method=None)
+    result = ssd.fit_pls(k=1, test_method="score")
     assert result.stats.r2 == 0.0
 
 
@@ -228,8 +183,8 @@ def test_use_full_doc_differs(tiny_kv, sample_docs, sample_y, lexicon):
     ssd_ctx = SSD(tiny_kv, corpus, sample_y, lexicon, use_full_doc=False)
     ssd_full = SSD(tiny_kv, corpus, sample_y, None, use_full_doc=True)
 
-    res_ctx = ssd_ctx.fit_pls(n_components=1, p_method=None)
-    res_full = ssd_full.fit_pls(n_components=1, p_method=None)
+    res_ctx = ssd_ctx.fit_pls(k=1, test_method="score")
+    res_full = ssd_full.fit_pls(k=1, test_method="score")
 
     # Results should differ — at minimum their betas are not identical
     assert not np.allclose(res_ctx.beta, res_full.beta), (
@@ -241,18 +196,32 @@ def test_use_full_doc_differs(tiny_kv, sample_docs, sample_y, lexicon):
 # 12. progress_hook: fires per step; thread-local isolation
 # ---------------------------------------------------------------------------
 
-def test_progress_hook_fires(ssd_instance):
-    """progress_hook callback is called during fit_pls with perm test."""
+def test_progress_hook_does_not_break_fit_pls(ssd_instance):
+    """progress_hook around fit_pls(perm) is a no-op since the migration to plskit.
+
+    Pre-migration the in-tree perm test fired this hook per permutation.
+    After the v2.0 backend swap, perm/split/calibrated tests run inside
+    plskit's Rust core (spec §8.2 — progress reporting deferred), so the
+    hook is no longer called from those code paths.  The hook remains
+    available for any future SSDLite-side instrumentation; this test
+    just confirms that wrapping ``fit_pls`` in a ``progress_hook``
+    context does not break execution.
+    """
     calls = []
 
     def cb(current, total, desc):
         calls.append((current, total, desc))
 
     with progress_hook(cb):
-        ssd_instance.fit_pls(n_components=1, p_method="perm", n_perm=10, random_state=1)
+        result = ssd_instance.fit_pls(
+            k=1, test_method="raw_perm", n_perm=10, random_state=1
+        )
 
-    assert len(calls) > 0, "Expected at least one progress_hook call"
-    # Each call should have (int, int, str)
+    # Hook may legitimately receive zero calls; what we care about is
+    # that fit_pls produced a valid result.
+    assert 0.0 <= result.stats.r2 <= 1.0
+    # If the hook *was* fired (e.g. some future SSDLite-side wrapper),
+    # each call must still have the right shape.
     for current, total, desc in calls:
         assert isinstance(current, int)
         assert isinstance(total, int)
@@ -359,10 +328,10 @@ def test_multipls_sign_flip_stability(ssd_instance):
     deterministic PLS path and is not affected by random seeds in mpls_fit).
     """
     res1 = ssd_instance.fit_multipls(
-        n_components=2, p_method=None, random_state=1
+        k=2, test_method="score", random_state=1
     )
     res2 = ssd_instance.fit_multipls(
-        n_components=2, p_method=None, random_state=9999
+        k=2, test_method="score", random_state=9999
     )
 
     bc1 = res1["combined"].beta
@@ -380,12 +349,32 @@ def test_multipls_sign_flip_stability(ssd_instance):
 
 def test_multipls_result_structure(ssd_instance):
     """MultiPLSResult has the expected keys and valid r2."""
-    result = ssd_instance.fit_multipls(n_components=2, p_method=None)
+    result = ssd_instance.fit_multipls(k=2, test_method="score")
     assert "dim-1" in result._leaves
     assert "dim-2" in result._leaves
     assert "combined" in result._leaves
     assert 0.0 <= result.stats.r2 <= 1.0
     assert result.n_components == 2
+
+
+# ---------------------------------------------------------------------------
+# 15b. k="auto" routes through plskit.pls1_find_k_optimal
+# ---------------------------------------------------------------------------
+
+def test_fit_pls_k_auto(ssd_instance):
+    """fit_pls(k='auto') resolves to k>=1 via pls1_find_k_optimal."""
+    result = ssd_instance.fit_pls(
+        k="auto", k_max=3, n_splits=5, random_state=0,
+    )
+    assert result.fit_info["n_components"] >= 1
+
+
+def test_fit_multipls_k_auto(ssd_instance):
+    """fit_multipls(k='auto') resolves to k>=1."""
+    result = ssd_instance.fit_multipls(
+        k="auto", k_max=3, n_splits=5, random_state=0,
+    )
+    assert result.n_components >= 1
 
 
 # ---------------------------------------------------------------------------
@@ -418,13 +407,3 @@ def test_construction_full_doc_no_lexicon_ok(tiny_kv, sample_docs, sample_y):
     assert ssd.n_kept >= 0
 
 
-# ---------------------------------------------------------------------------
-# 18. fit_pls p_method=None skips significance testing (pvalue is nan)
-# ---------------------------------------------------------------------------
-
-def test_fit_pls_no_pmethod_pvalue_nan(ssd_instance):
-    """fit_pls(p_method=None) produces pvalue=nan, still has valid r2."""
-    result = ssd_instance.fit_pls(n_components=1, p_method=None)
-    # pvalue is on test view and on stats view
-    assert not np.isfinite(result.stats.pvalue)
-    assert 0.0 <= result.stats.r2 <= 1.0

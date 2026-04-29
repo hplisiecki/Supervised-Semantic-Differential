@@ -8,7 +8,7 @@ Container of ``_PLSComponentResult`` leaves keyed by ``"dim-1"``,
 Access patterns (canonical):
 - ``res["dim-1"]`` → ``_PLSComponentResult`` for one rotated axis
 - ``res["combined"]`` → leaf holding the unrotated PLS prediction β
-- ``res.test(...)`` → rerun perm / split / split_cal at the container level
+- ``res.test(...)`` → rerun raw_perm / split_nb / split_perm at the container level
 - ``res.pls_info`` → ``{k, rotate, order, signs, rotation_meta}``
 
 Power-user shortcuts (same data, different angle):
@@ -72,14 +72,7 @@ class _PLSComponentResult(_SingleResult):
 
     @property
     def words(self):
-        """Words view tagged with this leaf's key as the contrast.
-
-        For promax dim leaves, the pattern matrix column is used as the
-        cosine direction instead of the raw ``beta`` — pattern loadings
-        express each factor's *unique* contribution after accounting
-        for inter-factor correlation, which is what we want to interpret
-        from the top-words list.
-        """
+        """Words view tagged with this leaf's key as the contrast."""
         from ssdiff.results.continuous_result import WordsView
 
         cache_key = ("words", ())
@@ -87,92 +80,11 @@ class _PLSComponentResult(_SingleResult):
             return self._cache[cache_key]
         self._require_resource("embeddings", "words")
 
-        # Promax: rank vocabulary directly by pattern-matrix column (per-word
-        # unique loadings on this factor), not by cosine against a direction.
-        # For orthogonal rotations pattern = structure = E_std @ W_rot and
-        # cosine search gives an equivalent ordering, but oblique rotations
-        # need the pattern matrix explicitly (that's the whole point of the
-        # pattern/structure distinction).
-        meta = self._container._rotation_meta
-        if (meta.get("rotate") == "promax"
-                and meta.get("pattern") is not None
-                and self._dim_index is not None):
-            pattern_col = np.asarray(meta["pattern"])[:, self._dim_index]
-            rows = self._compute_words_rows_from_pattern_column(
-                pattern_col=pattern_col, contrast=self._key,
-            )
-        else:
-            rows = self._compute_words_rows(contrast=self._key)
+        rows = self._compute_words_rows(contrast=self._key)
 
         view = WordsView(rows)
         self._cache[cache_key] = view
         return view
-
-    def _compute_words_rows_from_pattern_column(
-        self, *, pattern_col: np.ndarray, contrast: str,
-    ):
-        """Top/bottom vocabulary by promax pattern-column loading.
-
-        ``pattern_col`` has one entry per word in ``self.embeddings`` — it's
-        each word's unique loading on this factor (after removing the shared
-        variance captured by other factors). We sort the vocabulary by that
-        score directly: top positive for ``side="pos"``, bottom (most
-        negative) for ``side="neg"``. Bad-token regex and the 10k
-        most-frequent-words cap mirror :func:`filtered_neighbors` so the
-        output shape matches the rest of the ``.words`` surface.
-        """
-        from ssdiff.lang_config import get_config
-        from ssdiff.results.schema import Word
-
-        bad_token = get_config(self.lang or "pl").bad_token_re
-        keys = self.embeddings.index_to_key
-        scores = np.asarray(pattern_col, dtype=float)
-        if scores.shape[0] != len(keys):
-            raise ValueError(
-                f"pattern column has {scores.shape[0]} entries but embeddings "
-                f"have {len(keys)} keys — pattern must cover the full vocabulary."
-            )
-
-        # Restrict to the top-10k most frequent words, matching filtered_neighbors'
-        # default — keeps the ranked list anchored to common vocabulary.
-        restrict = min(10000, len(scores))
-        scores_r = scores[:restrict]
-        keys_r = keys[:restrict]
-
-        out: list[Word] = []
-        # Positive side: highest pattern scores, filter to strictly positive.
-        rank = 0
-        for idx in np.argsort(-scores_r):
-            s = float(scores_r[idx])
-            if s <= 0:
-                break
-            w = keys_r[idx]
-            if bad_token.match(w):
-                continue
-            rank += 1
-            out.append(Word(
-                side="pos", rank=rank, word=w, cos_beta=s, contrast=contrast,
-            ))
-            if rank >= 100:
-                break
-
-        # Negative side: lowest pattern scores, filter to strictly negative.
-        rank = 0
-        for idx in np.argsort(scores_r):
-            s = float(scores_r[idx])
-            if s >= 0:
-                break
-            w = keys_r[idx]
-            if bad_token.match(w):
-                continue
-            rank += 1
-            out.append(Word(
-                side="neg", rank=rank, word=w, cos_beta=s, contrast=contrast,
-            ))
-            if rank >= 100:
-                break
-
-        return out
 
     def __getstate__(self):
         state = self.__dict__.copy()
@@ -187,8 +99,8 @@ class PLSInfoView(ScalarView):
 
     _name = "pls_info"
     _columns = (
-        "n_components", "rotate", "pca_k", "order", "signs",
-        "kaiser_normalized", "sweeps", "V_converged", "kappa",
+        "n_components", "rotate", "order", "signs",
+        "kaiser_normalized", "sweeps", "V_converged",
         "pvalue_source", "random_state",
     )
 
@@ -196,7 +108,6 @@ class PLSInfoView(ScalarView):
         self, *,
         n_components: int,
         rotate: str,
-        pca_k: int | None,
         order: np.ndarray,
         signs: np.ndarray,
         rotation_meta: dict,
@@ -207,13 +118,11 @@ class PLSInfoView(ScalarView):
         self._row = {
             "n_components": int(n_components),
             "rotate": rotate,
-            "pca_k": pca_k,
             "order": tuple(int(i) for i in order) if order is not None else None,
             "signs": tuple(float(s) for s in signs) if signs is not None else None,
             "kaiser_normalized": rotation_meta.get("kaiser_normalized"),
             "sweeps": rotation_meta.get("sweeps"),
             "V_converged": rotation_meta.get("V_converged"),
-            "kappa": rotation_meta.get("kappa"),
             "pvalue_source": pvalue_source,
             "random_state": random_state,
         }
@@ -248,21 +157,23 @@ class MultiPLSStatsView(ScalarView):
 # ---------- MultiPLSTestView ----------
 
 class MultiPLSTestView(TestView):
-    """`.test` for MultiPLSResult — reuses the same perm/split/split_cal backends as PLSResult."""
+    """`.test` for MultiPLSResult — confirmatory test at the fitted k."""
 
-    _columns = ("name", "pvalue", "split_r2", "n_splits", "split_ratio",
+    _columns = ("name", "pvalue", "split_r2", "n_splits",
                 "n_perm", "random_state")
-    _default_name = "split"
+    _default_name = "split_nb"
 
     _DEFAULTS = {
-        "perm":      dict(n_perm=2000, seed=None, verbose=False),
-        "split":     dict(n_splits=50, split_ratio=0.5, seed=None,
-                          verbose=False),
-        "split_cal": dict(n_splits=50, split_ratio=0.5, n_perm=2000,
-                          seed=None, verbose=False),
+        "raw_perm":   dict(n_perm=2000, seed=None, verbose=False),
+        "split_nb":   dict(n_splits=50, seed=None, verbose=False),
+        "split_perm": dict(n_splits=50, n_perm=2000, seed=None, verbose=False),
+        "score":      dict(seed=None, verbose=False),
+        "e":          dict(seed=None, verbose=False),
     }
 
     def _run(self, name, params):
+        from ssdiff.backends.pls import confirmatory_test
+
         if name not in self._DEFAULTS:
             raise ValueError(
                 f"Unknown PLS test {name!r}. "
@@ -270,61 +181,23 @@ class MultiPLSTestView(TestView):
             )
         merged = {**self._DEFAULTS[name], **params}
         parent = self._parent
-        k = parent.n_components
-        pca_k = parent._pca_k
-
-        if name == "perm":
-            from ssdiff.backends.pls import pls1_permutation_test
-            p, _, _ = pls1_permutation_test(
-                parent._x_raw, parent._y_raw, k,
-                n_perm=merged["n_perm"], seed=merged["seed"],
-                verbose=merged["verbose"], pca_k=pca_k,
-            )
-            info = {
-                "pvalue": float(p),
-                "n_perm": merged["n_perm"],
-                "random_state": merged["seed"],
-            }
-        elif name == "split":
-            from ssdiff.backends.pls import pls1_split_test
-            p, mean_r = pls1_split_test(
-                parent._x_raw, parent._y_raw, k,
-                n_splits=merged["n_splits"],
-                split_ratio=merged["split_ratio"],
-                seed=merged["seed"], pca_k=pca_k,
-                verbose=merged["verbose"],
-            )
-            info = {
-                "pvalue": float(p),
-                "split_r2": float(mean_r),
-                "n_splits": merged["n_splits"],
-                "split_ratio": merged["split_ratio"],
-                "random_state": merged["seed"],
-            }
-        else:  # split_cal
-            from ssdiff.backends.pls import pls1_split_test_calibrated
-            p, mean_r = pls1_split_test_calibrated(
-                parent._x_raw, parent._y_raw, k,
-                n_splits=merged["n_splits"],
-                split_ratio=merged["split_ratio"],
-                n_perm=merged["n_perm"], seed=merged["seed"],
-                pca_k=pca_k, verbose=merged["verbose"],
-            )
-            info = {
-                "pvalue": float(p),
-                "split_r2": float(mean_r),
-                "n_splits": merged["n_splits"],
-                "split_ratio": merged["split_ratio"],
-                "n_perm": merged["n_perm"],
-                "random_state": merged["seed"],
-            }
-        return name, info
+        return confirmatory_test(
+            parent._x_raw, parent._y_raw, parent.n_components,
+            method=name,
+            n_perm=merged.get("n_perm", 2000),
+            n_splits=merged.get("n_splits", 50),
+            seed=merged["seed"],
+            verbose=merged["verbose"],
+        )
 
     def _on_rerun(self):
         self._parent._refresh_pvalue(self.pvalue)
 
     def _rerun_hint(self) -> str:
-        return "Rerun: .test('perm'|'split'|'split_cal', n_perm=..., n_splits=...)"
+        return (
+            "Rerun: .test('raw_perm'|'split_nb'|'split_perm'|'score'|'e', "
+            "n_perm=..., n_splits=...)"
+        )
 
 
 # ---------- MultiPLSResult ----------
@@ -337,7 +210,7 @@ class MultiPLSResult(_MultiContainer):
         res = ssd.fit_multipls(n_components=2, rotate="varimax")
         res["dim-1"].words         # rotated-axis top words
         res["combined"].words      # unrotated prediction β top words
-        res.test("split_cal")      # rerun test on the whole model
+        res.test("split_perm")     # rerun test on the whole model
         res.pls_info               # rotation diagnostics
     """
 
@@ -361,7 +234,6 @@ class MultiPLSResult(_MultiContainer):
         T_rot: np.ndarray,
         beta_combined: np.ndarray,
         n_components: int,
-        pca_k: int | None,
         rotation_meta: dict,
         r2: float,
         test_name: str | None,
@@ -385,7 +257,6 @@ class MultiPLSResult(_MultiContainer):
         self.beta_combined = self._beta_combined
 
         self.n_components = int(n_components)
-        self._pca_k = pca_k
         self._rotation_meta = dict(rotation_meta)
         self.random_state = random_state
 
@@ -409,7 +280,6 @@ class MultiPLSResult(_MultiContainer):
         self.pls_info = PLSInfoView(
             n_components=self.n_components,
             rotate=self._rotation_meta["rotate"],
-            pca_k=pca_k,
             order=self._rotation_meta.get("order", np.arange(self.n_components)),
             signs=self._rotation_meta.get("signs", np.ones(self.n_components)),
             rotation_meta=self._rotation_meta,
@@ -544,7 +414,6 @@ class MultiPLSResult(_MultiContainer):
                     ("V_converged",
                      f"{pi['V_converged']:.4f}"
                      if pi["V_converged"] is not None else "-"),
-                    ("kappa", pi["kappa"] if pi["kappa"] is not None else "-"),
                 ],
             ),
         ]
