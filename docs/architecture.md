@@ -40,11 +40,10 @@ ssdiff/
 ├── lang_config.py     — language → spaCy model mapping (23 languages)
 ├── py.typed           — PEP 561 marker
 ├── backends/
-│   ├── pls.py         — PLS1 NIPALS, CV selection, perm / split / split_cal tests
+│   ├── pls.py         — plskit orchestration: mpls_fit (PLS1 + W-rotation), run_signal_test (raw_perm / split_nb / split_perm)
 │   ├── pca_sweep.py   — PCA + OLS; joint interpretability/stability sweep
 │   ├── _sweep_math.py — sweep scoring primitives
-│   ├── group.py       — unified permutation test (omnibus + pairwise)
-│   └── multipls.py    — varimax / promax rotation of the PLS W-subspace (in development)
+│   └── group.py       — unified permutation test (omnibus + pairwise)
 ├── results/
 │   ├── __init__.py       — public result exports
 │   ├── core.py           — Result ABC, View / ScalarView / TestView, save()/to_* helpers, parameter-keyed cache
@@ -100,9 +99,11 @@ No fitting runs at construction — just doc-vector preparation.
 ssd.x (n × D), ssd.y (n)
         │
         ├─ standardize X  (columns, ddof=0)
-        ├─ optional PCA preprocess  (var95 or fixed k) → Z
-        ├─ optional auto-select n_components  (K-fold CV, argmax R²)
-        ├─ NIPALS PLS1:
+        ├─ optional K-selection (plskit.pls1_find_k):
+        │    "sequence"      → sequential incremental tests, K* = first k
+        │                      that fails to reject
+        │    "postselection" → split A picks K*, split B re-tests at K*
+        ├─ NIPALS PLS1 (plskit.pls1_fit):
         │    for each component:
         │      w = X'y / ‖X'y‖
         │      t = Xw           (score)
@@ -110,14 +111,13 @@ ssd.x (n × D), ssd.y (n)
         │      q = y't / t't    (y-loading)
         │      deflate X and y
         ├─ β = W (P'W)⁻¹ Q
-        ├─ back-project through PCA preprocess (if any)  →  β in embedding space
         ├─ unscale: β / X_scale
         ├─ orient β: flip if corr(ŷ, y) < 0
-        └─ p-value (optional):
-             "perm"       → full permutation on CV-R²
-             "split"      → repeated train/test split, overlap-corrected t
-             "split_cal"  → split procedure on permuted y → exact null
-             "auto"       → "split" for n_components=1, "perm" otherwise
+        └─ p-value (optional, via plskit.pls1_signal_test):
+             "raw_perm"   → full permutation on CV-R²
+             "split_nb"   → repeated train/test split, overlap-corrected t
+             "split_perm" → split procedure on permuted y → exact null
+             "auto"       → "split_nb" for n_components=1, "raw_perm" otherwise
                                 │
                                 ▼
                           PLSResult
@@ -154,19 +154,18 @@ ssd.x (n × D), ssd.y (n)
 ssd.x (n × D), ssd.y (n), ssd.embeddings
         │
         ├─ standardize X and y (caller-side — mpls_fit expects standardised input)
-        ├─ project vocabulary into the same column space → E_target
-        ├─ optional PCA preprocess → Z, E_target reduced to PCA space
-        ├─ backends.multipls.mpls_fit(Xs, ys, n_components, rotate, E_target, kappa):
-        │    NIPALS PLS1 → W, P, Q  (raise if returned k < n_components)
+        ├─ project vocabulary lazily via callable target  L = ((E - X_mean) / X_scale) @ W
+        ├─ backends.pls.mpls_fit(Xs, ys, n_components, rotate, E_target):
+        │    plskit.pls1_fit → W, P, Q  (raise if returned k < n_components)
         │    β_combined = W(P'W)⁻¹Q                    ← unrotated, rotation-invariant
         │    L = E_target @ W                          ← full-vocab projection (rotation target)
-        │    rotate("varimax" | "promax" | "raw") → W_pre
+        │    plskit.rotate("varimax" | "raw") → W_pre
         │    recompute dim scores: T_pre[:, i] = Xs @ W_pre[:, i]
         │    reorder dims by |corr(T_pre_i, ys)| desc; sign-flip so corr > 0
-        │    → W_rot, T_rot, rotation_meta (R, order, signs, sweeps, phi, pattern, …)
-        ├─ shared model-level p-value: perm / split / split_cal (same backends as fit_pls)
+        │    → W_rot, T_rot, rotation_meta (R, order, signs, sweeps, V_converged)
+        ├─ shared model-level p-value: raw_perm / split_nb / split_perm (same helper as fit_pls)
         └─ wrap into MultiPLSResult with leaves:
-             "dim-1", …, "dim-k"  → β_i = W_rot[:, i]   (pattern column for promax)
+             "dim-1", …, "dim-k"  → β_i = W_rot[:, i]
              "combined"           → β   = β_combined    (unrotated prediction direction)
                 │
                 ▼
@@ -389,10 +388,10 @@ Analytic F-test from OLS in PCA space. Tests the null that all PCA-space regress
 
 | name | idea | cost | control |
 |---|---|---|---|
-| `"perm"` | shuffle y, refit PLS with CV, compare observed CV-R² to null | `n_perm` PLS refits | exact under permutation |
-| `"split"` | repeated train/test split, correlate predictions, overlap-corrected t | `n_splits` PLS fits | asymptotic |
-| `"split_cal"` | run the full split procedure on permuted y → exact null | `n_splits × n_perm` PLS fits | exact |
-| `"auto"` | `"split"` for `n_components=1`, `"perm"` otherwise | — | — |
+| `"raw_perm"` | shuffle y, refit PLS with CV, compare observed CV-R² to null | `n_perm` PLS refits | exact under permutation |
+| `"split_nb"` | repeated train/test split, correlate predictions, overlap-corrected t | `n_splits` PLS fits | asymptotic |
+| `"split_perm"` | run the full split procedure on permuted y → exact null | `n_splits × n_perm` PLS fits | exact |
+| `"auto"` | `"split_nb"` for `n_components=1`, `"raw_perm"` otherwise | — | — |
 
 All three are exposed as `result.test(name, **params)` for reruns; `result.stats.pvalue` is propagated by the `_on_rerun` hook.
 

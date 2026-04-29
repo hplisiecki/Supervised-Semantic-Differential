@@ -90,7 +90,6 @@ Cluster and snippet reruns with different parameters are cached separately — t
 | `p_method` | ✓ | which significance test was used |
 | `n_perm` |  | test config — on `.test` |
 | `n_splits` |  | same |
-| `split_ratio` |  | same |
 | `split_mean_r` |  | surfaced as `split_r2` on `.test` |
 | `random_state` | ✓ | reproducibility anchor |
 | `k_min` / `k_max` / `k_step` |  | PCA-sweep config — on `.sweep` |
@@ -166,11 +165,10 @@ Default = full. Nothing to prune.
 
 | column | default | note |
 |---|:---:|---|
-| `name` | ✓ | `"perm" \| "split" \| "split_cal"` |
+| `name` | ✓ | `"raw_perm" \| "split_nb" \| "split_perm"` |
 | `pvalue` | ✓ | |
-| `split_r2` | ✓ | only present after `"split"` / `"split_cal"` |
+| `split_r2` | ✓ | only present after `"split_nb"` / `"split_perm"` |
 | `n_splits` |  | config — reachable via `.params` |
-| `split_ratio` |  | config |
 | `n_perm` |  | config |
 | `random_state` |  | config |
 
@@ -263,10 +261,10 @@ Shared model-level views. Per-leaf views (`res['dim-1'].words` etc.) reuse the c
 | column | default | note |
 |---|:---:|---|
 | `r2` | ✓ | model-level R² from the unrotated combined β |
-| `pvalue` | ✓ | shared whole-model p (perm / split / split_cal) |
+| `pvalue` | ✓ | shared whole-model p (raw_perm / split_nb / split_perm) |
 | `n` | ✓ | documents in fit |
 | `n_components` | ✓ | number of rotated dims |
-| `rotate` | ✓ | `"varimax"` / `"promax"` / `"raw"` |
+| `rotate` | ✓ | `"varimax"` / `"raw"` |
 
 ### `pls_info` — `PLSInfoView` (ScalarView)
 
@@ -274,19 +272,17 @@ Shared model-level views. Per-leaf views (`res['dim-1'].words` etc.) reuse the c
 |---|:---:|---|
 | `n_components` | ✓ | |
 | `rotate` | ✓ | |
-| `pca_k` | ✓ | `None` unless `pca_preprocess` was set |
 | `order` |  | dim permutation applied post-rotation (identity once returned) |
 | `signs` |  | per-dim sign flips applied for `corr(t_i, y) > 0` |
 | `kaiser_normalized` |  | varimax Kaiser row-normalisation flag |
 | `sweeps` |  | varimax pairwise-sweep count |
 | `V_converged` |  | final varimax criterion value |
-| `kappa` |  | promax exponent (`None` for varimax / raw) |
 | `pvalue_source` | ✓ | which test produced `stats.pvalue` |
 | `random_state` | ✓ | reproducibility anchor |
 
 ### `test` — `MultiPLSTestView` (ScalarView)
 
-Same columns and semantics as `PLSTestView` (see above) — it delegates to the same `pls1_permutation_test` / `pls1_split_test` / `pls1_split_test_calibrated` backends.
+Same columns and semantics as `PLSTestView` (see above) — both go through `backends.pls.run_signal_test`, which dispatches to `plskit.pls1_signal_test`.
 
 ### Per-leaf — `res['dim-i'].words`, `res['combined'].words`
 
