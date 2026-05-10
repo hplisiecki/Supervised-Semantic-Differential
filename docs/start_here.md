@@ -16,6 +16,12 @@ This folder holds four tiers of documentation plus a runnable demo. Start wherev
 | [`../examples/demo_api.py`](../examples/demo_api.py) | See the whole pipeline in ~50 lines — load embeddings, build a corpus, fit PLS / PCA+OLS / groups, print stats, export a report. |
 | [`../examples/demo_multipls.py`](../examples/demo_multipls.py) | Minimal runnable example for the in-development `fit_multipls` (rotated multi-component PLS). |
 
+> **Migration (v1.x → next):** `SSD(emb, corpus, y, lexicon)` now requires
+> an L2-normalised embedding. Insert `.normalize(l2=True, abtt=1)` between
+> `Embeddings.load(...)` and `SSD(...)`. `.ssdembed` files saved by
+> previous runs of `normalize().save()` already carry `l2_normalized=True`
+> and need no change.
+
 ### For power users — making results do what you want
 
 | Read this | When you want to… |
@@ -58,6 +64,31 @@ result.report().save("report.md")
 ```
 
 See [`../examples/demo_api.py`](../examples/demo_api.py) for a runnable end-to-end script, and [`../examples/demo_multipls.py`](../examples/demo_multipls.py) for the rotated multi-component variant.
+
+---
+
+## Low-RAM mode
+
+For machines that cannot fit the full embedding matrix in RAM (Colab free
+tier, 8 GB laptops, etc.), pass `ram_efficient=True` to
+`Embeddings.load`. Only an uncompressed `.ssdembed` file works in this
+mode — convert other formats once with the snippet below.
+
+```python
+# One-time: convert any format to .ssdembed and pre-normalise.
+emb = Embeddings.load("model.bin").normalize(l2=True, abtt=1)
+emb.save("model_norm")  # → model_norm.ssdembed
+
+# Each subsequent run:
+emb = Embeddings.load("model_norm.ssdembed", ram_efficient=True)
+emb.attach_corpus(corpus)
+ssd = SSD(emb, corpus, y, lexicon).fit_pls()
+```
+
+RAM mode is read-only: `normalize`, `save`, and `SSD.fit_multipls` raise.
+For the full PLS / PCA+OLS / group-comparison pipeline this is enough —
+`fit_multipls` is the only fit method that needs the full vocabulary as a
+rotation target.
 
 ---
 

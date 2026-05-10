@@ -1,186 +1,21 @@
-"""PLS backend — orchestration helpers over plskit.
+"""PLS backend — multi-component PLS1 + W-subspace rotation.
 
-* ``mpls_fit`` — multi-component PLS1 + W-subspace rotation (varimax / raw),
-  reordered by ``|corr(t_i, y)|`` with sign-flip so ``corr > 0``.
-* ``confirmatory_test`` — wrap ``plskit.pls1_confirmatory_test``;
-  returns the resolved test name and an info dict ready for ``TestView``.
-* ``find_k_optimal_with_fwer`` — wrap ``plskit.pls1_find_k_optimal``
-  with ``return_fwer=True``; returns ``(k_star, fwer_alpha, info, raw)``.
+Owns ``mpls_fit`` only: PLS1 fit + varimax/raw rotation, with reordering
+by ``|corr(t_i, y)|`` and sign-flipping so ``corr > 0``. Significance
+testing and k-selection live in ``ssdiff.ssd`` and call ``plskit``
+directly.
 """
 
 from __future__ import annotations
 
-from typing import Any, Callable, Literal
+from typing import Callable, Literal
 
 import numpy as np
 
 import plskit
 
 
-__all__ = (
-    "confirmatory_test",
-    "find_k_optimal_with_fwer",
-    "mpls_fit",
-    "TEST_METHODS",
-    "FWER_METHODS",
-)
-
-
-TEST_METHODS = ("raw_perm", "split_nb", "split_perm", "score", "e")
-FWER_METHODS = ("raw_perm", "split_nb", "split_perm", "e")
-
-
-def _confirmatory_args(
-    method: str, *, n_perm: int, n_splits: int,
-) -> dict | None:
-    if method == "raw_perm":
-        return {"n_perm": int(n_perm)}
-    if method == "split_nb":
-        return {"n_splits": int(n_splits)}
-    if method == "split_perm":
-        return {"n_perm": int(n_perm), "n_splits": int(n_splits)}
-    return None  # score, e take no args
-
-
-def _split_r2_from(r) -> float | None:
-    # split_nb / split_perm: statistic is the back-transformed mean Fisher-z.
-    if r.method in ("split_nb", "split_perm"):
-        return float(r.statistic)
-    return None
-
-
-def confirmatory_test(
-    X: np.ndarray,
-    y: np.ndarray,
-    k: int,
-    *,
-    method: Literal["raw_perm", "split_nb", "split_perm", "score", "e"],
-    n_perm: int = 1000,
-    n_splits: int = 50,
-    pre_standardized_X: bool = False,
-    seed: int | None = None,
-    verbose: bool = False,
-) -> tuple[str, dict]:
-    """Run ``plskit.pls1_confirmatory_test`` and assemble a TestView-ready dict.
-
-    Parameters
-    ----------
-    X, y : ndarray
-        Feature matrix ``(n, D)`` and outcome ``(n,)``.
-    k : int
-        Component count to test.
-    method : str
-        ``"raw_perm" | "split_nb" | "split_perm" | "score" | "e"``.
-    n_perm, n_splits : int
-        Resampling kwargs (used only by the methods that consume them).
-    pre_standardized_X : bool
-        Forwarded to plskit; default ``False`` so plskit standardises
-        internally (necessary for honest CV / split resampling).
-    seed : int or None
-    verbose : bool
-
-    Returns
-    -------
-    method : str
-        Resolved test name (echoes ``method``).
-    info : dict
-        ``pvalue``, ``statistic``, ``split_r2`` (Optional), ``n_perm``,
-        ``n_splits``, ``random_state``.
-    """
-    if method not in TEST_METHODS:
-        raise ValueError(
-            f"Unknown test method {method!r}. Choose from {TEST_METHODS}."
-        )
-    r = plskit.pls1_confirmatory_test(
-        np.asarray(X, dtype=np.float64),
-        np.asarray(y, dtype=np.float64),
-        int(k),
-        method=method,
-        args=_confirmatory_args(method, n_perm=n_perm, n_splits=n_splits),
-        pre_standardized_X=pre_standardized_X,
-        seed=seed,
-        verbose=verbose,
-    )
-    return method, {
-        "pvalue": float(r.pvalue),
-        "statistic": float(r.statistic),
-        "split_r2": _split_r2_from(r),
-        "n_perm": r.n_perm,
-        "n_splits": r.n_splits,
-        "random_state": r.seed,
-    }
-
-
-def find_k_optimal_with_fwer(
-    Xs: np.ndarray,
-    ys: np.ndarray,
-    k_max: int,
-    *,
-    fwer_method: Literal["raw_perm", "split_nb", "split_perm", "e"] = "split_nb",
-    selector: Literal["r2_se", "r2_max", "bic"] = "r2_se",
-    n_folds: int = 5,
-    n_perm: int = 1000,
-    n_splits: int = 50,
-    seed: int | None = None,
-    verbose: bool = False,
-) -> tuple[int, float, dict, Any]:
-    """Run ``plskit.pls1_find_k_optimal(return_fwer=True)``.
-
-    Inputs ``Xs, ys`` are assumed already-standardised (forwarded with
-    ``pre_standardized_X=True``).
-
-    Returns
-    -------
-    k_star : int
-        Selected component count.
-    fwer_alpha : float
-        FWER-corrected p-value at ``k_star`` — used as the SSD p-value.
-    info : dict
-        ``pvalue`` (= ``fwer_alpha``), ``fwer_method``, ``selector``,
-        ``k_star``, plus ``n_perm`` / ``n_splits`` when applicable, and
-        ``random_state``.
-    raw : plskit.FindKOptimalResult
-        Full plskit output — kept around for diagnostics.
-    """
-    if fwer_method not in FWER_METHODS:
-        raise ValueError(
-            f"Unknown fwer_method {fwer_method!r}. "
-            f"Choose from {FWER_METHODS}."
-        )
-    args: dict = {}
-    if selector != "bic":
-        args["n_folds"] = int(n_folds)
-    if fwer_method in ("raw_perm", "split_perm"):
-        args["fwer_n_perm"] = int(n_perm)
-    if fwer_method in ("split_nb", "split_perm"):
-        args["fwer_n_splits"] = int(n_splits)
-
-    r = plskit.pls1_find_k_optimal(
-        np.asarray(Xs, dtype=np.float64),
-        np.asarray(ys, dtype=np.float64),
-        int(k_max),
-        selector=selector,
-        return_fwer=True,
-        fwer_method=fwer_method,
-        args=args or None,
-        pre_standardized_X=True,
-        seed=seed,
-        verbose=verbose,
-    )
-
-    info: dict = {
-        "pvalue": float(r.fwer_alpha),
-        "split_r2": None,
-        "fwer_method": r.fwer_method,
-        "selector": r.selector,
-        "k_star": int(r.k_star),
-        "random_state": r.seed,
-    }
-    if fwer_method in ("raw_perm", "split_perm"):
-        info["n_perm"] = int(n_perm)
-    if fwer_method in ("split_nb", "split_perm"):
-        info["n_splits"] = int(n_splits)
-    return int(r.k_star), float(r.fwer_alpha), info, r
+__all__ = ("mpls_fit",)
 
 
 def mpls_fit(
@@ -197,7 +32,7 @@ def mpls_fit(
     ----------
     Xs, ys : ndarray
         Already-standardised ``X`` / ``y``. The caller standardises
-        upstream (matches ``plskit.pls1_fit``'s ``pre_standardized_X=True``
+        upstream (matches ``plskit.pls1_fit``'s ``pre_standardized=True``
         path).
     n_components : int
         Exact number of components. Raises if NIPALS deflation collapses.
@@ -219,7 +54,7 @@ def mpls_fit(
     ys = np.asarray(ys, dtype=np.float64)
 
     try:
-        model = plskit.pls1_fit(Xs, ys, k=n_components, pre_standardized_X=True)
+        model = plskit.pls1_fit(Xs, ys, k=n_components, pre_standardized=True)
     except plskit.PlsKitError as exc:
         raise ValueError(
             f"plskit.pls1_fit rejected n_components={n_components}: {exc}. "

@@ -242,7 +242,7 @@ def test_words_without_embeddings_raises_runtime_error(ssd_instance):
     Note: Result.attach(embeddings=None) is a no-op (guarded by `if embeddings is not None`).
     To simulate the un-attached state we directly set the attribute and clear the cache.
     """
-    result = ssd_instance.fit_pls(k=1, test_method="raw_perm", n_perm=20, random_state=0)
+    result = ssd_instance.fit_pls(k=1, n_splits=20, random_state=0)
 
     # Save original embeddings so we can restore after the test
     original_emb = result.embeddings

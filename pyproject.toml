@@ -32,7 +32,7 @@ classifiers = [
 dependencies = [
   "numpy>=1.26.4",
   "spacy>=3.7.2",
-  "plskit>=0.0.1",
+  "plskit>=0.1.0",
 ]
 
 [project.optional-dependencies]
@@ -65,6 +65,9 @@ testpaths = ["tests"]
 markers = [
   "slow: marks tests as slow (deselect with '-m \"not slow\"')",
   "local: marks tests that need local files not in repo",
+]
+filterwarnings = [
+  "ignore:Saving as .*normalization and ABTT metadata will be lost.*:UserWarning",
 ]
 
 [tool.ruff]

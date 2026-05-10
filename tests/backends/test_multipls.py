@@ -49,7 +49,7 @@ class TestMplsFit:
 
         rng = np.random.default_rng(11)
         Xs, ys, Es = self._make_toy(rng)
-        coef_ref = plskit.pls1_fit(Xs, ys, k=3, pre_standardized_X=True).coef
+        coef_ref = plskit.pls1_fit(Xs, ys, k=3, pre_standardized=True).coef
 
         out = mpls_fit(Xs, ys, n_components=3, rotate="varimax", E_target=Es)
         np.testing.assert_allclose(
@@ -135,7 +135,7 @@ class TestMplsFit:
         out = mpls_fit(Xs, ys, n_components=k, rotate="varimax", E_target=E_target)
 
         # Direct plskit.rotate against the same L the orchestrator computes.
-        model = plskit.pls1_fit(Xs, ys, k=k, pre_standardized_X=True)
+        model = plskit.pls1_fit(Xs, ys, k=k, pre_standardized=True)
         L = E_target @ model.W
         direct = plskit.rotate(model.W, method="varimax", L=L)
 

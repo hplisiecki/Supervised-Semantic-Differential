@@ -51,7 +51,9 @@ def make_kv(words: list[str], dim: int, seed: int = 42) -> Embeddings:
     rng = np.random.default_rng(seed)
     mat = rng.normal(size=(len(words), dim)).astype(np.float32)
     mat /= np.linalg.norm(mat, axis=1, keepdims=True)
-    return Embeddings(words, mat)
+    emb = Embeddings(words, mat)
+    emb.l2_normalized = True  # rows are unit by construction
+    return emb
 
 
 @pytest.fixture(scope="session")
@@ -292,7 +294,7 @@ def ssd_instance(tiny_kv, sample_docs, sample_y, lexicon):
 @pytest.fixture(scope="session")
 def pls_result(ssd_instance):
     """Fitted PLSResult from SSD.fit_pls()."""
-    return ssd_instance.fit_pls(k=2, test_method="raw_perm", n_perm=50, random_state=42)
+    return ssd_instance.fit_pls(k=2, n_splits=20, random_state=42)
 
 
 @pytest.fixture(scope="session")

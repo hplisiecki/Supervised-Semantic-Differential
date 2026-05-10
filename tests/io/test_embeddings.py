@@ -269,7 +269,9 @@ class TestSimilarByVector:
         rng = np.random.default_rng(42)
         mat = rng.normal(size=(len(words), 8)).astype(np.float32)
         mat /= np.linalg.norm(mat, axis=1, keepdims=True)
-        return Embeddings(words, mat)
+        emb = Embeddings(words, mat)
+        emb.l2_normalized = True  # rows are unit by construction
+        return emb
 
     def test_self_similarity_rank0(self, emb):
         v = emb["kraj"]
@@ -294,28 +296,6 @@ class TestSimilarByVector:
         results = emb.similar_by_vector(v, topn=4)
         sims = [s for _, s in results]
         assert sims == sorted(sims, reverse=True)
-
-
-# ---------------------------------------------------------------------------
-# 8. get_normed_vectors() on non-pre-normalized Embeddings
-# ---------------------------------------------------------------------------
-
-class TestGetNormedVectors:
-    def test_returns_unit_vectors(self):
-        emb = _make_emb(n=6, dim=5)
-        # Confirm it is NOT already unit-normed
-        norms_before = np.linalg.norm(emb.vectors, axis=1)
-        assert not np.allclose(norms_before, 1.0, atol=1e-5)
-        normed = emb.get_normed_vectors()
-        norms_after = np.linalg.norm(normed, axis=1)
-        np.testing.assert_allclose(norms_after, 1.0, atol=1e-6)
-
-    def test_already_unit_normed_returns_same_object(self):
-        emb = _make_emb(n=4, dim=4)
-        emb.normalize(l2=True, abtt=0)
-        normed = emb.get_normed_vectors()
-        # After normalize(l2=True), get_normed_vectors should return vectors directly
-        assert normed is emb.vectors
 
 
 # ---------------------------------------------------------------------------
@@ -353,3 +333,81 @@ class TestLoadErrors:
     def test_nonexistent_bin_raises_file_not_found(self):
         with pytest.raises(FileNotFoundError):
             Embeddings.load("/tmp/nonexistent_ssdiff_test_xyz_12345.bin")
+
+
+# ---------------------------------------------------------------------------
+# 11. load auto-detects unit rows → l2_normalized flag
+# ---------------------------------------------------------------------------
+
+def test_load_autodetects_unit_rows(tmp_path):
+    """Embeddings.load auto-detects unit rows and sets l2_normalized=True."""
+    import numpy as np
+    from ssdiff.embeddings import Embeddings
+
+    rng = np.random.default_rng(0)
+    mat = rng.normal(size=(50, 8)).astype(np.float32)
+    mat /= np.linalg.norm(mat, axis=1, keepdims=True)
+    emb = Embeddings([f"w{i}" for i in range(50)], mat)
+    emb.l2_normalized = True
+    p = tmp_path / "norm"
+    emb.save(str(p), fmt="txt")
+
+    reloaded = Embeddings.load(str(p) + ".txt")
+    assert reloaded.l2_normalized is True
+
+
+def test_load_does_not_falsely_set_unit_flag(tmp_path):
+    """Embeddings.load leaves l2_normalized=False when rows are not unit."""
+    import numpy as np
+    from ssdiff.embeddings import Embeddings
+
+    rng = np.random.default_rng(0)
+    mat = rng.normal(size=(50, 8)).astype(np.float32) * 5.0  # not unit
+    emb = Embeddings([f"w{i}" for i in range(50)], mat)
+    p = tmp_path / "raw"
+    emb.save(str(p), fmt="txt")
+
+    reloaded = Embeddings.load(str(p) + ".txt")
+    assert reloaded.l2_normalized is False
+
+
+def test_ssd_init_raises_on_unnormed_embedding(tiny_kv, sample_docs, sample_y, lexicon):
+    """SSD requires L2-normalised embeddings."""
+    import pytest
+    from ssdiff import SSD, Corpus
+    # Force the flag off to simulate a raw (un-normalised) embedding.
+    tiny_kv_raw = type(tiny_kv).__new__(type(tiny_kv))
+    tiny_kv_raw.__dict__.update(tiny_kv.__dict__)
+    tiny_kv_raw.l2_normalized = False
+    corpus = Corpus(sample_docs, lang="pl", pretokenized=True)
+    with pytest.raises(RuntimeError, match="L2-normalised embeddings"):
+        SSD(tiny_kv_raw, corpus, sample_y, lexicon)
+
+
+def test_get_vector_norm_true_raises_on_unnormed():
+    """get_vector(word, norm=True) raises when the embedding is not unit-normed."""
+    import numpy as np, pytest
+    from ssdiff.embeddings import Embeddings
+    raw = np.array([[3.0, 4.0]], dtype=np.float32)  # norm 5
+    emb = Embeddings(["a"], raw)
+    with pytest.raises(RuntimeError, match="L2-normalised"):
+        emb.get_vector("a", norm=True)
+
+
+def test_similar_by_vector_raises_on_unnormed():
+    """similar_by_vector raises when the embedding is not unit-normed."""
+    import numpy as np, pytest
+    from ssdiff.embeddings import Embeddings
+    raw = np.array([[3.0, 4.0], [1.0, 0.0]], dtype=np.float32)
+    emb = Embeddings(["a", "b"], raw)
+    with pytest.raises(RuntimeError, match="L2-normalised"):
+        emb.similar_by_vector(np.array([1.0, 0.0], dtype=np.float32))
+
+
+def test_lazy_normaliser_state_removed():
+    """The lazy normaliser API and its hidden state are gone."""
+    import numpy as np
+    from ssdiff.embeddings import Embeddings
+    assert not hasattr(Embeddings, "get_normed_vectors")
+    fresh = Embeddings(["a"], np.ones((1, 2), dtype=np.float32))
+    assert not hasattr(fresh, "_is_unit_normed")

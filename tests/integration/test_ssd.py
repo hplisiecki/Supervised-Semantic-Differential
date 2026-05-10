@@ -65,19 +65,19 @@ def test_construction_shapes(ssd_instance):
 
 def test_fit_pls_returns_plsresult(ssd_instance):
     from ssdiff.results.continuous_result import PLSResult
-    result = ssd_instance.fit_pls(k=2, test_method="score")
+    result = ssd_instance.fit_pls(k=2, n_splits=20)
     assert isinstance(result, PLSResult)
 
 
 def test_fit_pls_r2_in_range(ssd_instance):
     """PLSResult.stats.r2 is in [0, 1]."""
-    result = ssd_instance.fit_pls(k=2, test_method="score")
+    result = ssd_instance.fit_pls(k=2, n_splits=20)
     assert 0.0 <= result.stats.r2 <= 1.0
 
 
 def test_fit_pls_beta_shape(ssd_instance, tiny_kv):
     """beta shape is (D,) where D == embeddings.dim."""
-    result = ssd_instance.fit_pls(k=2, test_method="score")
+    result = ssd_instance.fit_pls(k=2, n_splits=20)
     D = tiny_kv.vectors.shape[1]
     assert result.beta.shape == (D,)
 
@@ -128,10 +128,10 @@ def test_fit_multipls_beta_combined_agrees_with_fit_pls(ssd_instance):
     from ssdiff.results.multi_pls_result import MultiPLSResult
 
     pls_result = ssd_instance.fit_pls(
-        k=2, test_method="score", random_state=42
+        k=2, n_splits=20, random_state=42
     )
     mpls_result = ssd_instance.fit_multipls(
-        k=2, test_method="score", random_state=42
+        k=2, n_splits=20, random_state=42
     )
 
     assert isinstance(mpls_result, MultiPLSResult)
@@ -163,14 +163,13 @@ def test_fit_pls_categorical_y_raises(tiny_kv, sample_docs, sample_groups, lexic
 # 10. fit_pls on y with only 1 unique value
 # ---------------------------------------------------------------------------
 
-def test_fit_pls_constant_y(tiny_kv, sample_docs, lexicon):
-    """fit_pls on constant y: r2 == 0.0 (no variance to explain)."""
+def test_fit_pls_constant_y_rejected(tiny_kv, sample_docs, lexicon):
+    """Constant y has zero variance — fitting PLS1 is undefined and must error."""
     constant_y = np.ones(len(sample_docs))
     corpus = Corpus(sample_docs, pretokenized=True, lang="pl")
     ssd = SSD(tiny_kv, corpus, constant_y, lexicon)
-    # constant y → ss_tot = 0 → r2 = 0.0 (no crash)
-    result = ssd.fit_pls(k=1, test_method="score")
-    assert result.stats.r2 == 0.0
+    with pytest.raises(Exception):
+        ssd.fit_pls(k=1, n_splits=20)
 
 
 # ---------------------------------------------------------------------------
@@ -183,8 +182,8 @@ def test_use_full_doc_differs(tiny_kv, sample_docs, sample_y, lexicon):
     ssd_ctx = SSD(tiny_kv, corpus, sample_y, lexicon, use_full_doc=False)
     ssd_full = SSD(tiny_kv, corpus, sample_y, None, use_full_doc=True)
 
-    res_ctx = ssd_ctx.fit_pls(k=1, test_method="score")
-    res_full = ssd_full.fit_pls(k=1, test_method="score")
+    res_ctx = ssd_ctx.fit_pls(k=1, n_splits=20)
+    res_full = ssd_full.fit_pls(k=1, n_splits=20)
 
     # Results should differ — at minimum their betas are not identical
     assert not np.allclose(res_ctx.beta, res_full.beta), (
@@ -214,7 +213,7 @@ def test_progress_hook_does_not_break_fit_pls(ssd_instance):
 
     with progress_hook(cb):
         result = ssd_instance.fit_pls(
-            k=1, test_method="raw_perm", n_perm=10, random_state=1
+            k=1, n_splits=20, random_state=1
         )
 
     # Hook may legitimately receive zero calls; what we care about is
@@ -328,10 +327,10 @@ def test_multipls_sign_flip_stability(ssd_instance):
     deterministic PLS path and is not affected by random seeds in mpls_fit).
     """
     res1 = ssd_instance.fit_multipls(
-        k=2, test_method="score", random_state=1
+        k=2, n_splits=20, random_state=1
     )
     res2 = ssd_instance.fit_multipls(
-        k=2, test_method="score", random_state=9999
+        k=2, n_splits=20, random_state=9999
     )
 
     bc1 = res1["combined"].beta
@@ -349,7 +348,7 @@ def test_multipls_sign_flip_stability(ssd_instance):
 
 def test_multipls_result_structure(ssd_instance):
     """MultiPLSResult has the expected keys and valid r2."""
-    result = ssd_instance.fit_multipls(k=2, test_method="score")
+    result = ssd_instance.fit_multipls(k=2, n_splits=20)
     assert "dim-1" in result._leaves
     assert "dim-2" in result._leaves
     assert "combined" in result._leaves

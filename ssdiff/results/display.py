@@ -36,7 +36,7 @@ DEFAULT_COLS: dict[str, tuple[str, ...]] = {
     # continuous
     "StatsView":           ("backend", "r2", "pvalue", "n_kept", "iqr_effect"),
     "OLSStatsView":        ("backend", "r2", "r2_adj", "pvalue", "n_kept", "iqr_effect"),
-    "FitInfoView":         ("n_components", "pca_k", "p_method", "random_state"),
+    "FitInfoView":         ("n_components", "pca_k", "p_at_k", "random_state"),
     "WordsView":           ("side", "rank", "word", "cos_beta"),
     "WordsViewSided":      ("side", "rank", "word", "cos_beta"),
     "ClustersViewSided":   ("cluster_id", "size", "coherence", "centroid_cos_beta"),

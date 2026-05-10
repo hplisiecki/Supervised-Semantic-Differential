@@ -68,7 +68,7 @@ class TestFilteredNeighbors:
         """
         # Build a query vector that is the average of the entire vocabulary
         # so that results are spread across the vocab
-        vecs = tiny_kv_large.get_normed_vectors()
+        vecs = tiny_kv_large.vectors
         mean_vec = vecs.mean(axis=0)
 
         result = filtered_neighbors(tiny_kv_large, mean_vec, topn=20, cand=50, restrict=50, lang="pl")
@@ -86,6 +86,7 @@ class TestFilteredNeighbors:
         # Extract their vectors from tiny_kv_large
         vecs = np.vstack([tiny_kv_large.get_vector(w) for w in bad_words]).astype(np.float32)
         bad_emb = Embeddings(bad_words, vecs)
+        bad_emb.l2_normalized = True  # vectors extracted from a unit-normed source
 
         rng = np.random.default_rng(0)
         vec = rng.normal(size=bad_emb.vector_size).astype(np.float32)
@@ -102,6 +103,7 @@ class TestFilteredNeighbors:
         clean_words = ["kraj", "dom"]
         vecs = np.vstack([tiny_kv_large.get_vector(w) for w in clean_words]).astype(np.float32)
         small_emb = Embeddings(clean_words, vecs)
+        small_emb.l2_normalized = True  # vectors extracted from a unit-normed source
 
         rng = np.random.default_rng(0)
         vec = rng.normal(size=small_emb.vector_size).astype(np.float32)
@@ -197,6 +199,7 @@ class TestClusterTopNeighbors:
         words = ["kraj", "dom", "praca", "ABC123", "Warszawa"]
         vecs = np.vstack([tiny_kv_large.get_vector(w) for w in words]).astype(np.float32)
         small_emb = Embeddings(words, vecs)
+        small_emb.l2_normalized = True  # vectors extracted from a unit-normed source
 
         rng = np.random.default_rng(0)
         beta = rng.normal(size=small_emb.vector_size).astype(np.float64)
@@ -218,6 +221,7 @@ class TestClusterTopNeighbors:
         words = ["kraj", "ABC123"]
         vecs = np.vstack([tiny_kv_large.get_vector(w) for w in words]).astype(np.float32)
         tiny_emb = Embeddings(words, vecs)
+        tiny_emb.l2_normalized = True  # vectors extracted from a unit-normed source
 
         rng = np.random.default_rng(0)
         beta = rng.normal(size=tiny_emb.vector_size).astype(np.float64)

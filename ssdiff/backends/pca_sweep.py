@@ -2,6 +2,16 @@
 
 Single-pass sweep over PCA_K values evaluating interpretability (cluster-based)
 and beta stability, then selects the best K via a joint AUCK score.
+
+The per-K cost is dominated by the cluster step (vocab GEMV + kmeans on 100×D
+points, twice per K).  The sweep runs in three passes so the costly GEMV
+collapses into a single batched GEMM:
+
+  Pass 1 — slice the cached SVD, fit OLS, orient β, compute β-stability.
+  Pass 2 — one (V, D) × (D, 2·N_K) GEMM yields all neighbor similarities.
+  Pass 3 — argpartition / regex-filter / kmeans per (K, side); the cluster
+           inputs come from indexing the cached normed vocab matrix, no
+           per-word dict lookups.
 """
 
 from __future__ import annotations
@@ -28,57 +38,83 @@ from ssdiff.backends._sweep_math import (
 from ssdiff.backends._sweep_math import (
     zscore_ignore_nan as _zscore_ignore_nan,
 )
+from ssdiff.lang_config import get_config as _get_lang_config
 from ssdiff.utils import _diagnostic
-from ssdiff.utils.math import unit_vector
-from ssdiff.utils.neighbors import cluster_top_neighbors
+from ssdiff.utils.math import kmeans_auto_k, unit_vector
+
+# Restrict neighbor search to the top-N most-frequent vocab rows; matches the
+# cluster_top_neighbors default used on the public path.
+_RESTRICT_VOCAB = 50_000
+# Candidate pool size before regex filtering — must be >= cluster_topn.
+_NEIGHBOR_CAND = 2000
+# kmeans seed and minimum cluster size — match cluster_top_neighbors defaults.
+_KMEANS_SEED = 2137
+_MIN_CLUSTER_SIZE = 2
 
 
-def _cluster_both_sides(
-    embeddings,
-    beta: np.ndarray,
-    *,
-    topn: int = 100,
-    k_min: int = 2,
-    k_max: int = 5,
-    restrict_vocab: int = 50000,
-    random_state: int = 2137,
-    lang: str = "pl",
-    min_cluster_size: int = 2,
-) -> list[dict]:
-    """Cluster top neighbors of both +beta and -beta poles.
+def _top_indices_filtered(
+    sim_col: np.ndarray,
+    keys: list[str],
+    bad_re,
+    topn: int,
+    cand: int,
+) -> np.ndarray:
+    """Return top-``topn`` filtered vocab indices from a similarity column.
 
-    Wraps :func:`~ssdiff.utils.neighbors.cluster_top_neighbors` (pure numpy)
-    for both poles and returns a combined list of cluster dicts compatible
-    with :func:`~ssdiff.backends._sweep_math.overall_interpretability`.
+    Mirrors :func:`~ssdiff.utils.neighbors.filtered_neighbors` but takes a
+    precomputed similarity column so a batched GEMM can fan out to many K's.
     """
-    all_clusters: list[dict] = []
+    V = sim_col.shape[0]
+    cand = min(cand, V)
+    if cand <= 0:
+        return np.empty(0, dtype=np.intp)
+    raw = np.argpartition(-sim_col, cand - 1)[:cand]
+    raw = raw[np.argsort(-sim_col[raw])]
+    out: list[int] = []
+    for i in raw:
+        if not bad_re.match(keys[int(i)]):
+            out.append(int(i))
+            if len(out) >= topn:
+                break
+    return np.asarray(out, dtype=np.intp)
 
-    for side in ("pos", "neg"):
-        try:
-            clusters = cluster_top_neighbors(
-                embeddings, beta,
-                topn=topn,
-                k=None,
-                k_min=k_min,
-                k_max=k_max,
-                restrict_vocab=restrict_vocab,
-                random_state=random_state,
-                min_cluster_size=min_cluster_size,
-                side=side,
-                lang=lang,
-            )
-        except ValueError:
+
+def _cluster_from_indices(
+    emb_n: np.ndarray,
+    indices: np.ndarray,
+    beta_unit: np.ndarray,
+    *,
+    side: str,
+    k_min: int,
+    k_max: int,
+) -> list[dict]:
+    """Cluster the rows of ``emb_n`` selected by ``indices``.
+
+    Returns the keys consumed by
+    :func:`~ssdiff.backends._sweep_math.overall_interpretability` —
+    ``side``, ``size``, ``centroid_cos_beta``, ``coherence``.  Drops
+    ``words`` because the sweep aggregates only.
+    """
+    if len(indices) < max(2, k_min):
+        raise ValueError("Not enough neighbors to cluster.")
+    W = emb_n[indices].astype(np.float64, copy=False)
+    labels, _centers, _inertia, _k_use = kmeans_auto_k(
+        W, k_min=k_min, k_max=min(k_max, len(W)), random_state=_KMEANS_SEED,
+    )
+    clusters: list[dict] = []
+    for cid in sorted(set(labels)):
+        idx = np.where(labels == cid)[0]
+        if len(idx) < _MIN_CLUSTER_SIZE:
             continue
-
-        for c in clusters:
-            all_clusters.append({
-                "side": side,
-                "size": c["size"],
-                "centroid_cos_beta": c["centroid_cos_beta"],
-                "coherence": c["coherence"],
-            })
-
-    return all_clusters
+        Wc = W[idx]
+        centroid = unit_vector(Wc.mean(axis=0))
+        clusters.append({
+            "side": side,
+            "size": int(len(idx)),
+            "centroid_cos_beta": float(centroid @ beta_unit),
+            "coherence": float(np.mean((Wc @ centroid).astype(float))),
+        })
+    return clusters
 
 
 def pca_sweep(
@@ -153,35 +189,34 @@ def pca_sweep(
     n, D = Xs.shape
     X_scale_safe = np.where(X_scale > 1e-12, X_scale, 1.0)
 
-    rows: list[dict] = []
-    beta_prev: np.ndarray | None = None
-
     # Precompute full SVD once — each K just slices the first K components.
     U_full, S_full, Vt_full = np.linalg.svd(Xs, full_matrices=False)
     explained_var_full = (S_full ** 2) / (n - 1)
     total_var_full = float(explained_var_full.sum())
 
-    from ssdiff.utils import _progress
-
-    for K in _progress(pca_k_values, verbose=verbose,
-                       total=len(pca_k_values), desc="PCA sweep"):
-
+    # ---- Pass 1: per-K linear algebra (cheap, no embedding lookups) -------
+    # Each record is (ok, K, var_expl, gradient, beta_delta).
+    # Failed K's keep ok=False and are skipped in Pass 2/3.
+    records: list[tuple[bool, int, float, np.ndarray | None, float]] = []
+    beta_prev: np.ndarray | None = None
+    for K in pca_k_values:
         try:
             max_k = min(K, n - 1, D)
             if max_k < 1:
                 raise ValueError(f"PCA_K={K} too large for data (n={n}, D={D})")
 
-            # Slice precomputed SVD
-            components_k = Vt_full[:max_k]          # (max_k, D)
-            z = Xs @ components_k.T                  # (n, max_k)
-            var_expl = float(explained_var_full[:max_k].sum() / total_var_full * 100) if total_var_full > 0 else 0.0
+            components_k = Vt_full[:max_k]               # (max_k, D)
+            z = Xs @ components_k.T                       # (n, max_k)
+            var_expl = (
+                float(explained_var_full[:max_k].sum() / total_var_full * 100)
+                if total_var_full > 0 else 0.0
+            )
 
             # OLS in PCA space (normal equations, matches official)
             w_reg = np.linalg.solve(z.T @ z, z.T @ ys)
 
             # Back-project to document space
-            beta_std = components_k.T @ w_reg
-            beta = beta_std / X_scale_safe
+            beta = (components_k.T @ w_reg) / X_scale_safe
 
             # Orient beta so higher alignment → higher outcome
             yhat = (x @ beta).ravel()
@@ -196,51 +231,91 @@ def pca_sweep(
 
             gradient = unit_vector(beta)
 
-            # Beta stability
             if beta_prev is not None:
                 beta_delta = 1.0 - _cosine(beta_prev, gradient)
             else:
-                beta_delta = np.nan
+                beta_delta = float("nan")
             beta_prev = gradient
 
-            # Interpretability via clustering BOTH sides (matches official)
-            clusters = _cluster_both_sides(
-                embeddings, beta,
-                topn=cluster_topn,
-                k_min=cluster_k_min,
-                k_max=cluster_k_max,
-                lang=lang,
-            )
-            overall = _overall_interpretability(
-                clusters, weight_by_size=weight_by_size,
-            )
-
-            rows.append(dict(
-                PCA_K=int(K),
-                var_explained=var_expl,
-                mean_coherence=overall["mean_coherence"],
-                mean_abs_cosb=overall["mean_abs_cosb"],
-                aggregate=overall["aggregate"],
-                n_clusters=overall["n_clusters"],
-                total_size=overall["total_size"],
-                beta_delta_1_minus_cos=(
-                    float(beta_delta) if np.isfinite(beta_delta) else np.nan
-                ),
-            ))
-
+            records.append((True, int(K), var_expl, gradient, float(beta_delta)))
         except (np.linalg.LinAlgError, ValueError) as e:
             _diagnostic(verbose, f"[sweep] PCA_K={K} skipped: {type(e).__name__}: {e}")
+            records.append((False, int(K), float("nan"), None, float("nan")))
+            beta_prev = None
+
+    # ---- Pass 2: one batched GEMM for all valid K's, both sides -----------
+    # emb_n is the cached, restricted, L2-normalized vocab matrix; the matmul
+    # is float32 to match the per-K path's dtype (similar_by_vector casts to
+    # float32), so argpartition produces identical rankings.
+    emb_n_full = embeddings.vectors
+    restrict = min(_RESTRICT_VOCAB, emb_n_full.shape[0])
+    emb_n = emb_n_full[:restrict]
+    keys = embeddings.index_to_key
+    bad_re = _get_lang_config(lang).bad_token_re
+
+    valid_records = [r for r in records if r[0]]
+    if valid_records:
+        cols = []
+        for _ok, _K, _var, gradient, _bd in valid_records:
+            cols.append(gradient)
+            cols.append(-gradient)
+        # Stack as (D, 2 * N_valid) and cast once to embedding dtype.
+        B = np.stack(cols, axis=1).astype(emb_n.dtype, copy=False)
+        sims_all = emb_n @ B                              # (V, 2 * N_valid)
+    else:
+        sims_all = None
+
+    # ---- Pass 3: filter + cluster per (K, side); aggregate per K ----------
+    from ssdiff.utils import _progress
+
+    rows: list[dict] = []
+    col = 0
+    for ok, K, var_expl, gradient, beta_delta in _progress(
+        records, verbose=verbose, total=len(records), desc="PCA sweep",
+    ):
+        if not ok:
             rows.append(dict(
-                PCA_K=int(K),
-                var_explained=np.nan,
-                mean_coherence=np.nan,
-                mean_abs_cosb=np.nan,
-                aggregate=np.nan,
+                PCA_K=K,
+                var_explained=float("nan"),
+                mean_coherence=float("nan"),
+                mean_abs_cosb=float("nan"),
+                aggregate=float("nan"),
                 n_clusters=0,
                 total_size=0,
-                beta_delta_1_minus_cos=np.nan,
+                beta_delta_1_minus_cos=float("nan"),
             ))
-            beta_prev = None
+            continue
+
+        clusters: list[dict] = []
+        for side, side_off in (("pos", 0), ("neg", 1)):
+            sim_col = sims_all[:, col + side_off]
+            try:
+                indices = _top_indices_filtered(
+                    sim_col, keys, bad_re,
+                    topn=cluster_topn, cand=_NEIGHBOR_CAND,
+                )
+                clusters.extend(_cluster_from_indices(
+                    emb_n, indices, gradient,
+                    side=side,
+                    k_min=cluster_k_min, k_max=cluster_k_max,
+                ))
+            except ValueError:
+                continue
+        col += 2
+
+        overall = _overall_interpretability(clusters, weight_by_size=weight_by_size)
+        rows.append(dict(
+            PCA_K=K,
+            var_explained=var_expl,
+            mean_coherence=overall["mean_coherence"],
+            mean_abs_cosb=overall["mean_abs_cosb"],
+            aggregate=overall["aggregate"],
+            n_clusters=overall["n_clusters"],
+            total_size=overall["total_size"],
+            beta_delta_1_minus_cos=(
+                float(beta_delta) if np.isfinite(beta_delta) else float("nan")
+            ),
+        ))
 
     # Sort rows by PCA_K
     rows.sort(key=lambda r: r["PCA_K"])
