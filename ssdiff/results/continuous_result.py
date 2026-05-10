@@ -48,7 +48,7 @@ class FitInfoView(ScalarView):
 
     _name = "fit_info"
     _columns = (
-        "n_components", "pca_k", "p_method", "n_perm", "n_splits",
+        "n_components", "pca_k", "p_at_k", "n_splits",
         "split_mean_r", "random_state",
         "k_min", "k_max", "k_step", "best_k", "pca_k_source",
     )
@@ -793,50 +793,53 @@ class SweepView(View[SweepRow]):
 
 
 class PLSTestView(TestView):
-    """`.test` for PLSResult — confirmatory test at the fitted k."""
+    """`.test` for PLSResult — split_nb confirmatory test at the fitted k."""
 
-    _columns = ("name", "pvalue", "split_r2", "n_splits",
-                "n_perm", "random_state")
+    _columns = ("name", "pvalue", "split_r2", "n_splits", "random_state")
     _default_name = "split_nb"
 
     _DEFAULTS = {
-        "raw_perm":   dict(n_perm=2000, seed=None, verbose=False),
-        "split_nb":   dict(n_splits=50, seed=None, verbose=False),
-        "split_perm": dict(n_splits=50, n_perm=2000, seed=None, verbose=False),
-        "score":      dict(seed=None, verbose=False),
-        "e":          dict(seed=None, verbose=False),
+        "split_nb": dict(n_splits=50, seed=None, verbose=False),
     }
 
     def _run(self, name, params):
-        """Dispatch to plskit and return (name, info_dict)."""
-        from ssdiff.backends.pls import confirmatory_test
+        """Dispatch to plskit and return ('split_nb', info_dict)."""
+        import plskit
 
-        if name not in self._DEFAULTS:
-            raise ValueError(
-                f"Unknown PLS test {name!r}. "
-                f"Available: {tuple(self._DEFAULTS)}"
+        if name is not None and name != "split_nb":
+            raise TypeError(
+                f"PLSTestView only supports method='split_nb' "
+                f"(got {name!r}). Pass kwargs only: "
+                f".test(n_splits=..., seed=...)."
             )
-        merged = {**self._DEFAULTS[name], **params}
+        merged = {**self._DEFAULTS["split_nb"], **params}
         parent = self._parent
-        n_comp = parent.fit_info.n_components or 1
-        return confirmatory_test(
-            parent.x, parent.y, n_comp,
-            method=name,
-            n_perm=merged.get("n_perm", 2000),
-            n_splits=merged.get("n_splits", 50),
+        n_comp = parent.fit_info.p_at_k or parent.fit_info.n_components or 1
+        r = plskit.pls1_confirmatory_test(
+            parent.x.astype(float, copy=False),
+            parent.y.astype(float, copy=False),
+            int(n_comp),
+            method="split_nb",
+            args={"n_splits": int(merged["n_splits"])},
+            pre_standardized=False,
             seed=merged["seed"],
             verbose=merged["verbose"],
         )
+        info = {
+            "pvalue": float(r.pvalue),
+            "statistic": float(r.statistic),
+            "split_r2": float(r.statistic),
+            "n_splits": r.n_splits,
+            "random_state": r.seed,
+        }
+        return "split_nb", info
 
     def _on_rerun(self):
         """Propagate the updated p-value back to parent stats after a rerun."""
         self._parent._refresh_stats_pvalue(self.pvalue)
 
     def _rerun_hint(self) -> str:
-        return (
-            "Rerun: .test('raw_perm'|'split_nb'|'split_perm'|'score'|'e', "
-            "n_perm=..., n_splits=...)"
-        )
+        return "Rerun: .test(n_splits=..., seed=...)"
 
 
 class PCAOLSTestView(TestView):
@@ -1104,10 +1107,10 @@ class ContinuousResult(_SingleResult):
 
         fi = self.fit_info
         fit_rows = []
-        if fi.p_method is not None:
-            fit_rows.append(("p_method", fi.p_method))
         if fi.n_components is not None:
             fit_rows.append(("n_components", fi.n_components))
+        if fi.p_at_k is not None:
+            fit_rows.append(("p_at_k", fi.p_at_k))
         if fi.pca_k is not None:
             fit_rows.append(("pca_k", fi.pca_k))
         if fi.pca_k_source is not None:
@@ -1191,7 +1194,7 @@ class PLSResult(ContinuousResult):
     find_k_result : plskit.FindKOptimalResult | None
         Full ``plskit.pls1_find_k_optimal`` output when ``k="auto"``;
         ``None`` otherwise. Inspect ``find_k_result.k_star``,
-        ``find_k_result.cv_scores``, ``find_k_result.fwer_pvalues``.
+        ``find_k_result.cv_scores``, ``find_k_result.pvalues``.
     cv_scores : dict | None
         Flat ``{k: cv_score}`` dict — convenience copy of
         ``find_k_result.cv_scores`` (None when ``k`` was an int).

@@ -88,6 +88,18 @@ class SSD:
         if sif_a <= 0:
             raise ValueError(f"sif_a must be > 0, got {sif_a}")
 
+        if not embeddings.l2_normalized:
+            raise RuntimeError(
+                "SSD requires L2-normalised embeddings. Call "
+                "emb.normalize(l2=True, abtt=N) before constructing SSD."
+            )
+
+        if getattr(embeddings, "_partial", False) and not getattr(embeddings, "_corpus_attached", False):
+            raise RuntimeError(
+                "RAM-efficient embeddings: call emb.attach_corpus(corpus) "
+                "before constructing SSD."
+            )
+
         self.embeddings = embeddings
         self.corpus = corpus
         self.lexicon = set(lexicon) if lexicon is not None else set()
@@ -221,13 +233,18 @@ class SSD:
         *,
         k: int | Literal["auto"] = "auto",
         k_max: int = 5,
-        test_method: Literal["raw_perm", "split_nb", "split_perm", "score", "e"] = "split_nb",
-        n_perm: int = 1000,
         n_splits: int = 50,
         random_state: int = 2137,
         verbose: bool = False,
     ):
         """Fit PLS1 NIPALS and return PLSResult.
+
+        Significance is always tested with the split_nb method
+        (Lenartowicz, 2026). For ``k="auto"`` the reported p-value is the
+        **honest k=1 confirmatory** test — independent of the
+        ``find_k_optimal`` selection that picks ``k_star`` for the actual
+        fit. When ``k_star == 1`` the find_k chain entry at index 0 is
+        reused as the k=1 honest p (it is the same statistic).
 
         Parameters
         ----------
@@ -237,30 +254,13 @@ class SSD:
             - ``int`` — fit at exactly this k; p-value comes from
               ``plskit.pls1_confirmatory_test`` at this k.
             - ``"auto"`` — let ``plskit.pls1_find_k_optimal`` pick
-              ``k_star`` (selector ``"r2_se"``) and report the FWER
-              p-value at that k as the SSD p-value. This is the only
-              auto-selection mode SSD exposes; the alternatives in
-              plskit are not reliable enough to default to.
+              ``k_star`` (selector ``"r2_se"``); p-value is the honest
+              k=1 confirmatory split_nb statistic.
         k_max : int, default 5
             Cap for ``k="auto"``. Further clamped to ``min(k_max, n-1, D)``.
             Ignored when ``k`` is an int.
-        test_method : str, default ``"split_nb"``
-            Significance test method. Used as ``method`` for the
-            confirmatory test (``k=int``) and as ``fwer_method`` for
-            ``find_k_optimal`` (``k="auto"``). ``"score"`` is only
-            valid for the confirmatory path.
-
-            - ``"raw_perm"`` — permutation test on CV R² (uses ``n_perm``).
-            - ``"split_nb"`` — split-half overlap-corrected t-test
-              (Lenartowicz, 2026; uses ``n_splits``).
-            - ``"split_perm"`` — permutation-calibrated split-half
-              (uses ``n_perm`` and ``n_splits``).
-            - ``"score"`` — analytic score test (k=int only).
-            - ``"e"`` — e-value test.
-        n_perm : int, default 1000
-            Permutation iterations for ``"raw_perm"`` / ``"split_perm"``.
         n_splits : int, default 50
-            Random splits for ``"split_nb"`` / ``"split_perm"``.
+            Random splits for the split_nb test.
         random_state : int, default 2137
             Random seed.
         verbose : bool
@@ -271,10 +271,6 @@ class SSD:
         """
         import plskit
 
-        from ssdiff.backends.pls import (
-            confirmatory_test,
-            find_k_optimal_with_fwer,
-        )
         from ssdiff.results.continuous_result import PLSResult
 
         if not self.is_numeric:
@@ -283,25 +279,71 @@ class SSD:
                 "categorical labels — use fit_groups() instead."
             )
 
-        # Standardize y (deferred from __init__)
         ys_2d, _y_mean, _y_scale = standardize(self.y.reshape(-1, 1))
         ys = ys_2d.ravel()
-
-        # Standardize X
         Xs, X_mean, X_scale = standardize(self.x)
 
         n_kept, D = Xs.shape
 
-        # Resolve k → (n_comp, test_name, test_info, find_k_raw)
+        find_k_raw = None
         if k == "auto":
             eff_k_max = max(min(int(k_max), n_kept - 1, D), 1)
-            n_comp, _, test_info, find_k_raw = find_k_optimal_with_fwer(
+            if verbose:
+                print(
+                    f"[fit_pls] auto-selecting k via find_k_optimal "
+                    f"(selector=r2_se, k_max={eff_k_max})"
+                )
+            find_k_raw = plskit.pls1_find_k_optimal(
                 Xs, ys, eff_k_max,
-                fwer_method=test_method,
-                n_perm=n_perm, n_splits=n_splits,
-                seed=random_state, verbose=verbose,
+                selector="r2_se",
+                diagnostic="split_nb",
+                args={"n_folds": 5, "n_splits": int(n_splits)},
+                pre_standardized=True,
+                seed=random_state,
+                verbose=verbose,
             )
-            test_name = test_method
+            k_star = int(find_k_raw.k_star)
+            if verbose:
+                print(f"[fit_pls] k_star = {k_star}")
+            if k_star == 1:
+                pvalue = float(find_k_raw.pvalues[0])
+                if verbose:
+                    print(
+                        f"[fit_pls] k_star = 1 — reusing chain[0] as the "
+                        f"honest k=1 p (split_nb)"
+                    )
+                    print(f"[fit_pls] honest p (k=1) = {pvalue:.6g}")
+            else:
+                if verbose:
+                    chain = ", ".join(
+                        f"{p:.3g}" for p in find_k_raw.pvalues[:k_star]
+                    )
+                    path_max = float(np.nanmax(find_k_raw.pvalues[:k_star]))
+                    print(
+                        f"[fit_pls] diagnostic chain (split_nb, k=1..{k_star}): "
+                        f"{chain}"
+                    )
+                    print(
+                        f"        path-max: {path_max:.3g}  "
+                        f"[same-sample, not honest — informational only]"
+                    )
+                    print(
+                        f"[fit_pls] running k=1 confirmatory test "
+                        f"(split_nb, n_splits={n_splits})"
+                    )
+                r = plskit.pls1_confirmatory_test(
+                    Xs, ys, 1,
+                    method="split_nb",
+                    args={"n_splits": int(n_splits)},
+                    pre_standardized=True,
+                    seed=random_state,
+                    verbose=verbose,
+                )
+                pvalue = float(r.pvalue)
+                if verbose:
+                    print(f"[fit_pls] honest p (k=1) = {pvalue:.6g}")
+            n_comp = k_star
+            p_at_k = 1
         elif isinstance(k, int):
             if k < 1:
                 raise ValueError(f"k must be >= 1, got {k}")
@@ -311,25 +353,27 @@ class SSD:
                     f"Cannot fit PLS: need at least 2 samples and 1 feature, "
                     f"got n={n_kept}, features={D}, requested k={k}"
                 )
-            test_name, test_info = confirmatory_test(
-                self.x, self.y, n_comp,
-                method=test_method,
-                n_perm=n_perm, n_splits=n_splits,
-                seed=random_state, verbose=verbose,
+            r = plskit.pls1_confirmatory_test(
+                Xs, ys, n_comp,
+                method="split_nb",
+                args={"n_splits": int(n_splits)},
+                pre_standardized=True,
+                seed=random_state,
+                verbose=verbose,
             )
-            find_k_raw = None
+            pvalue = float(r.pvalue)
+            p_at_k = n_comp
         else:
             raise ValueError(f"k must be int or 'auto', got {k!r}")
 
-        # Fit PLS at the resolved k.
-        m = plskit.pls1_fit(Xs, ys, k=n_comp, pre_standardized_X=True, seed=random_state)
+        m = plskit.pls1_fit(
+            Xs, ys, k=n_comp, pre_standardized=True, seed=random_state,
+        )
         T, P, W, Q, coef = m.T, m.P, m.W, m.Q, m.coef
 
-        # Statistics
         y_pred = Xs @ coef
         stats = self._compute_fit_stats(ys, y_pred, W.shape[1])
 
-        # Back-project to embedding space
         scale = np.where(X_scale > 1e-12, X_scale, 1.0)
         beta = coef / scale
         beta = self._orient_beta(beta, ys)
@@ -338,16 +382,20 @@ class SSD:
         kwargs["_y_mean"] = _y_mean
         kwargs["_y_scale"] = _y_scale
 
+        test_info = {
+            "pvalue": pvalue,
+            "n_splits": int(n_splits),
+            "random_state": random_state,
+        }
+
         return PLSResult(
             beta=beta,
-            pvalue=test_info["pvalue"],
+            pvalue=pvalue,
             r2=stats["r2"],
             fit_info={
                 "n_components": n_comp,
-                "p_method": test_name,
-                "split_mean_r": test_info.get("split_r2"),
-                "n_perm": test_info.get("n_perm"),
-                "n_splits": test_info.get("n_splits"),
+                "p_at_k": p_at_k,
+                "n_splits": int(n_splits),
                 "random_state": random_state,
             },
             raw_diagnostics={
@@ -355,7 +403,7 @@ class SSD:
                 "component_scores": T,
                 "component_weights": W,
             },
-            test_name=test_name,
+            test_name="split_nb",
             test_info=test_info,
             **kwargs,
         )
@@ -368,18 +416,20 @@ class SSD:
         k: int | Literal["auto"] = "auto",
         k_max: int = 5,
         rotate: Literal["raw", "varimax"] = "varimax",
-        test_method: Literal["raw_perm", "split_nb", "split_perm", "score", "e"] = "split_nb",
-        n_perm: int = 1000,
         n_splits: int = 50,
         random_state: int = 2137,
         verbose: bool = False,
     ):
         """Fit PLS1, rotate the W-subspace, return a :class:`MultiPLSResult`.
 
-        Mirrors :meth:`fit_pls` but returns a container of per-dim leaves
-        keyed ``"dim-1"``, ``"dim-2"``, …, ``"combined"`` — one leaf per
-        rotated axis plus one for the (rotation-invariant) unrotated
-        prediction β.
+        Container-level p-value follows :meth:`fit_pls` (honest k=1 for
+        ``k="auto"``, confirmatory at ``k`` for ``k=int``). In addition,
+        each rotated dim leaf gains a diagnostic ``pvalue`` field: for
+        ``k="auto"`` these are read off the ``find_k_optimal`` chain;
+        for ``k=int`` they come from ``n_comp`` individual
+        ``pls1_confirmatory_test(ki)`` calls (ki=1..n_comp). In both
+        cases the chain is remapped via ``mpls_fit``'s ``order``
+        permutation.
 
         Parameters
         ----------
@@ -389,22 +439,26 @@ class SSD:
         k_max : int, default 5
             Cap for ``k="auto"``. Clamped to ``min(k_max, n-1, D)``.
         rotate : {"raw", "varimax"}, default "varimax"
-            Rotation applied to the W-subspace. ``"raw"`` still reorders
-            dims by ``|corr(t_i, y)|`` and sign-flips; the subspace is
-            preserved.
-        test_method, n_perm, n_splits, random_state, verbose
-            Same meaning and defaults as :meth:`fit_pls`.
+            Rotation applied to the W-subspace.
+        n_splits : int, default 50
+            Random splits for the split_nb test.
+        random_state, verbose
+            Same as :meth:`fit_pls`.
 
         Returns
         -------
         MultiPLSResult
         """
-        from ssdiff.backends.pls import (
-            confirmatory_test,
-            find_k_optimal_with_fwer,
-            mpls_fit,
-        )
+        import plskit
+
+        from ssdiff.backends.pls import mpls_fit
         from ssdiff.results.multi_pls_result import MultiPLSResult
+
+        if getattr(self.embeddings, "_partial", False):
+            raise RuntimeError(
+                "fit_multipls needs full vocabulary as rotation target; "
+                "reload with ram_efficient=False."
+            )
 
         if not self.is_numeric:
             raise ValueError(
@@ -418,22 +472,67 @@ class SSD:
                 "embeddings=...) or re-construct SSD with embeddings."
             )
 
-        # Standardise X and y here (mpls_fit expects pre-standardised inputs).
         Xs, X_mean, X_scale = standardize(self.x)
         ys_2d, _, _ = standardize(self.y.reshape(-1, 1))
         ys = ys_2d.ravel()
-
         n_kept, D = Xs.shape
 
         if k == "auto":
             eff_k_max = max(min(int(k_max), n_kept - 1, D), 1)
-            n_comp, _, test_info, _ = find_k_optimal_with_fwer(
+            if verbose:
+                print(
+                    f"[fit_multipls] auto-selecting k via find_k_optimal "
+                    f"(selector=r2_se, k_max={eff_k_max})"
+                )
+            find_k_raw = plskit.pls1_find_k_optimal(
                 Xs, ys, eff_k_max,
-                fwer_method=test_method,
-                n_perm=n_perm, n_splits=n_splits,
-                seed=random_state, verbose=verbose,
+                selector="r2_se",
+                diagnostic="split_nb",
+                args={"n_folds": 5, "n_splits": int(n_splits)},
+                pre_standardized=True,
+                seed=random_state,
+                verbose=verbose,
             )
-            test_name = test_method
+            k_star = int(find_k_raw.k_star)
+            if verbose:
+                print(f"[fit_multipls] k_star = {k_star}")
+            if k_star == 1:
+                pvalue = float(find_k_raw.pvalues[0])
+                if verbose:
+                    print(
+                        f"[fit_multipls] k_star = 1 — reusing chain[0] as "
+                        f"the honest k=1 p (split_nb)"
+                    )
+                    print(f"[fit_multipls] honest p (k=1) = {pvalue:.6g}")
+            else:
+                if verbose:
+                    chain = ", ".join(
+                        f"{p:.3g}" for p in find_k_raw.pvalues[:k_star]
+                    )
+                    print(
+                        f"[fit_multipls] diagnostic chain "
+                        f"(split_nb, k=1..{k_star}): {chain}"
+                    )
+                    print(
+                        f"[fit_multipls] running k=1 confirmatory test "
+                        f"(split_nb, n_splits={n_splits})"
+                    )
+                r = plskit.pls1_confirmatory_test(
+                    Xs, ys, 1,
+                    method="split_nb",
+                    args={"n_splits": int(n_splits)},
+                    pre_standardized=True,
+                    seed=random_state,
+                    verbose=verbose,
+                )
+                pvalue = float(r.pvalue)
+                if verbose:
+                    print(f"[fit_multipls] honest p (k=1) = {pvalue:.6g}")
+            n_comp = k_star
+            p_at_k = 1
+            chain_pvalues = np.asarray(
+                find_k_raw.pvalues[:n_comp], dtype=float,
+            )
         elif isinstance(k, int):
             if k < 1:
                 raise ValueError(f"k must be >= 1, got {k}")
@@ -443,21 +542,30 @@ class SSD:
                     f"Cannot fit PLS: need at least 2 samples and 1 feature, "
                     f"got n={n_kept}, features={D}, requested k={k}"
                 )
-            test_name, test_info = confirmatory_test(
-                self.x, self.y, n_comp,
-                method=test_method,
-                n_perm=n_perm, n_splits=n_splits,
-                seed=random_state, verbose=verbose,
+            r = plskit.pls1_confirmatory_test(
+                Xs, ys, n_comp,
+                method="split_nb",
+                args={"n_splits": int(n_splits)},
+                pre_standardized=True,
+                seed=random_state,
+                verbose=verbose,
             )
+            pvalue = float(r.pvalue)
+            p_at_k = n_comp
+            chain_pvalues = np.array([
+                float(plskit.pls1_confirmatory_test(
+                    Xs, ys, ki,
+                    method="split_nb",
+                    args={"n_splits": int(n_splits)},
+                    pre_standardized=True,
+                    seed=random_state,
+                    verbose=False,
+                ).pvalue)
+                for ki in range(1, n_comp + 1)
+            ], dtype=float)
         else:
             raise ValueError(f"k must be int or 'auto', got {k!r}")
 
-        # mpls_fit receives a callable rotation target that lazily projects
-        # the full vocabulary onto the W-subspace:
-        #   L = ((E - X_mean) / X_scale) @ W
-        # Folding the centring/scaling into a tiny (D, k) factor avoids
-        # materialising a (V, D) standardised copy of the embeddings —
-        # for GloVe-800 that's hundreds of MB of peak RAM saved per call.
         emb = self.embeddings.vectors
         emb_dtype = emb.dtype
         X_mean_v = X_mean.astype(emb_dtype, copy=False)
@@ -465,7 +573,7 @@ class SSD:
 
         def project_target(W: np.ndarray) -> np.ndarray:
             M = (W / scale_v[:, None]).astype(emb_dtype, copy=False)
-            offset = X_mean_v @ M  # (k,)
+            offset = X_mean_v @ M
             L = emb @ M
             L -= offset
             return L
@@ -476,10 +584,18 @@ class SSD:
             E_target=project_target,
         )
 
-        # Standardised-space R² (matches fit_pls.r2 semantics).
+        order = np.asarray(mp_out["order"], dtype=int)
+        per_dim_pvalues = chain_pvalues[order]
+
         y_pred = Xs @ mp_out["beta_combined"]
         stats = self._compute_fit_stats(ys, y_pred, n_comp)
         r2 = stats["r2"]
+
+        test_info = {
+            "pvalue": pvalue,
+            "n_splits": int(n_splits),
+            "random_state": random_state,
+        }
 
         return MultiPLSResult(
             x=self.x, y=self.y,
@@ -489,7 +605,9 @@ class SSD:
             n_components=n_comp,
             rotation_meta=mp_out["rotation_meta"],
             r2=r2,
-            test_name=test_name,
+            per_dim_pvalues=per_dim_pvalues,
+            p_at_k=p_at_k,
+            test_name="split_nb",
             test_info=test_info,
             embeddings=self.embeddings,
             corpus=self.corpus,

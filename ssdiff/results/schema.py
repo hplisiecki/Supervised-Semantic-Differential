@@ -294,8 +294,7 @@ class FitInfo:
     n_components: int | None = None
     # PLS-specific
     pca_k: int | None = None
-    p_method: str | None = None      # "raw_perm" | "split_nb" | "split_perm" | None
-    n_perm: int | None = None
+    p_at_k: int | None = None        # k at which the reported p-value was tested
     n_splits: int | None = None
     split_mean_r: float | None = None
     random_state: int | None = None

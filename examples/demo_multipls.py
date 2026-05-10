@@ -29,7 +29,7 @@ for dim, col in dimensions.items():
     ssd = SSD(emb, corpus_full, ratings[dim], use_full_doc=True)
 
     print("── varimax, k=auto ──")
-    res_varimax = ssd.fit_multipls(n_components="auto", rotate="varimax", p_method=None)
+    res_varimax = ssd.fit_multipls(k="auto", rotate="varimax")
     print(res_varimax.stats)
     print(res_varimax.words)
     # res_varimax.report(top_words=10).save(f"multipls_varimax_{dim}.md")

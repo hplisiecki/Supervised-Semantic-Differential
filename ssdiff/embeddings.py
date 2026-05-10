@@ -11,14 +11,31 @@ import numpy as np
 
 from ssdiff.utils.math import l2_normalize_rows_inplace
 
+# Hard cap on rows materialised in RAM mode; matches
+# pca_sweep._RESTRICT_VOCAB so all "top-vocab" knobs share one number.
+_RAM_TOP_N: int = 50_000
+
 
 class Embeddings:
     """Stores word vectors and provides lookup / nearest-neighbor search.
 
-    >>> emb = Embeddings.load("model.ssdembed")
-    >>> emb.normalize(l2=True, abtt=1)
+    L2-normalised rows are a precondition for ``SSD``; use
+    ``.normalize(l2=True, abtt=N)`` after loading a raw embedding, or
+    rely on ``Embeddings.load``'s autodetect when reloading an already-
+    normalised file.
+
+    >>> emb = Embeddings.load("model.ssdembed").normalize(l2=True, abtt=1)
     >>> emb.save("model_norm")          # saves model_norm.ssdembed
-    >>> emb.save(fmt="kv")              # saves model.kv  (needs gensim)
+
+    For low-RAM environments, pass ``ram_efficient=True`` to
+    :meth:`load` (uncompressed ``.ssdembed`` only) and call
+    :meth:`attach_corpus` before constructing ``SSD``. RAM-mode
+    embeddings are read-only — :meth:`normalize`, :meth:`save`, and
+    ``SSD.fit_multipls`` raise.
+
+    >>> emb = Embeddings.load("model.ssdembed", ram_efficient=True)
+    >>> emb.attach_corpus(corpus)
+    >>> ssd = SSD(emb, corpus, y, lexicon).fit_pls()
     """
 
     def __init__(self, keys: list[str] | tuple[str, ...], vectors: np.ndarray) -> None:
@@ -40,83 +57,183 @@ class Embeddings:
         self.key_to_index: dict[str, int] = {w: i for i, w in enumerate(self.index_to_key)}
         self.vector_size: int = self.vectors.shape[1] if self.vectors.ndim == 2 else 0
         self._norms: np.ndarray | None = None
-        self._normed_vectors: np.ndarray | None = None
-        self._is_unit_normed: bool = False
         self.l2_normalized: bool = False
         self.abtt: int = 0
         self._source_path: str | None = None
+        # Phase B placeholders (set by ram_efficient load path); always
+        # present so downstream code can read them unconditionally.
+        self._partial: bool = False
+        self._corpus_attached: bool = False
+        self._local_row: dict[int, int] | None = None
+        self._mmap = None
+        self._full_vocab_size: int | None = None
+        self._prefix_size: int | None = None
 
     def __getstate__(self) -> dict:
         """Return pickle state, omitting large recomputable attributes.
 
         Drops ``key_to_index`` (rebuilt from ``index_to_key`` on load),
-        ``_normed_vectors``, and ``_norms`` to keep the pickle small and
-        allow memory-mapped loading of the vector matrix from a sidecar
-        ``.vectors.npy`` file.
+        ``_norms``, and any RAM-mode handles to keep the pickle small
+        and allow memory-mapped loading of the vector matrix from a
+        sidecar ``.vectors.npy`` file.
         """
         state = self.__dict__.copy()
-        # key_to_index is rebuilt from index_to_key on load — skip it to
-        # avoid pickling a ~200 MB dict for large vocabularies.
         state.pop("key_to_index", None)
-        state.pop("_normed_vectors", None)
         state.pop("_norms", None)
+        # RAM-mode handles are transient; partial embeddings are not
+        # picklable (see save() guard from Task B5).
+        state.pop("_mmap", None)
         return state
 
     def __setstate__(self, state: dict) -> None:
         """Restore from pickle state, migrating legacy attribute names.
 
-        Handles two legacy renames introduced before v1.0:
-        ``_l2_normalized`` → ``l2_normalized``, ``_abtt_m`` / ``abtt_m``
-        → ``abtt``.  Also re-initialises ``key_to_index`` and cache
-        attributes if they are absent (e.g. loaded from an older pickle).
+        Handles legacy renames introduced before v1.0
+        (``_l2_normalized`` → ``l2_normalized``, ``_abtt_m`` /
+        ``abtt_m`` → ``abtt``) and drops obsolete attributes from older
+        pickles (``_normed_vectors``, ``_is_unit_normed``).
         """
-        # Migrate legacy attribute names:
-        #   pre-1.0: _l2_normalized, _abtt_m  (private, leading underscore)
-        #   1.0:     abtt_m                    (renamed to .abtt for v1.x)
         if "_l2_normalized" in state and "l2_normalized" not in state:
             state["l2_normalized"] = state.pop("_l2_normalized")
         if "_abtt_m" in state and "abtt_m" not in state and "abtt" not in state:
             state["abtt_m"] = state.pop("_abtt_m")
         if "abtt_m" in state and "abtt" not in state:
             state["abtt"] = state.pop("abtt_m")
+        # Drop attributes from older pickles that no longer exist.
+        state.pop("_normed_vectors", None)
+        state.pop("_is_unit_normed", None)
         self.__dict__.update(state)
         if not hasattr(self, "key_to_index"):
             self.key_to_index = {w: i for i, w in enumerate(self.index_to_key)}
-        if not hasattr(self, "_normed_vectors"):
-            self._normed_vectors = None
         if not hasattr(self, "_norms"):
             self._norms = None
+        for attr, default in (
+            ("_partial", False),
+            ("_corpus_attached", False),
+            ("_local_row", None),
+            ("_mmap", None),
+            ("_full_vocab_size", None),
+            ("_prefix_size", None),
+        ):
+            if not hasattr(self, attr):
+                setattr(self, attr, default)
 
     # ---- construction ----
 
     @classmethod
-    def load(cls, path: str, *, verbose: bool = False, parallel: bool = False) -> Embeddings:
+    def load(
+        cls,
+        path: str,
+        *,
+        verbose: bool = False,
+        parallel: bool = False,
+        ram_efficient: bool = False,
+    ) -> Embeddings:
         """Load embeddings from file. Auto-detects format by extension.
 
         Supports: .ssdembed, .kv, .bin, .txt, .vec (and .gz variants).
 
+        After loading, rows are checked once: if every row has
+        L2 norm ≈ 1 (tolerance 1e-5), ``l2_normalized`` is set to True.
+
         Parameters
         ----------
         path : str
-            Path to the embedding file.
         verbose : bool, default False
-            If True, show a tqdm progress bar while loading (requires
-            ``tqdm``; silently ignored if not installed).  Effective for
-            serial text (.txt/.vec) and binary (.bin) formats where the
-            vocabulary size is known.  Ignored for pickle-based formats
-            (.ssdembed, .kv) and parallel text loading.
         parallel : bool, default False
-            If True, use multiprocess loading for .txt/.vec files.
-            Ignored for other formats.
+        ram_efficient : bool, default False
+            Low-RAM fallback. Requires uncompressed ``.ssdembed``.
+            Materialises only the first ``_RAM_TOP_N`` rows (rank-aligned
+            prefix) at load time; call :meth:`attach_corpus` afterwards
+            to materialise the corpus tokens. RAM-mode embeddings are
+            read-only.
 
         Returns
         -------
         Embeddings
-            A new Embeddings instance populated from the file.
         """
+        if ram_efficient:
+            return cls._load_ram_efficient(path)
+
         emb = _load_embeddings(path, verbose=verbose, parallel=parallel)
         emb._source_path = path
+        if not emb.l2_normalized and emb.vectors.shape[0] > 0:
+            norms = np.sqrt(np.einsum("ij,ij->i", emb.vectors, emb.vectors))
+            if np.all(np.abs(norms - 1.0) < 1e-5):
+                emb.l2_normalized = True
         return emb
+
+    @classmethod
+    def _load_ram_efficient(cls, path: str) -> Embeddings:
+        """RAM-efficient .ssdembed loader. See ``load(ram_efficient=True)``."""
+        low = path.lower()
+        if not low.endswith(".ssdembed") or low.endswith(".ssdembed.gz"):
+            raise ValueError(
+                "RAM-efficient mode requires uncompressed .ssdembed. "
+                "Convert once with `Embeddings.load(path).save('out')`."
+            )
+
+        npy_path = path + ".vectors.npy"
+        if not os.path.exists(npy_path):
+            raise FileNotFoundError(
+                f"Missing sidecar '{npy_path}'. RAM-efficient mode requires "
+                "the .vectors.npy sidecar produced by Embeddings.save(fmt='ssdembed')."
+            )
+
+        # Load the small pickle (no vector data — sidecar holds the matrix).
+        with open(path, "rb") as f:
+            shim = _GensimUnpickler(f).load()
+
+        if isinstance(shim, _GensimKVShim):
+            shim = shim.to_embeddings()
+        if not isinstance(shim, Embeddings):
+            if hasattr(shim, "index_to_key"):
+                shim = cls(list(shim.index_to_key), np.empty((0, 0), dtype=np.float32))
+            else:
+                raise ValueError(f"Cannot load pickle embeddings: unexpected type {type(shim)}")
+
+        mmap = np.load(npy_path, mmap_mode="r")
+        v_full, dim = mmap.shape
+
+        # Small-vocab no-op: fall through to a regular full load.
+        if v_full <= _RAM_TOP_N:
+            shim.vectors = np.array(mmap)
+            shim.vector_size = dim
+            shim._norms = None
+            shim._source_path = path
+            if not shim.l2_normalized:
+                norms = np.sqrt(np.einsum("ij,ij->i", shim.vectors, shim.vectors))
+                if np.all(np.abs(norms - 1.0) < 1e-5):
+                    shim.l2_normalized = True
+            return shim
+
+        # Phase 1: copy the first _RAM_TOP_N rows into RAM; keep mmap open
+        # for Phase 2 (attach_corpus).
+        try:
+            slice_rows = np.array(mmap[:_RAM_TOP_N])
+            norms = np.sqrt(np.einsum("ij,ij->i", slice_rows, slice_rows))
+            if not np.all(np.abs(norms - 1.0) < 1e-5):
+                raise RuntimeError(
+                    "RAM-efficient mode requires pre-normalised embeddings. "
+                    "Run Embeddings.load(path).normalize(l2=True, abtt=N).save(path) "
+                    "once, then reload with ram_efficient=True."
+                )
+        except Exception:
+            del mmap
+            raise
+
+        shim.vectors = slice_rows
+        shim.vector_size = dim
+        shim._norms = None
+        shim._source_path = path
+        shim._partial = True
+        shim._corpus_attached = False
+        shim._local_row = {i: i for i in range(_RAM_TOP_N)}
+        shim._mmap = mmap
+        shim._full_vocab_size = v_full
+        shim._prefix_size = _RAM_TOP_N
+        shim.l2_normalized = True
+        return shim
 
     # ---- normalization ----
 
@@ -133,6 +250,11 @@ class Embeddings:
             irreversible).
         re_normalize : L2-normalize again after ABTT.
         """
+        if self._partial:
+            raise RuntimeError(
+                "RAM-efficient embeddings are read-only. Pre-normalise on "
+                "the full embeddings, save as .ssdembed, then reload."
+            )
         V = self.vectors
         if not V.flags.writeable:
             V = np.array(V)
@@ -182,11 +304,40 @@ class Embeddings:
 
         # --- Update state ---
         if did_l2 or did_abtt:
-            self._is_unit_normed = not did_abtt or re_normalize
             self._norms = None
-            self._normed_vectors = None
             self.fill_norms()
 
+        return self
+
+    def attach_corpus(self, corpus) -> Embeddings:
+        """Materialise corpus-token rows above the rank-aligned prefix.
+
+        No-op when ``_partial`` is False (full-mode embedding). After
+        this call the mmap handle is closed and the embedding is fully
+        in RAM.
+        """
+        if not self._partial:
+            return self
+        from ssdiff.utils.lexicon import _texts_to_token_lists
+
+        flat_docs = _texts_to_token_lists(corpus.docs)
+        extras: list[int] = []
+        seen: set[int] = set()
+        cap = self.vectors.shape[0]  # equals _RAM_TOP_N at the moment of load
+        for doc in flat_docs:
+            for token in doc:
+                oi = self.key_to_index.get(token)
+                if oi is None or oi < cap or oi in self._local_row or oi in seen:
+                    continue
+                seen.add(oi)
+                extras.append(oi)
+        if extras:
+            new_rows = np.asarray(self._mmap[extras])
+            self.vectors = np.vstack([self.vectors, new_rows])
+            for i, oi in enumerate(extras):
+                self._local_row[oi] = cap + i
+        self._mmap = None
+        self._corpus_attached = True
         return self
 
     # ---- internal helpers ----
@@ -194,7 +345,6 @@ class Embeddings:
     def fill_norms(self) -> None:
         """Precompute L2 norms."""
         self._norms = np.sqrt(np.einsum("ij,ij->i", self.vectors, self.vectors))
-        self._normed_vectors = None
 
     @property
     def vocab_size(self) -> int:
@@ -219,41 +369,6 @@ class Embeddings:
             self.fill_norms()
         return self._norms  # type: ignore[return-value]
 
-    def get_normed_vectors(self) -> np.ndarray:
-        """Return L2-normalized vectors.
-
-        Returns
-        -------
-        numpy.ndarray, shape (n_words, dim)
-            Float array of unit-length row vectors.  Normalizes
-            ``self.vectors`` **in place** on first call to avoid duplicating
-            a potentially multi-GB matrix in RAM.  After this call the
-            instance is in the same state as if :meth:`normalize` had been
-            invoked with ``l2=True, abtt=0``.
-        """
-        if self._is_unit_normed:
-            return self.vectors
-        n = self.norms
-        # Fast path: if rows are already ~unit (pre-normalized file), just
-        # flip the flag and skip mutation — tolerates float32 round-off.
-        if np.all(np.abs(n - 1.0) < 1e-5):
-            self._is_unit_normed = True
-            self.l2_normalized = True
-            return self.vectors
-        V = self.vectors
-        if not V.flags.writeable:
-            V = np.array(V)
-            self.vectors = V
-        zero_mask = n < 1e-12
-        safe_n = np.where(zero_mask, 1.0, n).astype(V.dtype, copy=False)
-        V /= safe_n[:, None]
-        if zero_mask.any():
-            V[zero_mask] = 0.0
-        self._is_unit_normed = True
-        self.l2_normalized = True
-        self._norms = None
-        return V
-
     # ---- lookup ----
 
     def __contains__(self, word: str) -> bool:
@@ -263,7 +378,16 @@ class Embeddings:
         return len(self.index_to_key)
 
     def __getitem__(self, word: str) -> np.ndarray:
-        return self.vectors[self.key_to_index[word]]
+        oi = self.key_to_index[word]
+        if self._partial:
+            local = self._local_row.get(oi)
+            if local is None:
+                raise KeyError(
+                    f"{word!r} is in vocab but not materialised; "
+                    "call attach_corpus(corpus) first"
+                )
+            return self.vectors[local]
+        return self.vectors[oi]
 
     def __repr__(self) -> str:
         header = (
@@ -290,7 +414,8 @@ class Embeddings:
         word : str
             Word to look up.
         norm : bool, default False
-            If True, return the L2-normalized vector.
+            If True, return the (already unit) row from ``self.vectors``.
+            Raises ``RuntimeError`` when ``not self.l2_normalized``.
 
         Returns
         -------
@@ -300,11 +425,25 @@ class Embeddings:
         Raises
         ------
         KeyError
-            If *word* is not in the vocabulary.
+            If *word* is not in the vocabulary, or in RAM mode if it is in
+            vocab but has not been materialised (call ``attach_corpus`` first).
+        RuntimeError
+            If ``norm=True`` and ``self.l2_normalized`` is False.
         """
+        if norm and not self.l2_normalized:
+            raise RuntimeError(
+                "get_vector(norm=True) requires L2-normalised embeddings. "
+                "Call .normalize(l2=True) first."
+            )
         idx = self.key_to_index[word]
-        if norm:
-            return self.get_normed_vectors()[idx]
+        if self._partial:
+            local = self._local_row.get(idx)
+            if local is None:
+                raise KeyError(
+                    f"{word!r} is in vocab but not materialised; "
+                    "call attach_corpus(corpus) first"
+                )
+            return self.vectors[local]
         return self.vectors[idx]
 
     # ---- persistence ----
@@ -336,6 +475,11 @@ class Embeddings:
         >>> emb.save("out/model_norm", fmt="kv")     # → out/model_norm.kv
         >>> emb.save(fmt="txt")                      # → <source_stem>.txt
         """
+        if self._partial:
+            raise RuntimeError(
+                "Cannot save a RAM-efficient (partial) embedding. "
+                "Save the full embedding once before enabling RAM mode."
+            )
         if fmt not in self._FORMATS:
             raise ValueError(f"Unknown format {fmt!r}; choose from {sorted(self._FORMATS)}")
         if fmt != "ssdembed" and (self.l2_normalized or self.abtt > 0):
@@ -386,7 +530,6 @@ class Embeddings:
         saved_source = self._source_path
         self.vectors = np.zeros((0, self.vector_size), dtype=np.float32)
         self._norms = None
-        self._normed_vectors = None
         self._source_path = None
         try:
             with open(path, "wb") as f:
@@ -395,7 +538,6 @@ class Embeddings:
             self.vectors = saved_vectors
             self._source_path = saved_source
             self._norms = None
-            self._normed_vectors = None
 
     def _save_binary(self, path: str) -> None:
         """Write embeddings to word2vec binary format (.bin)."""
@@ -434,21 +576,43 @@ class Embeddings:
             Number of nearest neighbors to return.
         restrict_vocab : int or None, default None
             If set, only search the first *restrict_vocab* words in the
-            vocabulary (useful to limit results to most frequent words).
+            vocabulary. In RAM-efficient mode, clamped to the
+            rank-aligned prefix; values above the prefix size emit a
+            ``UserWarning`` and are clamped down.
 
         Returns
         -------
         list of (str, float)
-            Tuples of (word, cosine_similarity) sorted by descending
-            similarity. Returns an empty list if the query is a zero vector.
+
+        Raises
+        ------
+        RuntimeError
+            If ``self.l2_normalized`` is False.
         """
+        if not self.l2_normalized:
+            raise RuntimeError(
+                "similar_by_vector requires L2-normalised embeddings. "
+                "Call .normalize(l2=True) first."
+            )
         vec = np.asarray(vector, dtype=np.float32)
         vec_norm = np.linalg.norm(vec)
         if vec_norm < 1e-12:
             return []
         vec = vec / vec_norm
 
-        vecs = self.get_normed_vectors()
+        if self._partial:
+            cap = self._prefix_size  # rank-aligned prefix; fixed at load time
+            if restrict_vocab is None:
+                restrict_vocab = cap
+            elif restrict_vocab > cap:
+                warnings.warn(
+                    f"restrict_vocab={restrict_vocab} clamped to {cap} in "
+                    "RAM-efficient mode (only the rank-aligned prefix is searchable).",
+                    stacklevel=2,
+                )
+                restrict_vocab = cap
+
+        vecs = self.vectors
         if restrict_vocab is not None:
             vecs = vecs[:restrict_vocab]
         if len(vecs) == 0:
@@ -741,7 +905,6 @@ def _load_pickle(path: str) -> Embeddings:
             shim.vectors = np.load(vectors_npy)
             shim.vector_size = shim.vectors.shape[1]
             shim._norms = None
-            shim._normed_vectors = None
         return shim
 
     # Duck-type: object from another package (e.g. ssdiff.embeddings.Embeddings)

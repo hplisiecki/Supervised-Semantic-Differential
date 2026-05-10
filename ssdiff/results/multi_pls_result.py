@@ -8,7 +8,7 @@ Container of ``_PLSComponentResult`` leaves keyed by ``"dim-1"``,
 Access patterns (canonical):
 - ``res["dim-1"]`` → ``_PLSComponentResult`` for one rotated axis
 - ``res["combined"]`` → leaf holding the unrotated PLS prediction β
-- ``res.test(...)`` → rerun raw_perm / split_nb / split_perm at the container level
+- ``res.test(...)`` → rerun split_nb confirmatory test at the container level
 - ``res.pls_info`` → ``{k, rotate, order, signs, rotation_meta}``
 
 Power-user shortcuts (same data, different angle):
@@ -42,10 +42,12 @@ class _PLSComponentResult(_SingleResult):
         container,
         key: str,
         dim_index: int | None,
+        pvalue: float,
     ):
         self._container = container
         self._key = key
         self._dim_index = dim_index
+        self.pvalue = float(pvalue)
 
         if dim_index is None:
             beta = np.asarray(container._beta_combined, dtype=float).copy()
@@ -157,47 +159,56 @@ class MultiPLSStatsView(ScalarView):
 # ---------- MultiPLSTestView ----------
 
 class MultiPLSTestView(TestView):
-    """`.test` for MultiPLSResult — confirmatory test at the fitted k."""
+    """`.test` for MultiPLSResult — split_nb confirmatory test at the fitted k.
 
-    _columns = ("name", "pvalue", "split_r2", "n_splits",
-                "n_perm", "random_state")
+    Re-runs the **container-level** k=1 honest (or k=int confirmatory)
+    test only. Per-dim leaves do not own a rerun — their p-values come
+    from the find_k chain at fit time and are static.
+    """
+
+    _columns = ("name", "pvalue", "split_r2", "n_splits", "random_state")
     _default_name = "split_nb"
 
     _DEFAULTS = {
-        "raw_perm":   dict(n_perm=2000, seed=None, verbose=False),
-        "split_nb":   dict(n_splits=50, seed=None, verbose=False),
-        "split_perm": dict(n_splits=50, n_perm=2000, seed=None, verbose=False),
-        "score":      dict(seed=None, verbose=False),
-        "e":          dict(seed=None, verbose=False),
+        "split_nb": dict(n_splits=50, seed=None, verbose=False),
     }
 
     def _run(self, name, params):
-        from ssdiff.backends.pls import confirmatory_test
+        import plskit
 
-        if name not in self._DEFAULTS:
-            raise ValueError(
-                f"Unknown PLS test {name!r}. "
-                f"Available: {tuple(self._DEFAULTS)}"
+        if name is not None and name != "split_nb":
+            raise TypeError(
+                f"MultiPLSTestView only supports method='split_nb' "
+                f"(got {name!r}). Pass kwargs only: "
+                f".test(n_splits=..., seed=...)."
             )
-        merged = {**self._DEFAULTS[name], **params}
+        merged = {**self._DEFAULTS["split_nb"], **params}
         parent = self._parent
-        return confirmatory_test(
-            parent._x_raw, parent._y_raw, parent.n_components,
-            method=name,
-            n_perm=merged.get("n_perm", 2000),
-            n_splits=merged.get("n_splits", 50),
+        k_test = int(parent._p_at_k or parent.n_components)
+        r = plskit.pls1_confirmatory_test(
+            parent._x_raw.astype(float, copy=False),
+            parent._y_raw.astype(float, copy=False),
+            k_test,
+            method="split_nb",
+            args={"n_splits": int(merged["n_splits"])},
+            pre_standardized=False,
             seed=merged["seed"],
             verbose=merged["verbose"],
         )
+        info = {
+            "pvalue": float(r.pvalue),
+            "statistic": float(r.statistic),
+            "split_r2": float(r.statistic),
+            "n_splits": r.n_splits,
+            "random_state": r.seed,
+        }
+        return "split_nb", info
 
     def _on_rerun(self):
         self._parent._refresh_pvalue(self.pvalue)
 
     def _rerun_hint(self) -> str:
-        return (
-            "Rerun: .test('raw_perm'|'split_nb'|'split_perm'|'score'|'e', "
-            "n_perm=..., n_splits=...)"
-        )
+        return "Rerun: .test(n_splits=..., seed=...)"
 
 
 # ---------- MultiPLSResult ----------
@@ -210,7 +221,7 @@ class MultiPLSResult(_MultiContainer):
         res = ssd.fit_multipls(n_components=2, rotate="varimax")
         res["dim-1"].words         # rotated-axis top words
         res["combined"].words      # unrotated prediction β top words
-        res.test("split_perm")     # rerun test on the whole model
+        res.test(n_splits=100, seed=42)  # rerun test on the whole model
         res.pls_info               # rotation diagnostics
     """
 
@@ -236,6 +247,8 @@ class MultiPLSResult(_MultiContainer):
         n_components: int,
         rotation_meta: dict,
         r2: float,
+        per_dim_pvalues: np.ndarray,
+        p_at_k: int,
         test_name: str | None,
         test_info: dict | None,
         # The following echo SSD state for reconstruction & re-running tests.
@@ -257,6 +270,9 @@ class MultiPLSResult(_MultiContainer):
         self.beta_combined = self._beta_combined
 
         self.n_components = int(n_components)
+        self._per_dim_pvalues = np.asarray(per_dim_pvalues, dtype=float).copy()
+        self.per_dim_pvalues = self._per_dim_pvalues
+        self._p_at_k = int(p_at_k)
         self._rotation_meta = dict(rotation_meta)
         self.random_state = random_state
 
@@ -307,13 +323,16 @@ class MultiPLSResult(_MultiContainer):
     # ------ leaf construction & key formatting ---------------------------
     def _build_leaves(self) -> dict:
         leaves: dict = {}
+        container_p = self.stats._row["pvalue"]
         for i in range(self.n_components):
             key = f"dim-{i+1}"
             leaves[key] = _PLSComponentResult(
                 container=self, key=key, dim_index=i,
+                pvalue=float(self._per_dim_pvalues[i]),
             )
         leaves["combined"] = _PLSComponentResult(
             container=self, key="combined", dim_index=None,
+            pvalue=float(container_p),
         )
         return leaves
 
