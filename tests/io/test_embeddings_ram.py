@@ -182,8 +182,15 @@ def test_ram_save_raises(tmp_path, monkeypatch):
             ram.save(str(out), fmt=fmt)
 
 
-def test_fit_multipls_raises_in_ram_mode(tmp_path, monkeypatch):
-    """fit_multipls needs the full vocab as rotation target — refuses RAM mode."""
+def test_fit_multipls_no_warn_in_ram_mode_with_varimax(tmp_path, monkeypatch):
+    """fit_multipls in RAM mode runs varimax cleanly: no partial-vocab warning.
+
+    Rationale: rotation now explicitly targets the top ``rotation_vocab`` rows
+    (default 50_000), which collapses the "partial vs full" distinction —
+    ram_efficient + default rotation_vocab is identical to full-load +
+    rotation_vocab=50_000.
+    """
+    import warnings as _warnings
     import ssdiff.embeddings as em
     monkeypatch.setattr(em, "_RAM_TOP_N", 5)
 
@@ -197,8 +204,40 @@ def test_fit_multipls_raises_in_ram_mode(tmp_path, monkeypatch):
 
     y = list(np.linspace(0.0, 1.0, 20))
     ssd = SSD(ram, corpus, y, lexicon={"w0", "w1", "w2"})
-    with pytest.raises(RuntimeError, match="ram_efficient=False"):
-        ssd.fit_multipls(k=1)
+
+    with _warnings.catch_warnings(record=True) as caught:
+        _warnings.simplefilter("always")
+        res = ssd.fit_multipls(k=1, n_splits=10, random_state=0)
+
+    msgs = [str(w.message) for w in caught if issubclass(w.category, UserWarning)]
+    assert not any("materialized vocab subset" in m for m in msgs), msgs
+    assert res is not None
+
+
+def test_fit_multipls_raw_rotation_no_warn_in_ram_mode(tmp_path, monkeypatch):
+    """rotate='raw' does not use the embedding matrix → no partial-vocab warning."""
+    import warnings as _warnings
+    import ssdiff.embeddings as em
+    monkeypatch.setattr(em, "_RAM_TOP_N", 5)
+
+    words = [f"w{i}" for i in range(40)]
+    path = _make_ssdembed_with_named_words(tmp_path, words, dim=4)
+    ram = Embeddings.load(path, ram_efficient=True)
+
+    docs = [[f"w{i % 40}" for i in range(j, j + 4)] for j in range(20)]
+    corpus = Corpus(docs, lang="en", pretokenized=True)
+    ram.attach_corpus(corpus)
+
+    y = list(np.linspace(0.0, 1.0, 20))
+    ssd = SSD(ram, corpus, y, lexicon={"w0", "w1", "w2"})
+
+    with _warnings.catch_warnings(record=True) as caught:
+        _warnings.simplefilter("always")
+        res = ssd.fit_multipls(k=1, rotate="raw", n_splits=10, random_state=0)
+
+    msgs = [str(w.message) for w in caught if issubclass(w.category, UserWarning)]
+    assert not any("materialized vocab subset" in m for m in msgs)
+    assert res is not None
 
 
 def test_similar_by_vector_clamps_in_ram(tmp_path, monkeypatch):

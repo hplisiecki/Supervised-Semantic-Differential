@@ -101,7 +101,7 @@ class PLSInfoView(ScalarView):
 
     _name = "pls_info"
     _columns = (
-        "n_components", "rotate", "order", "signs",
+        "n_components", "rotate", "rotation_vocab", "order", "signs",
         "kaiser_normalized", "sweeps", "V_converged",
         "pvalue_source", "random_state",
     )
@@ -120,6 +120,7 @@ class PLSInfoView(ScalarView):
         self._row = {
             "n_components": int(n_components),
             "rotate": rotate,
+            "rotation_vocab": rotation_meta.get("rotation_vocab"),
             "order": tuple(int(i) for i in order) if order is not None else None,
             "signs": tuple(float(s) for s in signs) if signs is not None else None,
             "kaiser_normalized": rotation_meta.get("kaiser_normalized"),
