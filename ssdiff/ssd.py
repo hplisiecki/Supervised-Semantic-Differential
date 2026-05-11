@@ -416,6 +416,7 @@ class SSD:
         k: int | Literal["auto"] = "auto",
         k_max: int = 5,
         rotate: Literal["raw", "varimax"] = "varimax",
+        rotation_vocab: int | None = 50_000,
         n_splits: int = 50,
         random_state: int = 2137,
         verbose: bool = False,
@@ -440,6 +441,17 @@ class SSD:
             Cap for ``k="auto"``. Clamped to ``min(k_max, n-1, D)``.
         rotate : {"raw", "varimax"}, default "varimax"
             Rotation applied to the W-subspace.
+        rotation_vocab : int or None, default 50_000
+            Number of leading vocabulary rows fed to varimax as the
+            simple-structure target. Vocab rows are assumed to be
+            frequency-ranked (the word2vec/GloVe convention), so the
+            top-N is the well-estimated head; the long tail of rare-word
+            vectors is noisy and pulls varimax toward fitting noise.
+            ``None`` uses the full vocabulary. Clamped silently to the
+            available row count. No-op for ``rotate="raw"`` (which
+            doesn't touch the embedding matrix). Matches the 50k
+            convention shared with ``cluster_top_neighbors`` and
+            ``Embeddings.load(ram_efficient=True)``.
         n_splits : int, default 50
             Random splits for the split_nb test.
         random_state, verbose
@@ -454,12 +466,6 @@ class SSD:
         from ssdiff.backends.pls import mpls_fit
         from ssdiff.results.multi_pls_result import MultiPLSResult
 
-        if getattr(self.embeddings, "_partial", False):
-            raise RuntimeError(
-                "fit_multipls needs full vocabulary as rotation target; "
-                "reload with ram_efficient=False."
-            )
-
         if not self.is_numeric:
             raise ValueError(
                 "fit_multipls() requires numeric y. This SSD was constructed "
@@ -467,8 +473,8 @@ class SSD:
             )
         if self.embeddings is None:
             raise RuntimeError(
-                "fit_multipls() rotates against the full vocabulary, which "
-                "requires Embeddings; none attached. Call result.attach("
+                "fit_multipls() rotates against the embedding vocabulary, "
+                "which requires Embeddings; none attached. Call result.attach("
                 "embeddings=...) or re-construct SSD with embeddings."
             )
 
@@ -571,10 +577,16 @@ class SSD:
         X_mean_v = X_mean.astype(emb_dtype, copy=False)
         scale_v = X_scale.astype(emb_dtype, copy=False)
 
+        if rotation_vocab is None:
+            n_rot = int(emb.shape[0])
+        else:
+            n_rot = min(int(rotation_vocab), int(emb.shape[0]))
+        emb_rot = emb if n_rot == emb.shape[0] else emb[:n_rot]
+
         def project_target(W: np.ndarray) -> np.ndarray:
             M = (W / scale_v[:, None]).astype(emb_dtype, copy=False)
             offset = X_mean_v @ M
-            L = emb @ M
+            L = emb_rot @ M
             L -= offset
             return L
 
@@ -582,6 +594,9 @@ class SSD:
             Xs, ys,
             n_components=n_comp, rotate=rotate,
             E_target=project_target,
+        )
+        mp_out["rotation_meta"]["rotation_vocab"] = (
+            None if rotation_vocab is None else n_rot
         )
 
         order = np.asarray(mp_out["order"], dtype=int)

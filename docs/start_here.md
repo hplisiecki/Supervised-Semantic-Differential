@@ -16,11 +16,6 @@ This folder holds four tiers of documentation plus a runnable demo. Start wherev
 | [`../examples/demo_api.py`](../examples/demo_api.py) | See the whole pipeline in ~50 lines — load embeddings, build a corpus, fit PLS / PCA+OLS / groups, print stats, export a report. |
 | [`../examples/demo_multipls.py`](../examples/demo_multipls.py) | Minimal runnable example for the in-development `fit_multipls` (rotated multi-component PLS). |
 
-> **Migration (v1.x → next):** `SSD(emb, corpus, y, lexicon)` now requires
-> an L2-normalised embedding. Insert `.normalize(l2=True, abtt=1)` between
-> `Embeddings.load(...)` and `SSD(...)`. `.ssdembed` files saved by
-> previous runs of `normalize().save()` already carry `l2_normalized=True`
-> and need no change.
 
 ### For power users — making results do what you want
 
