@@ -643,6 +643,7 @@ class SSD:
         k_max: int = 120,
         k_step: int = 2,
         verbose: bool = False,
+        pca_sweep_args: dict | None = None,
     ):
         """Fit PCA + OLS and return PCAOLSResult.
 
@@ -654,6 +655,17 @@ class SSD:
             Range for PCA-K sweep when fixed_k is None.
         verbose : bool
             Print progress.
+        pca_sweep_args : dict, optional
+            Extra keyword arguments forwarded to
+            :func:`ssdiff.backends.pca_sweep.pca_sweep` when ``fixed_k is None``.
+            Useful for tuning the sweep's clustering / scoring (e.g.
+            ``cluster_topn``, ``cluster_k_min``, ``cluster_k_max``,
+            ``weight_by_size``, ``auck_radius``) or for enabling table output
+            (``save_tables``, ``out_dir``, ``prefix``).
+            Keys that ``fit_ols`` derives internally (``Xs``, ``X_scale``,
+            ``x``, ``ys``, ``embeddings``, ``pca_k_values``, ``verbose``,
+            ``lang``) cannot be overridden and raise ``ValueError`` if passed.
+            Ignored when ``fixed_k`` is set.
 
         Returns
         -------
@@ -676,6 +688,18 @@ class SSD:
 
         if fixed_k is None:
             from ssdiff.backends.pca_sweep import pca_sweep
+            reserved = {
+                "Xs", "X_scale", "x", "ys", "embeddings",
+                "pca_k_values", "verbose", "lang",
+            }
+            extra = dict(pca_sweep_args) if pca_sweep_args else {}
+            collisions = reserved & extra.keys()
+            if collisions:
+                raise ValueError(
+                    f"pca_sweep_args cannot override fit_ols-managed keys: "
+                    f"{sorted(collisions)}. Use the corresponding fit_ols "
+                    f"parameter (k_min/k_max/k_step, verbose) instead."
+                )
             sweep_result = pca_sweep(
                 Xs=Xs,
                 X_scale=X_scale,
@@ -685,6 +709,7 @@ class SSD:
                 pca_k_values=list(range(k_min, k_max + 1, k_step)),
                 verbose=verbose,
                 lang=self.lang,
+                **extra,
             )
             n_pca = sweep_result.best_k
         else:

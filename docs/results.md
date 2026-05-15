@@ -209,7 +209,7 @@ Returned by `fit_multipls()`. A container of per-component leaves plus a `"combi
 Each leaf is a `_PLSComponentResult` (a `_SingleResult`), so its interpretation views mirror `PLSResult`:
 
 ```python
-res = ssd.fit_multipls(n_components=2, rotate="varimax")
+res = ssd.fit_multipls(k=2, rotate="varimax")
 
 res["dim-1"].words          # top neighbors along the first rotated axis
 res["dim-1"].beta           # W_rot[:, 0]  (the axis direction)

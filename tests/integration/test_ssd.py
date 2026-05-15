@@ -114,7 +114,7 @@ def test_fit_ols_sweep(tiny_kv, large_docs, large_y, lexicon):
 # ---------------------------------------------------------------------------
 
 def test_fit_multipls_beta_combined_agrees_with_fit_pls(ssd_instance):
-    """MultiPLSResult['combined'].beta aligns with fit_pls(n_components=2).beta.
+    """MultiPLSResult['combined'].beta aligns with fit_pls(k=2).beta.
 
     Both derive from the same underlying pls1_fit coef vector, but live in
     different spaces: fit_pls back-projects coef to embedding space (divides
