@@ -279,6 +279,13 @@ class SSD:
                 "categorical labels — use fit_groups() instead."
             )
 
+        y_std = float(np.std(self.y))
+        if y_std <= 1e-12:
+            raise ValueError(
+                f"fit_pls() requires y with nonzero variance (std={y_std:.3g}). "
+                "PLS1 is undefined when y is constant."
+            )
+
         ys_2d, _y_mean, _y_scale = standardize(self.y.reshape(-1, 1))
         ys = ys_2d.ravel()
         Xs, X_mean, X_scale = standardize(self.x)
