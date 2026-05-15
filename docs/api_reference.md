@@ -24,7 +24,7 @@ ssd = SSD(emb, corpus, y=scores, lexicon=["happy", "sad", "joy", "anger"])
 result = ssd.fit_ols()         # PCA + OLS
 # result = ssd.fit_pls()       # PLS
 # result = ssd.fit_groups()    # categorical y
-# result = ssd.fit_multipls(n_components=2)  # rotated multi-component PLS (in development)
+# result = ssd.fit_multipls(k=2)  # rotated multi-component PLS (in development)
 
 print(result.stats)
 print(result.words)
@@ -296,7 +296,7 @@ result.report(...)          # narrative Report — .to_text() / .to_html() / .sa
 result.save(...)            # — not defined; export per-view instead
 result.words / .clusters / .snippets / .docs    # continuous; also .words/.clusters/.snippets on GroupResult
 result.pairs                # groups only — PairsListView of Pair dataclass rows
-gr[('g1', 'g2')].words      # idiomatic per-pair drill-down (also .clusters, .snippets, .stats, …)
+gr[('g1', 'g2')].words      # idiomatic per-pair zoom (also .clusters, .snippets, .stats, …)
 gr.pairs[('g1', 'g2')]      # raw Pair dataclass (fields: T, p_raw, p_corrected, cohens_d, contrast, …)
 result.suggestions / .tokens / .summary         # lexicon only
 result.attach(corpus=..., embeddings=...)       # re-wire after un-pickling
@@ -355,7 +355,7 @@ ols.plot_sweep("sweep.png")
 ols.report(top_words=10, clusters=50).save("report_ols.md")
 
 # Continuous fit — PLS on the same SSD
-pls = ssd.fit_pls(n_components="postselection", p_method="split_nb")
+pls = ssd.fit_pls(k="auto")
 pls.report(top_words=10, clusters=50).save("report_pls.md")
 
 # Group comparison

@@ -206,7 +206,7 @@ class ClusterWordsViewSided(ClusterWordsView):
 
     ``clusters.pos.words`` returns a ``ClusterWordsViewSided`` with all
     positive-side cluster word rows. Positional ``(n)`` slices to the first
-    ``n`` rows (type-preserving). To drill to one cluster, use
+    ``n`` rows (type-preserving). To zoom to one cluster, use
     ``clusters.pos(cluster_id).words`` — that yields a plain
     ``ClusterWordsView`` pre-filtered to that cluster.
     """
@@ -224,9 +224,9 @@ class ClusterWordsViewSided(ClusterWordsView):
 class ClustersViewSided(View[Cluster]):
     """Cluster summary view for one β pole.
 
-    Callable with a positional ``cluster_id`` to drill into one cluster;
+    Callable with a positional ``cluster_id`` to zoom into one cluster;
     callable with recompute kwargs (``topn=``, ``k=``, …) to re-cluster.
-    After drilling, ``.words`` / ``.snippets`` are pre-filtered to that
+    After zooming, ``.words`` / ``.snippets`` are pre-filtered to that
     cluster and their ``(n)`` call becomes a first-n row slice.
     """
 
@@ -262,11 +262,11 @@ class ClustersViewSided(View[Cluster]):
     def params(self): return dict(self._params)
 
     def __call__(self, cluster_id=None, **params) -> ClustersViewSided:
-        """Drill to one cluster (positional) or recompute (kwargs).
+        """Zoom to one cluster (positional) or recompute (kwargs).
 
         * ``clusters.pos(N)`` → filter to cluster ``cluster_id=N``
         * ``clusters.pos(topn=50, k=3)`` → recompute with new params
-        * Cannot mix positional drill and recompute kwargs in one call.
+        * Cannot mix positional zoom and recompute kwargs in one call.
         """
         if cluster_id is not None and params:
             raise TypeError(
@@ -301,9 +301,9 @@ class ClustersViewSided(View[Cluster]):
     def words(self):
         """Per-side cluster-words view.
 
-        Undrilled → ``ClusterWordsViewSided`` (call with cluster_id to drill).
-        Drilled   → ``ClusterWordsView`` pre-filtered to that cluster
-                    (call with ``n`` for first-n slice).
+        Unzoomed → ``ClusterWordsViewSided`` (call with cluster_id to zoom).
+        Zoomed   → ``ClusterWordsView`` pre-filtered to that cluster
+                   (call with ``n`` for first-n slice).
         """
         if self._cluster_id is not None:
             return ClusterWordsView(list(self._words_rows))
@@ -313,8 +313,8 @@ class ClustersViewSided(View[Cluster]):
     def snippets(self) -> SnippetsViewSided:
         """Centroid-based snippets on this side.
 
-        Undrilled → ``SnippetsViewSided`` (call with cluster_id to drill).
-        Drilled   → pre-filtered to this cluster (call with ``n`` for first-n slice).
+        Unzoomed → ``SnippetsViewSided`` (call with cluster_id to zoom).
+        Zoomed   → pre-filtered to this cluster (call with ``n`` for first-n slice).
         """
         all_side = self._parent._cluster_snippets_for(
             side=self._side,
@@ -335,8 +335,8 @@ class ClustersViewSided(View[Cluster]):
         ids = sorted({c.cluster_id for c in self._rows})
         if ids:
             examples = ", ".join(f"({i}).words" for i in ids[:3])
-            drill_line = (
-                f"\nDrill: (cluster_id) → zoom to one cluster  "
+            zoom_line = (
+                f"\nZoom: (cluster_id) → one cluster  "
                 f"(e.g. {ids[0]}; available: "
                 f"{', '.join(str(i) for i in ids[:6])}"
                 f"{', …' if len(ids) > 6 else ''})"
@@ -346,13 +346,13 @@ class ClustersViewSided(View[Cluster]):
                 f" {examples} → one ClusterWordsView"
             )
         else:
-            drill_line = "\nDrill: (cluster_id) → zoom to one cluster"
+            zoom_line = "\nZoom: (cluster_id) → one cluster"
             words_line = (
                 "\nWords: .words → ClusterWordsViewSided   "
                 "(cluster_id).words → ClusterWordsView"
             )
         topn = self._params.get("topn", 100)
-        return base + drill_line + words_line + (
+        return base + zoom_line + words_line + (
             f"\nSnippets: .snippets → side snippets; "
             f"(cluster_id).snippets → one cluster"
             f"\nRecompute: (topn=50, k=3, …) (current topn={topn})"
@@ -544,7 +544,7 @@ class SnippetsViewSided(SnippetsView):
         snippets.pos(50)     → first 50 rows
         snippets.pos(None)   → all rows on this side
 
-    To filter by cluster, drill at the clusters view — use
+    To filter by cluster, zoom at the clusters view — use
     ``clusters.pos(cluster_id).snippets`` — or pass the explicit
     ``cluster_id=`` keyword.
     """

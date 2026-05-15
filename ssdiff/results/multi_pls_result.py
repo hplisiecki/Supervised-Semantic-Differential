@@ -219,7 +219,7 @@ class MultiPLSResult(_MultiContainer):
 
     Typical use::
 
-        res = ssd.fit_multipls(n_components=2, rotate="varimax")
+        res = ssd.fit_multipls(k=2, rotate="varimax")
         res["dim-1"].words         # rotated-axis top words
         res["combined"].words      # unrotated prediction β top words
         res.test(n_splits=100, seed=42)  # rerun test on the whole model

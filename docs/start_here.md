@@ -51,7 +51,7 @@ ssd    = SSD(emb, corpus, y=scores, lexicon=["happy", "sad", "joy"])
 result = ssd.fit_ols()          # PCA + OLS, F-test p-value
 # result = ssd.fit_pls()        # PLS with split-half test
 # result = ssd.fit_groups()     # categorical outcome, permutation test
-# result = ssd.fit_multipls(n_components=2)  # rotated multi-component PLS — in development
+# result = ssd.fit_multipls(k=2)  # rotated multi-component PLS — in development
 
 print(result.stats)             # headline r², p, n_kept, iqr_effect
 print(result.words.pos)         # top 20 β-pos neighbors
