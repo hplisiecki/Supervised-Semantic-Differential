@@ -6,7 +6,7 @@ Joins between entities are expressed through composite keys (`cluster_id`,
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import MISSING, dataclass, fields
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +51,14 @@ class Cluster:
         Cosine similarity between the cluster centroid and the semantic gradient.
     contrast : str or None
         Group contrast key; ``None`` for continuous results.
+    top_words : str
+        Comma-separated top-5 cluster words by ``cos_centroid`` desc.
+        Populated at cluster construction; empty string if not yet computed.
+    top_snippet : str
+        ``text_window`` of the highest-cosine snippet in this cluster.
+        Empty string when no corpus is attached or before view-level
+        fill runs; populated by the view layer rebuilding the row via
+        ``dataclasses.replace`` at first opt-in render.
     """
     cluster_id: int       # 0-based, per side
     side: str
@@ -58,6 +66,24 @@ class Cluster:
     coherence: float
     centroid_cos_beta: float
     contrast: str | None = None
+    top_words: str = ""
+    top_snippet: str = ""
+
+    def __setstate__(self, state):
+        # Old pickles (predating top_words/top_snippet) have fewer state
+        # entries than current fields; fill the tail with field defaults.
+        flds = fields(self)
+        for i, f in enumerate(flds):
+            if i < len(state):
+                object.__setattr__(self, f.name, state[i])
+            elif f.default is not MISSING:
+                object.__setattr__(self, f.name, f.default)
+            elif f.default_factory is not MISSING:
+                object.__setattr__(self, f.name, f.default_factory())
+            else:
+                raise TypeError(
+                    f"Cannot unpickle Cluster: state missing required field {f.name!r}"
+                )
 
 
 @dataclass(frozen=True, slots=True)

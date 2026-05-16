@@ -64,5 +64,5 @@ pls.test(n_splits=30)
 show("pls.test", pls.test)
 
 print("\n══════ Markdown report ══════")
-print(pls.report(top_words=15, clusters=30))
-# pls.report(top_words=15, clusters=30).save("report_pls.md")
+print(pls.report(clusters={"n": 30, "n_words": 10, "n_snippets": 1}))
+# pls.report(clusters={"n": 30, "n_words": 10, "n_snippets": 1}).save("report_pls.md")

@@ -445,9 +445,10 @@ result.beta_norm                # ||beta|| (effect-size summary)
 result.alignment_scores         # per-doc cosine to gradient
 result.n_components             # number of PLS / PCA components
 
-# Comprehensive narrative report
-print(result.report(top_words=10, clusters=100,
-                    extreme_docs=30, misdiagnosed=20))
+# Comprehensive narrative report — every section is on by default; pass
+# section=False to drop one.
+print(result.report(clusters={"n": 100, "n_words": 10, "n_snippets": 2},
+                    extreme_docs={"n": 30}, misdiagnosed={"n": 20}))
 result.report().save("report.md")    # also .html / .docx / .tex
 
 # Re-run the significance test in place
@@ -612,7 +613,7 @@ from ssdiff.results.multi_pls_result import MultiPLSResult
 - `.test` → `TestView` — callable to **re-run** the test in place (`result.test(n_splits=200)` overwrites `stats.pvalue` and `test.pvalue`)
 
 **Methods**:
-- `.report(top_words=5, clusters=None, extreme_docs=None, misdiagnosed=None)` -> `Report` (`.to_text()`, `.to_html()`, `.save("report.md")`)
+- `.report(clusters=True, top_words=True, extreme_docs=True, misdiagnosed=True)` -> `Report` — every section is on by default; pass `section=False` to drop one. Each section toggle is `True` / `False` / `None` / `dict` (e.g. `clusters={"n": 20, "n_words": 5, "n_snippets": 1}`). Stats + Fit info are always included. Use `.to_text()`, `.to_html()`, `.save("report.md")`.
 - `.attach(corpus=None, embeddings=None)` — re-attach after un-pickling
 - `.plot_sweep(path=None)` — PCA-K sweep chart (`PCAOLSResult` only)
 
@@ -624,7 +625,7 @@ from ssdiff.results.multi_pls_result import MultiPLSResult
 
 **Pair access**: `result[("g1", "g2")]` → `PairResult` (canonical keys only) with its own `.words`, `.clusters`, `.snippets`, `.gradient`, `.beta`. Use `result.keys()` to list available pair keys; `result.group_labels` to map canonical → original.
 
-**Methods**: `.report(top_words=5, clusters=None)`, `.test(n_perm=…, correction=…)` (re-runs in place), `.attach(...)`.
+**Methods**: `.report(clusters=True, top_words=True)` — both sections on by default; pass `section=False` to drop one. Each toggle is `True` / `False` / `None` / `dict` (e.g. `clusters={"n": 20, "n_words": 5, "n_snippets": 1}`). Omnibus + Group labels + Pairwise contrasts are always included. `.test(n_perm=…, correction=…)` (re-runs in place); `.attach(...)`.
 
 ### Lexicon utilities
 

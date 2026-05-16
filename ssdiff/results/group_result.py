@@ -27,7 +27,12 @@ import numpy as np
 from ssdiff.results.core import Result, ScalarView, TestView, View
 from ssdiff.results.format import fmt_count, fmt_d, fmt_p, fmt_r
 from ssdiff.results.multi_container import _MultiContainer
-from ssdiff.results.report import Report, Section
+from ssdiff.results.report import (
+    Report,
+    Section,
+    _build_cluster_section,
+    _resolve_section,
+)
 from ssdiff.results.schema import (
     Cluster,
     ClusterWord,
@@ -566,32 +571,41 @@ class GroupResult(_MultiContainer):
 
     # -------- report -------------------------------------------------------
 
-    def report(self, *, top_words: int | None = 5,
-               clusters: int | None = None,
-               snippets_per_cluster: int | None = None) -> Report:
+    def report(self, *,
+               clusters: bool | dict | None = True,
+               top_words: bool | dict | None = True) -> Report:
         """Build a multi-section narrative Report for this group result.
 
-        Parameters
-        ----------
-        top_words : int or None
-            Words per pole per contrast to include. ``None`` skips the words
-            section.
-        clusters : int or None
-            Number of clusters per side per contrast to include.
-            ``None`` skips the clusters section.
-        snippets_per_cluster : int or None
-            Number of snippets per side per contrast to include.
-            ``None`` skips the snippets section.
+        ``Omnibus``, ``Group labels`` and ``Pairwise contrasts`` are always
+        included. The remaining sections accept ``True`` / ``False`` /
+        ``None`` / ``dict``:
+
+        - ``False`` or ``None`` skips the section.
+        - ``True`` (the default for every section) renders with defaults.
+        - ``dict`` overrides defaults, e.g. ``clusters={"n": 20}``.
+
+        Section defaults and dict keys
+        ------------------------------
+        - ``clusters`` — ``{"n": 10, "n_words": 5, "n_snippets": 1}`` per side
+          per pair. Words appear inside each cluster row; snippets fill the
+          "Representative Excerpt" column (set ``n_snippets=0`` to drop it).
+        - ``top_words`` — ``{"n": 5}`` words per pole per pair.
 
         Returns
         -------
         Report
             A ``Report`` with omnibus, group-labels, pairwise-contrasts, and
-            optional per-pair top-words, clusters, and snippets sections.
+            per-pair top-words and clusters sections.
         """
+        tw = _resolve_section(top_words, {"n": 5}, name="top_words")
+        cl = _resolve_section(
+            clusters,
+            {"n": 10, "n_words": 5, "n_snippets": 1},
+            name="clusters",
+        )
+
         sections = []
 
-        # Omnibus section (includes random_state)
         omnibus_rows = [
             ("G", self.G),
             ("n_kept", fmt_count(self.n_kept)),
@@ -604,36 +618,65 @@ class GroupResult(_MultiContainer):
             omnibus_rows.append(("random_state", self.random_state))
         sections.append(Section(title="Omnibus", kind="kv", rows=omnibus_rows))
 
-        # Group labels section
         if self.group_labels:
             label_rows = [(k, v) for k, v in sorted(self.group_labels.items())]
-            sections.append(Section(title="Group labels", kind="kv", rows=label_rows))
+            sections.append(
+                Section(title="Group labels", kind="kv", rows=label_rows)
+            )
 
-        # Pairwise contrasts table
-        rows = []
+        pair_rows = []
         for p in self.pairs:
-            rows.append([
+            pair_rows.append([
                 p.contrast, fmt_d(p.T), fmt_p(p.p_raw),
                 fmt_p(p.p_corrected), fmt_d(p.cohens_d),
                 fmt_count(p.n_g1), fmt_count(p.n_g2),
             ])
-        if rows:
+        if pair_rows:
             sections.append(Section(
                 title="Pairwise contrasts",
                 kind="table",
                 headers=["contrast", "T", "p_raw", "p_corrected",
                          "Cohen's d", "n_g1", "n_g2"],
-                rows=rows,
+                rows=pair_rows,
                 numeric=[False, True, True, True, True, True, True],
             ))
 
+        # Clusters — one table per pair per side (pos + neg)
+        if cl and self.embeddings is not None:
+            n_cl = cl["n"]
+            n_words = cl["n_words"]
+            n_snippets = cl["n_snippets"]
+            for (g1, g2), leaf in self._leaves.items():
+                pair_title = f"{g1} vs {g2}"
+                clusters_view = leaf.clusters
+                for side in ("pos", "neg"):
+                    cl_view = getattr(clusters_view, side)
+
+                    def _snippet_provider(_leaf=leaf, _side=side):
+                        if getattr(_leaf, "corpus", None) is None:
+                            return None
+                        try:
+                            return _leaf._cluster_snippets_for(_side)
+                        except Exception:
+                            return None
+
+                    sections.append(_build_cluster_section(
+                        title=f"{pair_title} — {side}",
+                        clusters_view=cl_view,
+                        n_clusters=n_cl,
+                        n_words=n_words,
+                        n_snippets=n_snippets,
+                        snippet_provider=_snippet_provider,
+                    ))
+
         # Top words — one table per pair
-        if top_words and self.embeddings is not None:
+        if tw and self.embeddings is not None:
+            n_tw = tw["n"]
             for (g1, g2), leaf in self._leaves.items():
                 pair_title = f"{g1} vs {g2}"
                 words_view = leaf.words
-                pos_words = [w for w in words_view if w.side == "pos"][:top_words]
-                neg_words = [w for w in words_view if w.side == "neg"][:top_words]
+                pos_words = [w for w in words_view if w.side == "pos"][:n_tw]
+                neg_words = [w for w in words_view if w.side == "neg"][:n_tw]
                 word_rows = []
                 for w in pos_words + neg_words:
                     word_rows.append([w.side, w.rank, w.word, fmt_r(w.cos_beta, signed=True)])
@@ -643,46 +686,6 @@ class GroupResult(_MultiContainer):
                     headers=["side", "rank", "word", "cos_β"],
                     rows=word_rows,
                     numeric=[False, True, False, True],
-                ))
-
-        # Clusters — one table per pair per side (pos + neg)
-        if clusters and self.embeddings is not None:
-            for (g1, g2), leaf in self._leaves.items():
-                pair_title = f"{g1} vs {g2}"
-                clusters_view = leaf.clusters
-                for side in ("pos", "neg"):
-                    cl_view = getattr(clusters_view, side)
-                    cl_rows = []
-                    for c in list(cl_view)[:clusters]:
-                        cl_rows.append([
-                            c.cluster_id, c.size,
-                            fmt_r(c.coherence),
-                            fmt_r(c.centroid_cos_beta, signed=True),
-                        ])
-                    sections.append(Section(
-                        title=f"{pair_title} — {side}",
-                        kind="table",
-                        headers=["cluster", "size", "coherence", "centroid cos_β"],
-                        rows=cl_rows,
-                        numeric=[True, True, True, True],
-                    ))
-
-        # Snippets — one table per pair
-        if snippets_per_cluster:
-            for (g1, g2), leaf in self._leaves.items():
-                pair_title = f"{g1} vs {g2}"
-                snippets_view = leaf.snippets
-                pos_snips = [s for s in snippets_view if s.side == "pos"][:snippets_per_cluster]
-                neg_snips = [s for s in snippets_view if s.side == "neg"][:snippets_per_cluster]
-                snip_rows = []
-                for s in pos_snips + neg_snips:
-                    snip_rows.append([s.side, s.cluster_id, fmt_r(s.cosine, signed=True), s.text_window])
-                sections.append(Section(
-                    title=f"Snippets — {pair_title}",
-                    kind="table",
-                    headers=["side", "cluster_id", "cos", "text_window"],
-                    rows=snip_rows,
-                    numeric=[False, True, True, False],
                 ))
 
         return Report(

@@ -15,7 +15,12 @@ from ssdiff.results.format import (
     fmt_p,
     fmt_r,
 )
-from ssdiff.results.report import Report, Section
+from ssdiff.results.report import (
+    Report,
+    Section,
+    _build_cluster_section,
+    _resolve_section,
+)
 from ssdiff.results.schema import (
     Cluster,
     ClusterWord,
@@ -231,12 +236,16 @@ class ClustersViewSided(View[Cluster]):
     """
 
     _name = "clusters"
-    _columns = ("cluster_id", "side", "size", "coherence", "centroid_cos_beta", "contrast")
+    _columns = (
+        "cluster_id", "side", "size", "coherence", "centroid_cos_beta",
+        "contrast", "top_words", "top_snippet",
+    )
 
     def __init__(self, parent: ContinuousResult, side: str,
                  rows: list[Cluster], words_rows: list[ClusterWord],
                  params: dict, *, cluster_id: int | None = None,
-                 _no_trunc: bool = False):
+                 _no_trunc: bool = False, _top_snippet_filled: bool = False,
+                 _top_snippets_n: int | None = None):
         super().__init__(_no_trunc=_no_trunc)
         self._parent = parent
         self._side = side
@@ -244,6 +253,55 @@ class ClustersViewSided(View[Cluster]):
         self._words_rows = words_rows
         self._params = dict(params)
         self._cluster_id = cluster_id
+        self._top_snippet_filled = _top_snippet_filled
+        self._top_snippets_n = _top_snippets_n
+
+    def _fill_top_snippets(self) -> None:
+        """Populate ``top_snippet`` on every row from the cluster-snippet cache.
+
+        No-op if already filled, or if the parent has no corpus / embeddings.
+        On a cold cache this triggers full ``_cluster_snippets_for`` extraction
+        (SIF + cosine over all docs) — that's the documented cost of opting
+        ``top_snippet`` into a render or export.
+        """
+        import dataclasses
+        if self._top_snippet_filled:
+            return
+        if getattr(self._parent, "corpus", None) is None:
+            return
+        if getattr(self._parent, "embeddings", None) is None:
+            return
+        try:
+            snips_view = self._parent._cluster_snippets_for(
+                self._side,
+                **{k: v for k, v in self._params.items() if k != "side"},
+            )
+        except Exception:
+            # _require_resource may still raise even when attrs look attached
+            # (e.g. lexicon missing). Treat as "no snippets available."
+            return
+        best_per_cid: dict[int, tuple[float, str]] = {}
+        for s in snips_view._all_side_rows:
+            if s.cluster_id is None:
+                continue
+            cur = best_per_cid.get(s.cluster_id)
+            if cur is None or s.cosine > cur[0]:
+                best_per_cid[s.cluster_id] = (s.cosine, s.text_window)
+        self._rows = [
+            dataclasses.replace(c, top_snippet=best_per_cid.get(c.cluster_id, (None, ""))[1])
+            for c in self._rows
+        ]
+        self._top_snippet_filled = True
+
+    def _ensure_filled_if_requested(self, keep) -> None:
+        """Fill ``top_snippet`` only when the caller asked for that column.
+
+        Default-cols paths (which exclude ``top_snippet``) never trigger fill
+        and remain cheap. Opt-in paths (``cols="all"`` or an explicit list
+        including ``"top_snippet"``) pay the one-time snippet-extraction cost.
+        """
+        if "top_snippet" in tuple(keep):
+            self._fill_top_snippets()
 
     def __iter__(self): return iter(self._rows)
     def __len__(self): return len(self._rows)
@@ -261,16 +319,26 @@ class ClustersViewSided(View[Cluster]):
     @property
     def params(self): return dict(self._params)
 
-    def __call__(self, cluster_id=None, **params) -> ClustersViewSided:
+    def __call__(self, cluster_id=None, *, top_snippets: int | None = None,
+                 **params) -> ClustersViewSided:
         """Zoom to one cluster (positional) or recompute (kwargs).
 
         * ``clusters.pos(N)`` → filter to cluster ``cluster_id=N``
+        * ``clusters.pos(N, top_snippets=20)`` → zoom with custom sub-table size
         * ``clusters.pos(topn=50, k=3)`` → recompute with new params
-        * Cannot mix positional zoom and recompute kwargs in one call.
+
+        Cannot mix positional zoom and recompute kwargs in one call
+        (``top_snippets=`` is the only kwarg allowed alongside a positional cluster_id).
+        ``top_snippets=`` without a positional cluster_id raises ``TypeError`` —
+        it only makes sense in zoom mode.
         """
         if cluster_id is not None and params:
             raise TypeError(
                 "pass a positional cluster_id OR recompute kwargs, not both"
+            )
+        if top_snippets is not None and cluster_id is None:
+            raise TypeError(
+                "top_snippets= is only valid alongside a positional cluster_id"
             )
         if params:
             merged = {**self._params, **params}
@@ -295,7 +363,246 @@ class ClustersViewSided(View[Cluster]):
             parent=self._parent, side=self._side,
             rows=filtered_rows, words_rows=filtered_words,
             params=self._params, cluster_id=cluster_id, _no_trunc=True,
+            _top_snippet_filled=self._top_snippet_filled,
+            _top_snippets_n=top_snippets,
         )
+
+    def to_dict(self, cols=None):
+        from ssdiff.results.core import _validate_cols
+        keep, _ = _validate_cols(cols, self)
+        self._ensure_filled_if_requested(keep)
+        return super().to_dict(cols=cols)
+
+    def to_records(self, cols=None):
+        from ssdiff.results.core import _validate_cols
+        keep, _ = _validate_cols(cols, self)
+        self._ensure_filled_if_requested(keep)
+        return super().to_records(cols=cols)
+
+    def to_df(self, cols=None):
+        from ssdiff.results.core import _validate_cols
+        keep, _ = _validate_cols(cols, self)
+        self._ensure_filled_if_requested(keep)
+        return super().to_df(cols=cols)
+
+    def save(self, path=None, *, cols=None, k=None):
+        from ssdiff.results.core import _validate_cols
+        keep, _ = _validate_cols(cols, self)
+        self._ensure_filled_if_requested(keep)
+        return super().save(path, cols=cols, k=k)
+
+    _TOP_SNIPPET_TRUNCATE = 40
+    _TOP_SNIPPETS_DEFAULT_N = 5
+
+    def _resolve_top_snippets_n(self) -> int:
+        return (self._top_snippets_n if self._top_snippets_n is not None
+                else self._TOP_SNIPPETS_DEFAULT_N)
+
+    def _top_snippets_subtable(self) -> str | None:
+        """Build the text sub-table for the zoom view. Returns None if not zoomed.
+
+        Returns the fallback string if no corpus / embeddings are attached.
+        """
+        if self._cluster_id is None:
+            return None
+        n = self._resolve_top_snippets_n()
+        if getattr(self._parent, "corpus", None) is None \
+                or getattr(self._parent, "embeddings", None) is None:
+            return f"Top {n} snippets: (attach corpus to populate)"
+        try:
+            snips_view = self._parent._cluster_snippets_for(
+                self._side,
+                **{k: v for k, v in self._params.items() if k != "side"},
+            )
+        except Exception:
+            return f"Top {n} snippets: (attach corpus to populate)"
+        rows = [s for s in snips_view._all_side_rows
+                if s.cluster_id == self._cluster_id]
+        rows.sort(key=lambda s: s.cosine, reverse=True)
+        rows = rows[:n]
+        if not rows:
+            return f"Top {n} cluster snippets:\n  (no snippets matched this cluster)"
+        sub = SnippetsViewSided(
+            side=self._side, all_rows=rows, k=None, _no_trunc=True,
+        )
+        body = sub.to_text(cols=("seed", "cosine", "doc_id", "text_window"))
+        return f"Top {n} cluster snippets:\n{body}"
+
+    def _top_snippets_subtable_html(self) -> str | None:
+        if self._cluster_id is None:
+            return None
+        n = self._resolve_top_snippets_n()
+        if getattr(self._parent, "corpus", None) is None \
+                or getattr(self._parent, "embeddings", None) is None:
+            return (f"<pre>Top {n} snippets: "
+                    f"(attach corpus to populate)</pre>")
+        try:
+            snips_view = self._parent._cluster_snippets_for(
+                self._side,
+                **{k: v for k, v in self._params.items() if k != "side"},
+            )
+        except Exception:
+            return (f"<pre>Top {n} snippets: "
+                    f"(attach corpus to populate)</pre>")
+        rows = [s for s in snips_view._all_side_rows
+                if s.cluster_id == self._cluster_id]
+        rows.sort(key=lambda s: s.cosine, reverse=True)
+        rows = rows[:n]
+        if not rows:
+            return f"<pre>Top {n} cluster snippets: (none)</pre>"
+        sub = SnippetsViewSided(
+            side=self._side, all_rows=rows, k=None, _no_trunc=True,
+        )
+        body = sub.to_html(cols=("seed", "cosine", "doc_id", "text_window"))
+        return f"<p><b>Top {n} cluster snippets:</b></p>{body}"
+
+    def _zoom_to_text(self) -> str:
+        """Compact zoom render: meta table + Words line + snippets sub-table."""
+        from ssdiff.results.format import default_alignment, fmt_cell, fmt_table
+        if not self._rows:
+            return f"Cluster {self._cluster_id} ({self._side}): (no rows)"
+        row = self._rows[0]
+        meta_cols = ["size", "coherence", "centroid_cos_beta"]
+        if getattr(row, "contrast", None):
+            meta_cols.append("contrast")
+        cells = [fmt_cell(getattr(row, c), c) for c in meta_cols]
+        meta_table = fmt_table([cells], headers=meta_cols,
+                               numeric=default_alignment(len(meta_cols)),
+                               text_truncate=None)
+        parts = [f"Cluster {self._cluster_id} ({self._side})", meta_table]
+        if row.top_words:
+            parts.append(f"Words: {row.top_words}")
+        sub = self._top_snippets_subtable()
+        if sub is not None:
+            parts.append(sub)
+        return "\n\n".join(parts)
+
+    @staticmethod
+    def _words_block(rows, label_fn) -> str | None:
+        """Render a ``Words:`` block listing ``top_words`` per row.
+
+        ``label_fn(row)`` returns the bracket label (e.g. ``"0"`` or
+        ``"pos:0"``). Returns None when no row has any ``top_words`` to show.
+        """
+        lines = ["Words:"]
+        for r in rows:
+            tw = getattr(r, "top_words", "")
+            if tw:
+                lines.append(f"  [{label_fn(r)}] {tw}")
+        return "\n".join(lines) if len(lines) > 1 else None
+
+    def to_text(self, max_rows: int | None = None, cols=None) -> str:
+        """Render aligned text; clip ``top_snippet`` to 40 chars when opted in.
+
+        Fill is gated: if the resolved cols include ``top_snippet`` the lazy
+        fill runs (one-time snippet extraction); otherwise it's skipped.
+
+        When zoomed (``_cluster_id is not None``) and no explicit ``cols`` were
+        passed, renders a compact view: small meta table, a ``Words:`` line,
+        and the 'Top N cluster snippets' sub-table.
+
+        For the multi-row default view (``cols`` is None), ``top_words`` is
+        kept out of the table to avoid horizontal sprawl and listed below as a
+        ``Words:`` block keyed by ``cluster_id``. Explicit ``cols=`` honors
+        whatever the caller asked for.
+        """
+        from ssdiff.results.core import _project, _row_to_dict, _validate_cols, _warn
+        from ssdiff.results.display import (
+            DEFAULT_MAX_ROWS, DEFAULT_MAX_ROWS_BY_CLASS,
+        )
+        from ssdiff.results.format import default_alignment, fmt_cell, fmt_table
+        if self._cluster_id is not None and cols is None:
+            return self._zoom_to_text()
+        cls_name = type(self).__name__
+        if max_rows is None:
+            max_rows = DEFAULT_MAX_ROWS_BY_CLASS.get(cls_name, DEFAULT_MAX_ROWS)
+        keep, warning = _validate_cols(cols, self)
+        if warning:
+            _warn(warning)
+        self._ensure_filled_if_requested(keep)
+        display_keep = (tuple(c for c in keep if c != "top_words")
+                        if cols is None else keep)
+        all_rows = [_project(_row_to_dict(r), display_keep) for r in self]
+        n = len(all_rows)
+        if self._no_trunc or n <= max_rows:
+            shown = all_rows
+            shown_rows = list(self._rows)
+            footer = None
+        else:
+            shown = all_rows[:max_rows]
+            shown_rows = list(self._rows)[:max_rows]
+            footer = f"... {n - max_rows} more rows"
+        rows_seq = []
+        for r in shown:
+            cells = []
+            for c in display_keep:
+                val = r.get(c)
+                if c == "top_snippet" and isinstance(val, str) \
+                        and len(val) > self._TOP_SNIPPET_TRUNCATE:
+                    val = val[: self._TOP_SNIPPET_TRUNCATE] + "…"
+                cells.append(fmt_cell(val, c))
+            rows_seq.append(cells)
+        out = fmt_table(rows_seq, headers=list(display_keep),
+                        numeric=default_alignment(len(display_keep)),
+                        text_truncate=None)
+        if footer:
+            out = out + "\n" + footer
+        if cols is None:
+            block = self._words_block(shown_rows, lambda r: r.cluster_id)
+            if block is not None:
+                out = out + "\n\n" + block
+        sub = self._top_snippets_subtable()
+        if sub is not None:
+            out = out + "\n\n" + sub
+        return out
+
+    def _zoom_to_html(self) -> str:
+        """Compact zoom render in HTML — mirrors ``_zoom_to_text``."""
+        if not self._rows:
+            return (f"<pre>Cluster {self._cluster_id} "
+                    f"({self._side}): (no rows)</pre>")
+        row = self._rows[0]
+        meta_cols = ["size", "coherence", "centroid_cos_beta"]
+        if getattr(row, "contrast", None):
+            meta_cols.append("contrast")
+        header_html = "".join(f"<th>{c}</th>" for c in meta_cols)
+        cell_html = "".join(f"<td>{getattr(row, c)}</td>" for c in meta_cols)
+        meta_table = (f"<table><thead><tr>{header_html}</tr></thead>"
+                      f"<tbody><tr>{cell_html}</tr></tbody></table>")
+        parts = [f"<p><b>Cluster {self._cluster_id} "
+                 f"({self._side})</b></p>", meta_table]
+        if row.top_words:
+            parts.append(f"<p><b>Words:</b> {row.top_words}</p>")
+        sub = self._top_snippets_subtable_html()
+        if sub is not None:
+            parts.append(sub)
+        return "\n".join(parts)
+
+    def to_html(self, cols=None) -> str:
+        if self._cluster_id is not None and cols is None:
+            return self._zoom_to_html()
+        from ssdiff.results.core import _validate_cols
+        keep, _ = _validate_cols(cols, self)
+        self._ensure_filled_if_requested(keep)
+        body = View.to_html(self, cols=cols)
+        sub = self._top_snippets_subtable_html()
+        if sub is None:
+            return body
+        return body + "\n" + sub
+
+    def __repr__(self) -> str:
+        from ssdiff.results.display import _save_hint_enabled
+        body = self.to_text()
+        if _save_hint_enabled():
+            return body + "\n\n" + self._save_hint()
+        return body
+
+    def _repr_html_(self) -> str:
+        from ssdiff.results.display import _save_hint_enabled
+        body = self.to_html()
+        if _save_hint_enabled():
+            return body + "\n" + self._save_hint_html()
+        return body
 
     @property
     def words(self):
@@ -368,15 +675,23 @@ class ClustersView(View[Cluster]):
     """
 
     _name = "clusters"
-    _columns = ("cluster_id", "side", "size", "coherence", "centroid_cos_beta", "contrast")
+    _columns = (
+        "cluster_id", "side", "size", "coherence", "centroid_cos_beta",
+        "contrast", "top_words", "top_snippet",
+    )
 
-    def __init__(self, parent: ContinuousResult):
-        super().__init__()
+    def __init__(self, parent: ContinuousResult, *,
+                 _rows_override: list[Cluster] | None = None,
+                 _no_trunc: bool = False):
+        super().__init__(_no_trunc=_no_trunc)
         self._parent = parent
+        self._rows_override = _rows_override
 
     @property
     def _rows(self) -> list[Cluster]:
         """Materialize pos + neg rows in canonical order (pos first)."""
+        if self._rows_override is not None:
+            return self._rows_override
         pos = list(self._parent._clusters_for("pos")._rows)
         neg = list(self._parent._clusters_for("neg")._rows)
         return pos + neg
@@ -388,6 +703,12 @@ class ClustersView(View[Cluster]):
         return len(self._rows)
 
     def __getitem__(self, i):
+        if isinstance(i, slice):
+            return ClustersView(
+                self._parent,
+                _rows_override=list(self._rows[i]),
+                _no_trunc=True,
+            )
         return self._rows[i]
 
     @property
@@ -412,32 +733,45 @@ class ClustersView(View[Cluster]):
             "or result.cluster_snippets(side='pos')"
         )
 
-    def _cached_count(self, side: str) -> int | None:
-        """Return cached len for `side`, or None if not yet computed."""
-        for (name, key), view in self._parent._cache.items():
-            if name != "clusters":
-                continue
-            if dict(key).get("side") == side:
-                return len(view)
-        return None
-
     def _save_hint(self) -> str:
         return ("Save:  .save('clusters.csv')               # all rows (pos then neg)\n"
                 "       .pos.save('clusters_pos.csv')\n"
                 "       .neg.save('clusters_neg.csv')")
 
-    def to_text(self) -> str:
-        lines = ["ClustersView"]
-        for side, label in (("pos", "positive"), ("neg", "negative")):
-            n = self._cached_count(side)
-            if n is None:
-                lines.append(f"  .{side}  → {label} clusters (call to compute)")
-            else:
-                lines.append(f"  .{side}  → {n} {label} clusters")
-        return "\n".join(lines)
+    def to_text(self, max_rows: int | None = None, cols=None) -> str:
+        """Render combined pos + neg rows as a single table.
 
-    def to_html(self) -> str:
-        return f"<pre>{self.to_text()}</pre>"
+        Header summarizes per-side counts. ``side`` is included by default so
+        rows remain disambiguated. ``top_words`` is dropped from the table for
+        the default repr and listed below as a ``Words:`` block keyed by
+        ``side:cluster_id``; explicit ``cols=`` honors whatever was asked for.
+        """
+        from ssdiff.results.core import _validate_cols
+        rows = self._rows
+        n_pos = sum(1 for r in rows if r.side == "pos")
+        n_neg = sum(1 for r in rows if r.side == "neg")
+        header = f"ClustersView — {n_pos} pos + {n_neg} neg"
+        if cols is None:
+            keep, _ = _validate_cols(cols, self)
+            display_cols = tuple(c for c in keep if c != "top_words")
+            body = View.to_text(self, max_rows=max_rows, cols=display_cols)
+            shown = rows if max_rows is None else rows[:max_rows]
+            block = ClustersViewSided._words_block(
+                shown, lambda r: f"{r.side}:{r.cluster_id}",
+            )
+            if block is not None:
+                return f"{header}\n{body}\n\n{block}"
+            return f"{header}\n{body}"
+        body = View.to_text(self, max_rows=max_rows, cols=cols)
+        return f"{header}\n{body}"
+
+    def to_html(self, cols=None) -> str:
+        rows = self._rows
+        n_pos = sum(1 for r in rows if r.side == "pos")
+        n_neg = sum(1 for r in rows if r.side == "neg")
+        header = f"<p><b>ClustersView</b> — {n_pos} pos + {n_neg} neg</p>"
+        body = View.to_html(self, cols=cols)
+        return f"{header}\n{body}"
 
     def __repr__(self) -> str:
         body = self.to_text()
@@ -1059,28 +1393,29 @@ class ContinuousResult(_SingleResult):
         return f"<pre class='ssd-save-hint'>{self._save_hint()}</pre>"
 
     # -------- report --------------------------------------------------
-    def report(self, *, top_words: int | None = 5, clusters: int | None = None,
-               snippets_per_cluster: int | None = None,
-               extreme_docs: int | None = None,
-               misdiagnosed: int | None = None) -> Report:
+    def report(self, *,
+               clusters: bool | dict | None = True,
+               top_words: bool | dict | None = True,
+               extreme_docs: bool | dict | None = True,
+               misdiagnosed: bool | dict | None = True) -> Report:
         """Build a multi-section narrative Report for this result.
 
-        Parameters
-        ----------
-        top_words : int or None
-            Number of words to include per β pole in the words section.
-            ``None`` skips the words section.
-        clusters : int or None
-            ``topn`` value passed to the cluster extractor; controls how many
-            neighbors are clustered per side.  ``None`` skips clusters.
-        snippets_per_cluster : int or None
-            Currently unused — reserved for a future per-cluster snippet table.
-        extreme_docs : int or None
-            Number of most-aligned (pos) and least-aligned (neg) documents to
-            include.  ``None`` skips the extreme-docs section.
-        misdiagnosed : int or None
-            Number of over-predicted and under-predicted documents to include.
-            ``None`` skips the misdiagnosed section.
+        ``Stats`` and ``Fit info`` are always included. The remaining sections
+        accept ``True`` / ``False`` / ``None`` / ``dict``:
+
+        - ``False`` or ``None`` skips the section.
+        - ``True`` (the default for every section) renders with defaults.
+        - ``dict`` overrides defaults, e.g. ``clusters={"n": 20}``.
+
+        Section defaults and dict keys
+        ------------------------------
+        - ``clusters`` — ``{"n": 10, "n_words": 5, "n_snippets": 1}``:
+          clusters per side, words listed inside each cluster row, and
+          snippets shown in the "Representative Excerpt" column. Set
+          ``n_snippets=0`` to drop the excerpt column.
+        - ``top_words`` — ``{"n": 5}`` words per pole.
+        - ``extreme_docs`` — ``{"n": 5}`` pos + ``n`` neg.
+        - ``misdiagnosed`` — ``{"n": 5}`` over + ``n`` under.
 
         Returns
         -------
@@ -1088,6 +1423,15 @@ class ContinuousResult(_SingleResult):
             A ``Report`` object that can be rendered with ``.to_text()``,
             ``.to_html()``, or saved with ``.save('report.md')``.
         """
+        tw = _resolve_section(top_words, {"n": 5}, name="top_words")
+        cl = _resolve_section(
+            clusters,
+            {"n": 10, "n_words": 5, "n_snippets": 1},
+            name="clusters",
+        )
+        ed = _resolve_section(extreme_docs, {"n": 5}, name="extreme_docs")
+        md = _resolve_section(misdiagnosed, {"n": 5}, name="misdiagnosed")
+
         sections = []
         s = self.stats
         stat_rows = [
@@ -1120,55 +1464,104 @@ class ContinuousResult(_SingleResult):
         if fit_rows:
             sections.append(Section(title="Fit info", kind="kv", rows=fit_rows))
 
-        if top_words and self.embeddings is not None:
-            pos_words = [w for w in self.words if w.side == "pos"][:top_words]
-            neg_words = [w for w in self.words if w.side == "neg"][:top_words]
+        if cl and self.embeddings is not None:
+            n_cl = cl["n"]
+            n_words = cl["n_words"]
+            n_snippets = cl["n_snippets"]
+            for side in ("pos", "neg"):
+                clusters_view = getattr(self.clusters, side)
+
+                def _snippet_provider(_side=side):
+                    if getattr(self, "corpus", None) is None:
+                        return None
+                    try:
+                        return self._cluster_snippets_for(_side)
+                    except Exception:
+                        return None
+
+                sections.append(_build_cluster_section(
+                    title=f"Clusters ({side}, top {n_cl})",
+                    clusters_view=clusters_view,
+                    n_clusters=n_cl,
+                    n_words=n_words,
+                    n_snippets=n_snippets,
+                    snippet_provider=_snippet_provider,
+                ))
+
+        if tw and self.embeddings is not None:
+            n_tw = tw["n"]
+            pos_words = [w for w in self.words if w.side == "pos"][:n_tw]
+            neg_words = [w for w in self.words if w.side == "neg"][:n_tw]
             rows = []
             for w in pos_words + neg_words:
                 rows.append([w.side, w.rank, w.word, fmt_r(w.cos_beta, signed=True)])
-            sections.append(Section(title=f"Top words (n={top_words} per side)",
+            sections.append(Section(title=f"Top words (n={n_tw} per side)",
                                     kind="table",
                                     headers=["Side", "Rank", "Word", "cos_β"],
                                     rows=rows,
                                     numeric=[False, True, False, True]))
 
-        if clusters and self.embeddings is not None:
-            for side in ("pos", "neg"):
-                cl = getattr(self.clusters, side)(topn=clusters)
-                rows = []
-                for c in cl:
-                    rows.append([c.cluster_id, c.size, fmt_r(c.coherence),
-                                 fmt_r(c.centroid_cos_beta, signed=True)])
-                sections.append(Section(
-                    title=f"Clusters ({side}, topn={clusters})",
-                    kind="table",
-                    headers=["cluster", "size", "coherence", "centroid cos_β"],
-                    rows=rows,
-                    numeric=[True, True, True, True],
+        doc_snip_idx: dict[int, str] | None = None
+        pre_docs = None
+        if (ed or md) and getattr(self, "corpus", None) is not None:
+            try:
+                best: dict[int, tuple[float, str]] = {}
+                for sn in self.snippets:
+                    score = abs(sn.cosine)
+                    cur = best.get(sn.doc_id)
+                    if cur is None or score > cur[0]:
+                        best[sn.doc_id] = (score, sn.text_window)
+                doc_snip_idx = {k: v[1] for k, v in best.items()}
+                pre_docs = getattr(self.corpus, "pre_docs", None)
+            except Exception:
+                doc_snip_idx = None
+                pre_docs = None
+
+        def _doc_snippet(doc_id: int) -> str:
+            # Prefer the β-aligned anchor; otherwise fall back to the doc's
+            # first surface sentence so misdiagnosed docs always show context.
+            text = doc_snip_idx.get(doc_id, "") if doc_snip_idx else ""
+            if text:
+                return text
+            if pre_docs is not None and 0 <= doc_id < len(pre_docs):
+                sents = getattr(pre_docs[doc_id], "sents_surface", None) or []
+                if sents:
+                    return sents[0]
+            return ""
+
+        def _doc_table(title, picks):
+            headers = ["doc_id", "y_true", "y_hat", "residual"]
+            numeric = [True, True, True, True]
+            include_snip = doc_snip_idx is not None
+            if include_snip:
+                headers.append("snippet")
+                numeric.append(False)
+            rows = []
+            for d in picks:
+                row = [d.doc_id, fmt_d(d.y_true), fmt_d(d.y_hat),
+                       fmt_d(d.residual)]
+                if include_snip:
+                    row.append(_doc_snippet(d.doc_id))
+                rows.append(row)
+            return Section(
+                title=title, kind="table",
+                headers=headers, rows=rows, numeric=numeric,
+            )
+
+        if ed:
+            n_ed = ed["n"]
+            for side_name, picker in (("pos", self.docs.pos),
+                                      ("neg", self.docs.neg)):
+                sections.append(_doc_table(
+                    f"Docs — {side_name} {n_ed}", picker(n_ed),
                 ))
 
-        if extreme_docs:
-            for side_name, picker in (("pos", self.docs.pos), ("neg", self.docs.neg)):
-                rows = [[d.doc_id, fmt_d(d.y_true), fmt_d(d.y_hat), fmt_d(d.residual)]
-                        for d in picker(extreme_docs)]
-                sections.append(Section(
-                    title=f"Docs — {side_name} {extreme_docs}",
-                    kind="table",
-                    headers=["doc_id", "y_true", "y_hat", "residual"],
-                    rows=rows,
-                    numeric=[True, True, True, True],
-                ))
-
-        if misdiagnosed:
+        if md:
+            n_md = md["n"]
             for direction in ("over", "under"):
-                rows = [[d.doc_id, fmt_d(d.y_true), fmt_d(d.y_hat), fmt_d(d.residual)]
-                        for d in self.docs.misdiagnosed(misdiagnosed, direction=direction)]
-                sections.append(Section(
-                    title=f"Misdiagnosed — {direction}-predicted {misdiagnosed}",
-                    kind="table",
-                    headers=["doc_id", "y_true", "y_hat", "residual"],
-                    rows=rows,
-                    numeric=[True, True, True, True],
+                sections.append(_doc_table(
+                    f"Misdiagnosed — {direction}-predicted {n_md}",
+                    self.docs.misdiagnosed(n_md, direction=direction),
                 ))
 
         return Report(

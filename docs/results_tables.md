@@ -119,6 +119,10 @@ Same columns + same defaults as `WordsView`. Row cap default = 20 (per side). Us
 | `coherence` | ✓ | mean pairwise cosine among members |
 | `centroid_cos_beta` | ✓ | |
 | `contrast` |  | group-only |
+| `top_words` | ✓ | comma-joined top-5 cluster words by `cos_centroid` desc (eager, cheap) |
+| `top_snippet` |  | text of the highest-cosine snippet in this cluster; **opt-in** via `cols="all"` or explicit cols list (filling triggers full snippet extraction on first request); clipped to 40 chars in repr, full text in exports |
+
+**Zoom:** `clusters.pos(cluster_id)` filters to one cluster. The repr appends a "Top 5 cluster snippets" sub-table (columns `seed`, `cosine`, `doc_id`, `text_window`) — independent of the `top_snippet` column on the main row. Pass `clusters.pos(cluster_id, top_snippets=N)` to resize the sub-table. Without an attached corpus, the sub-table is replaced by `(attach corpus to populate)`. `save()` on a zoomed view writes only the 1-row summary (`cols="all"` to include `top_snippet`); the snippet table is reached via `clusters.pos(cluster_id).snippets.save(...)`.
 
 ### `clusters.pos(cid).words` — `ClusterWordsView`
 

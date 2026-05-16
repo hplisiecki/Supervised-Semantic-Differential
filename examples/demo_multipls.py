@@ -56,5 +56,5 @@ for i in range(mp.n_components):
     show(f'mp["{key}"].clusters', mp[key].clusters)
 
 print("\n══════ Markdown report ══════")
-print(mp.report(top_words=10))
-# mp.report(top_words=10).save("report_multipls.md")
+print(mp.report(top_words={"n": 10}))
+# mp.report(top_words={"n": 10}).save("report_multipls.md")

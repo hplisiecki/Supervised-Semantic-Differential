@@ -401,15 +401,24 @@ class MultiPLSResult(_MultiContainer):
         return f"<pre class='ssd-save-hint'>{self._save_hint()}</pre>"
 
     # ------ minimal report (v1 scope) -------------------------------------
-    def report(self, *, top_words: int | None = 5):
+    def report(self, *, top_words: bool | dict | None = True):
         """Minimal v1 report: fit summary + per-leaf words tables.
 
+        ``top_words`` accepts ``True`` / ``False`` / ``None`` / ``dict``:
+
+        - ``False`` or ``None`` skips the words section.
+        - ``True`` includes the section with defaults.
+        - ``dict`` overrides defaults, e.g. ``top_words={"n": 10}``.
+
+        Default: ``top_words={"n": 5}`` words per pole per leaf.
         ``clusters`` / ``snippets`` / ``misdiagnosed`` sections are
         reserved for Milestone 2 (per-leaf feature-parity with
-        ``PairResult``); passing them here would silently no-op.
+        ``PairResult``).
         """
         from ssdiff.results.format import fmt_count, fmt_p, fmt_r
-        from ssdiff.results.report import Report, Section
+        from ssdiff.results.report import Report, Section, _resolve_section
+
+        tw = _resolve_section(top_words, {"n": 5}, name="top_words")
 
         s = self.stats._row
         pi = next(iter(self.pls_info))
@@ -438,11 +447,12 @@ class MultiPLSResult(_MultiContainer):
             ),
         ]
 
-        if top_words and self.embeddings is not None:
+        if tw and self.embeddings is not None:
+            n_tw = tw["n"]
             for key, leaf in self._leaves.items():
                 heading = self._key_repr(key)
-                pos = [w for w in leaf.words if w.side == "pos"][:top_words]
-                neg = [w for w in leaf.words if w.side == "neg"][:top_words]
+                pos = [w for w in leaf.words if w.side == "pos"][:n_tw]
+                neg = [w for w in leaf.words if w.side == "neg"][:n_tw]
                 rows = []
                 for w in pos + neg:
                     rows.append([

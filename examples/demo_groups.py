@@ -70,5 +70,5 @@ for p in gr3.pairs:
     show(f'gr3[("{p.g1}", "{p.g2}")].words', gr3[(p.g1, p.g2)].words)
 
 print("\n══════ Markdown report (3-group) ══════")
-print(gr3.report(top_words=10, clusters=20))
-# gr3.report(top_words=10, clusters=20).save("report_groups.md")
+print(gr3.report(top_words={"n": 10}, clusters={"n": 20}))
+# gr3.report(top_words={"n": 10}, clusters={"n": 20}).save("report_groups.md")
