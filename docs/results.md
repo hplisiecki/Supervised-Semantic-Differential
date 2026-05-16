@@ -102,7 +102,7 @@ Returned by `fit_pls()`.
 | View | Default | Notes |
 |---|---|---|
 | `.words` | top 100 / side | `.pos`, `.neg` — 20 rows each |
-| `.clusters.pos` / `.neg` | `topn=100` | Callable — re-clusters |
+| `.clusters.pos` / `.neg` | `topn=100` | Callable; zooming with `(cluster_id)` renders a 5-row snippet sub-table. `top_words` (top-5 cluster words) is now a default column; `top_snippet` is **opt-in** via `cols="all"` (filling it triggers full snippet extraction). |
 | `.clusters.words` / `.pos.words` | — | Per-cluster word tables |
 | `.clusters.pos.snippets` | 30 | Snippets filtered to pos-side clusters |
 | `.snippets` | `top_per_side=30` | `.pos`, `.neg` for sides |
@@ -237,7 +237,7 @@ res.test("split_perm", n_splits=50, n_perm=2000)
 ### Minimal report (v1)
 
 ```python
-res.report(top_words=5).save("multipls.md")
+res.report(top_words={"n": 5}).save("multipls.md")
 ```
 
 Clusters / snippets / misdiagnosed sections are reserved for a later milestone — passing them here is a no-op.
@@ -256,7 +256,7 @@ Returned by `Corpus.suggest_lexicon(...)` or `.evaluate_lexicon(...)`.
 | `.summary` | Only from `evaluate_lexicon`: `docs_any`, `cov_all`, `q1`, `q4`, `corr_any`, `hits_mean/median`, `types_mean/median`, `group_cov` |
 
 ```python
-lex.report(top=20).save("lexicon.md")
+lex.report(top={"n": 20}).save("lexicon.md")
 ```
 
 ---
@@ -378,25 +378,56 @@ result.clear_cache("clusters")      # drop only clusters.*
 ## Reports
 
 Every result has a `.report(...)` method that builds a multi-section document.
+**Clusters are the main element**; every section is on by default — pass
+`section=False` to drop one.
+
+**Section toggles** (`clusters`, `top_words`, `extreme_docs`, `misdiagnosed`,
+`top`) all accept:
+
+- `True` (the default for every section) — include with defaults
+- `False` / `None` — skip the section
+- `dict` — override defaults, e.g. `clusters={"n": 20}`
+
+Passing an `int` raises `TypeError` — wrap in a dict instead.
+
+The Stats / Fit-info block (PLS / PCA+OLS) and the Omnibus / Group-labels /
+Pairwise-contrasts block (`GroupResult`) are **always rendered** — there is no
+toggle for them.
 
 **PLS / PCA+OLS:**
 ```python
-result.report(
-    top_words=5,              # words per pole (None skips)
-    clusters=None,            # topn passed to cluster extractor
-    extreme_docs=None,        # N most-pos + N most-neg
-    misdiagnosed=None,        # N over + N under
-)
+# Default — Stats + Fit info + Clusters + Top words + Extreme docs + Misdiagnosed
+result.report()
+
+# Customize the cluster table
+result.report(clusters={"n": 50, "n_words": 8, "n_snippets": 2})
+
+# Drop the excerpt column entirely
+result.report(clusters={"n_snippets": 0})
+
+# Skip a section
+result.report(misdiagnosed=False)
+
+# Minimal — Stats + Fit info + Clusters only
+result.report(top_words=False, extreme_docs=False, misdiagnosed=False)
 ```
 
 **Groups:**
 ```python
-gr.report(top_words=5, clusters=None, snippets_per_cluster=None)
+# Default — Omnibus + Group labels + Pairwise contrasts + Top words + Clusters
+gr.report()
+
+# Heavier cluster tables, no top-words section
+gr.report(clusters={"n": 20, "n_words": 10, "n_snippets": 2}, top_words=False)
 ```
+
+`clusters` dict keys: `n` (clusters per side, default 10), `n_words` (default
+5) and `n_snippets` (default 1; `0` drops the "Representative Excerpt" column;
+values > 1 join excerpts with `" / "`). Per pair × side on `GroupResult`.
 
 **Render or save:**
 ```python
-r = result.report(top_words=10, clusters=50, extreme_docs=5)
+r = result.report(clusters={"n": 50, "n_words": 10})
 
 print(r)                 # plain text
 r.save("report.md")      # .md .txt .html .tex .json .docx
@@ -425,7 +456,8 @@ Iterating a tabular view yields frozen dataclasses. Import from `ssdiff.results.
 
 ```
 Word         side, rank, word, cos_beta, contrast
-Cluster      cluster_id, side, size, coherence, centroid_cos_beta, contrast
+Cluster      cluster_id, side, size, coherence, centroid_cos_beta, contrast,
+             top_words, top_snippet
 ClusterWord  cluster_id, side, word, cos_centroid, cos_beta, contrast
 Snippet      snippet_id, side, doc_id, cosine, seed,
              start_token_idx, end_token_idx, start_sent_idx, end_sent_idx,

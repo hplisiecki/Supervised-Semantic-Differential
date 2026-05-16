@@ -150,13 +150,16 @@ class _SingleResult(Result):
         rows: list[Cluster] = []
         words_rows: list[ClusterWord] = []
         for c in raw:
+            words_list = c["words"]
+            top_words = ", ".join(w["word"] for w in words_list[:5])
             rows.append(Cluster(
                 cluster_id=int(c["id"]), side=side, size=int(c["size"]),
                 coherence=float(c["coherence"]),
                 centroid_cos_beta=float(c["centroid_cos_beta"]),
                 contrast=contrast,
+                top_words=top_words,
             ))
-            for w in c["words"]:
+            for w in words_list:
                 words_rows.append(ClusterWord(
                     cluster_id=int(c["id"]), side=side, word=w["word"],
                     cos_centroid=float(w.get("cos_centroid", 0.0)),

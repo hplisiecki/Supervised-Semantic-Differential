@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from ssdiff.results.display import NARRATIVE_EXTS, TABULAR_EXTS
-from ssdiff.results.report import CITATION, Report, Section
+from ssdiff.results.report import Report, Section
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -43,7 +43,6 @@ def _minimal_report() -> Report:
                 rows=[("r2", "0.42"), ("pvalue", "0.01")],
             )
         ],
-        cite=True,
     )
 
 
@@ -162,6 +161,72 @@ def test_view_save_k_caps_rows(pls_result, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Invariant 6b – save(path, k=N) contract holds for EVERY row-bearing view
+# ---------------------------------------------------------------------------
+# Regression for an old gap: only WordsView was tested with k=N, so a broken
+# __getitem__-on-slice in any sibling view (e.g. ClustersView returning a
+# bare list) only surfaced when a downstream caller exercised that path.
+
+_ROW_VIEW_GETTERS = [
+    ("words",                 lambda r: r.words),
+    ("words.pos",             lambda r: r.words.pos),
+    ("words.neg",             lambda r: r.words.neg),
+    ("clusters",              lambda r: r.clusters),
+    ("clusters.pos",          lambda r: r.clusters.pos),
+    ("clusters.neg",          lambda r: r.clusters.neg),
+    ("clusters.words",        lambda r: r.clusters.words),
+    ("clusters.pos.words",    lambda r: r.clusters.pos.words),
+    ("clusters.neg.words",    lambda r: r.clusters.neg.words),
+    ("snippets",              lambda r: r.snippets),
+    ("snippets.pos",          lambda r: r.snippets.pos),
+    ("snippets.neg",          lambda r: r.snippets.neg),
+    ("docs",                  lambda r: r.docs),
+    ("docs.pos()",            lambda r: r.docs.pos()),
+    ("docs.neg()",            lambda r: r.docs.neg()),
+]
+
+
+@pytest.mark.parametrize("label,getter", _ROW_VIEW_GETTERS,
+                         ids=[lbl for lbl, _ in _ROW_VIEW_GETTERS])
+def test_view_save_k_caps_rows_all_views(pls_result, tmp_path, label, getter):
+    """save(path, k=N) on any row-bearing view: no crash, ≤ N data rows.
+
+    Contract is per the View base class, not per-call-site. Every concrete
+    subclass must honor it — otherwise the bug only shows in whichever
+    caller happens to pass ``k=N``.
+    """
+    view = getter(pls_result)
+    if len(view) == 0:
+        pytest.skip(f"{label}: view is empty on this fixture")
+    k = 2
+    out = tmp_path / f"{label.replace('.', '_').replace('(', '').replace(')', '')}.csv"
+    view.save(str(out), k=k)
+
+    with open(out, newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert len(rows) <= k, (
+        f"{label}: save(k={k}) wrote {len(rows)} data rows; expected ≤ {k}"
+    )
+
+
+@pytest.mark.parametrize("label,getter", _ROW_VIEW_GETTERS,
+                         ids=[lbl for lbl, _ in _ROW_VIEW_GETTERS])
+def test_view_slice_returns_view_all_views(pls_result, label, getter):
+    """view[:k] must return something with ``_columns`` (i.e. a View, not list).
+
+    ``View._resized(k)`` (used by ``save(k=N)``) delegates to ``self[:k]``,
+    then ``_validate_cols`` reads ``view._columns``. A bare list slips through
+    every type hint and only crashes at write time.
+    """
+    view = getter(pls_result)
+    sliced = view[:2]
+    assert hasattr(sliced, "_columns"), (
+        f"{label}: view[:k] returned {type(sliced).__name__} "
+        f"(must be a View with ``_columns``)"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Invariant 7 – ScalarView.save("out.csv", k=0) is a silent no-op or pins
 # ---------------------------------------------------------------------------
 
@@ -183,25 +248,6 @@ def test_scalar_view_save_k_zero(pls_result, tmp_path):
         rows = list(reader)
     # ScalarView always iterates exactly 1 item regardless of k
     assert len(rows) in (0, 1), f"Unexpected row count: {len(rows)}"
-
-
-# ---------------------------------------------------------------------------
-# Invariant 8 – Report.to_text() contains Citation section with exact DOI
-# ---------------------------------------------------------------------------
-
-def test_report_to_text_contains_doi():
-    """Report.to_text() must include the citation string with exact DOI."""
-    report = _minimal_report()
-    text = report.to_text()
-
-    doi = "10.31234/osf.io/gvrsb_v1"
-    assert doi in text, (
-        f"DOI {doi!r} not found in Report.to_text().\n"
-        f"Citation constant is: {CITATION!r}"
-    )
-    assert "Citation" in text or "Please cite" in text, (
-        "Report.to_text() missing citation block entirely"
-    )
 
 
 # ---------------------------------------------------------------------------

@@ -306,14 +306,30 @@ result.clear_cache()
 ### Reports
 
 `result.report(...)` builds a `Report`; extension dispatch picks the format.
+**Clusters are the main element**, with words and a representative excerpt
+rendered inside each cluster row. Every section is on by default — pass
+`section=False` to drop one. The Stats / Fit-info block (PLS / PCA+OLS) and
+the Omnibus / Group-labels / Pairwise-contrasts block (`GroupResult`) are
+always rendered. Section arguments accept `True` / `False` / `None` / `dict`
+— never `int`.
 
 ```python
-r = result.report(top_words=10, clusters=50, extreme_docs=5, misdiagnosed=5)
+# Defaults — every section on
+result.report()
+
+# Customise the cluster table; drop the misdiagnosed section
+r = result.report(
+    clusters={"n": 50, "n_words": 10, "n_snippets": 2},
+    misdiagnosed=False,
+)
 r.to_text()         # plain text
-r.to_markdown()     # markdown source
 r.to_html()         # styled HTML
-r.save("report.md")   # .md .txt .html .tex .docx .json
+r.save("report.md") # .md .txt .html .tex .docx .json
 ```
+
+`clusters` dict keys (with defaults): `n=10` (clusters per side), `n_words=5`
+(words listed in each row), `n_snippets=1` (representative excerpts per row;
+`0` drops the column, values > 1 join with `" / "`).
 
 ### Lexicon suggestions (also a result)
 
@@ -352,11 +368,11 @@ lexicon = lex.tokens[:20]
 ssd = SSD(emb, corpus, y=scores, lexicon=lexicon, window=3)
 ols = ssd.fit_ols()
 ols.plot_sweep("sweep.png")
-ols.report(top_words=10, clusters=50).save("report_ols.md")
+ols.report(clusters={"n": 50, "n_words": 10, "n_snippets": 2}).save("report_ols.md")
 
 # Continuous fit — PLS on the same SSD
 pls = ssd.fit_pls(k="auto")
-pls.report(top_words=10, clusters=50).save("report_pls.md")
+pls.report(clusters={"n": 50, "n_words": 10, "n_snippets": 2}).save("report_pls.md")
 
 # Group comparison
 ssd_g = SSD(emb, corpus, y=groups, lexicon=lexicon)

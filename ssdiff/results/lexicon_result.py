@@ -6,7 +6,7 @@ from collections.abc import Iterator
 
 from ssdiff.results.core import Result, ScalarView, View
 from ssdiff.results.format import fmt_count, fmt_d, fmt_p, fmt_pct, fmt_r
-from ssdiff.results.report import Report, Section
+from ssdiff.results.report import Report, Section, _resolve_section
 from ssdiff.results.schema import Suggestion, Summary
 
 # ---------- LexiconStatsView (ScalarView) ----------
@@ -141,20 +141,24 @@ class LexiconResult(Result):
 
     # -------- report ------------------------------------------------------
 
-    def report(self, top: int = 20) -> Report:
+    def report(self, *, top: bool | dict | None = True) -> Report:
         """Build a narrative Report for this lexicon result.
 
-        Parameters
-        ----------
-        top : int
-            Maximum number of suggestions to include in the table.
+        ``top`` accepts ``True`` / ``False`` / ``None`` / ``dict``:
+
+        - ``False`` or ``None`` skips the suggestions table.
+        - ``True`` includes it with the default of ``{"n": 20}`` suggestions.
+        - ``dict`` overrides defaults, e.g. ``top={"n": 50}``.
 
         Returns
         -------
         Report
-            A ``Report`` with a stats section, a suggestions table, and (when
-            available) a coverage-summary section from ``evaluate_lexicon``.
+            A ``Report`` with a stats section, an optional suggestions table,
+            and (when available) a coverage-summary section from
+            ``evaluate_lexicon``.
         """
+        top_cfg = _resolve_section(top, {"n": 20}, name="top")
+
         sections = []
 
         # Stats section
@@ -166,26 +170,28 @@ class LexiconResult(Result):
         ]))
 
         # Suggestions table
-        rows = []
-        for sug in list(self.suggestions)[:top]:
-            rows.append([
-                sug.token,
-                fmt_count(sug.freq),
-                fmt_pct(sug.cov_all),
-                fmt_pct(sug.cov_bal),
-                fmt_r(sug.corr, signed=True),
-                fmt_p(sug.pvalue),
-                sug.direction,
-                fmt_r(sug.rank),
-            ])
-        if rows:
-            sections.append(Section(
-                title=f"Suggestions (top {min(top, len(rows))})",
-                kind="table",
-                headers=["token", "freq", "cov_all", "cov_bal", "corr", "pvalue", "dir", "rank"],
-                rows=rows,
-                numeric=[False, True, True, True, True, True, False, True],
-            ))
+        if top_cfg:
+            n_top = top_cfg["n"]
+            rows = []
+            for sug in list(self.suggestions)[:n_top]:
+                rows.append([
+                    sug.token,
+                    fmt_count(sug.freq),
+                    fmt_pct(sug.cov_all),
+                    fmt_pct(sug.cov_bal),
+                    fmt_r(sug.corr, signed=True),
+                    fmt_p(sug.pvalue),
+                    sug.direction,
+                    fmt_r(sug.rank),
+                ])
+            if rows:
+                sections.append(Section(
+                    title=f"Suggestions (top {min(n_top, len(rows))})",
+                    kind="table",
+                    headers=["token", "freq", "cov_all", "cov_bal", "corr", "pvalue", "dir", "rank"],
+                    rows=rows,
+                    numeric=[False, True, True, True, True, True, False, True],
+                ))
 
         # Summary section (only when evaluate_lexicon built the result)
         if self.summary is not None:
@@ -209,5 +215,4 @@ class LexiconResult(Result):
             title="LexiconResult",
             subtitle=f"(n_docs = {fmt_count(self.stats.n_docs)})",
             sections=sections,
-            cite=False,
         )

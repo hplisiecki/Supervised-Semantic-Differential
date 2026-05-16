@@ -24,14 +24,100 @@ from ssdiff.results.display import (
 )
 from ssdiff.results.format import fmt_table
 
-CITATION = (
-    "Please cite as:\n"
-    "  Plisiecki, H., Lenartowicz, P., Pokropek, A., Małyska, K., & Flakus, M. (2025). "
-    "Supervised Semantic Differential. PsyArXiv. "
-    "https://doi.org/10.31234/osf.io/gvrsb_v1"
-)
-
 SectionKind = Literal["kv", "table", "list"]
+
+
+def _md_cell(value) -> str:
+    """Stringify and escape a value for use inside a Markdown table cell."""
+    text = str(value).replace("|", r"\|")
+    return text.replace("\n", "<br>")
+
+
+def _build_cluster_section(
+    title: str,
+    clusters_view,
+    *,
+    n_clusters: int,
+    n_words: int,
+    n_snippets: int,
+    snippet_provider,
+) -> "Section":
+    """Build a Section with No./Size/Top Words/Representative Excerpt columns.
+
+    ``clusters_view`` is a ``ClustersViewSided`` exposing ``_words_rows``.
+    ``snippet_provider`` is a no-arg callable returning a side-scoped snippets
+    view (must expose ``_all_side_rows``) or ``None`` when snippets are
+    unavailable (no corpus, or extraction failed). When ``n_snippets <= 0`` or
+    the provider returns ``None``, the "Representative Excerpt" column is
+    omitted entirely.
+    """
+    words_by_cid: dict[int, list] = {}
+    for cw in clusters_view._words_rows:
+        words_by_cid.setdefault(cw.cluster_id, []).append(cw)
+
+    include_excerpt = False
+    snips_by_cid: dict[int, list] = {}
+    if n_snippets > 0:
+        sn_view = snippet_provider()
+        if sn_view is not None:
+            for sn in sn_view._all_side_rows:
+                if sn.cluster_id is None:
+                    continue
+                snips_by_cid.setdefault(sn.cluster_id, []).append(sn)
+            include_excerpt = True
+
+    rows = []
+    for i, c in enumerate(list(clusters_view)[:n_clusters], start=1):
+        words_sorted = sorted(
+            words_by_cid.get(c.cluster_id, []),
+            key=lambda w: w.cos_centroid, reverse=True,
+        )
+        top_words_str = ", ".join(w.word for w in words_sorted[:n_words])
+        row = [i, c.size, top_words_str]
+        if include_excerpt:
+            cluster_snips = sorted(
+                snips_by_cid.get(c.cluster_id, []),
+                key=lambda s: s.cosine, reverse=True,
+            )[:n_snippets]
+            row.append(" / ".join(s.text_window for s in cluster_snips))
+        rows.append(row)
+
+    headers = ["No.", "Size", "Top Words"]
+    numeric = [True, True, False]
+    if include_excerpt:
+        headers.append("Representative Excerpt")
+        numeric.append(False)
+
+    return Section(
+        title=title, kind="table",
+        headers=headers, rows=rows, numeric=numeric,
+    )
+
+
+def _resolve_section(value, defaults: dict, *, name: str) -> dict | None:
+    """Normalize a ``report()`` section argument.
+
+    Accepts ``True``/``False``/``None``/``dict``. ``True`` returns
+    ``defaults``; a dict is merged onto ``defaults``; ``False``/``None``
+    returns ``None`` (skip section). ``int`` and any other type raise
+    ``TypeError`` — use ``True`` or a dict like ``{"n": 10}``.
+    """
+    if value is None or value is False:
+        return None
+    if value is True:
+        return dict(defaults)
+    if isinstance(value, dict):
+        unknown = set(value) - set(defaults)
+        if unknown:
+            raise TypeError(
+                f"{name}: unknown keys {sorted(unknown)}; "
+                f"valid keys are {sorted(defaults)}"
+            )
+        return {**defaults, **value}
+    raise TypeError(
+        f"{name} must be True, False, None, or a dict like "
+        f"{{'n': 10}} — got {type(value).__name__} ({value!r})"
+    )
 
 
 @dataclass
@@ -67,7 +153,6 @@ class Report:
 
     Use the ``save(path)`` method to write to disk; format is inferred from
     the file extension.  ``to_text()`` / ``to_html()`` return strings directly.
-    Pass ``cite=False`` to suppress the standard citation footer.
 
     Fields
     ------
@@ -77,13 +162,10 @@ class Report:
         Ordered content sections.
     subtitle : str or None
         Optional subtitle rendered below the title.
-    cite : bool
-        If ``True`` (default), append the Plisiecki et al. (2025) citation.
     """
     title: str
     sections: list[Section]
     subtitle: str | None = None
-    cite: bool = True
 
     _SUPPORTED_EXTS: ClassVar[tuple[str, ...]] = NARRATIVE_EXTS
 
@@ -118,9 +200,6 @@ class Report:
         parts = [self._text_header()]
         for s in self.sections:
             parts.append(self._text_section(s))
-        if self.cite:
-            parts.append("─" * 80)
-            parts.append(CITATION)
         return "\n\n".join(parts)
 
     def to_html(self) -> str:
@@ -132,9 +211,6 @@ class Report:
         for s in self.sections:
             parts.append(f"<h2>{_html.escape(s.title)}</h2>")
             parts.append(self._html_section_body(s))
-        if self.cite:
-            parts.append("<hr/>")
-            parts.append(f"<p class='citation'>{_html.escape(CITATION)}</p>")
         parts.append("</div>")
         return "\n".join(parts)
 
@@ -146,11 +222,6 @@ class Report:
         for s in self.sections:
             lines.append(f"## {s.title}")
             lines.append(self._md_section_body(s))
-        if self.cite:
-            lines.append("")
-            lines.append("---")
-            lines.append("")
-            lines.append(CITATION.replace("\n  ", "\n> "))
         return "\n\n".join(lines)
 
     def _to_latex(self) -> str:
@@ -161,9 +232,6 @@ class Report:
         for s in self.sections:
             parts.append(f"\\subsection*{{{s.title}}}")
             parts.append(self._latex_section_body(s))
-        if self.cite:
-            parts.append("\\vspace{1em}\\hrule\\vspace{0.5em}")
-            parts.append(CITATION.replace("\n", "\\\\\n"))
         return "\n\n".join(parts)
 
     def _to_json(self) -> str:
@@ -190,9 +258,6 @@ class Report:
         for s in self.sections:
             doc.add_heading(s.title, level=2)
             self._docx_section_body(doc, s)
-        if self.cite:
-            doc.add_paragraph("—" * 40)
-            doc.add_paragraph(CITATION)
         doc.save(path)
 
     # -------- unified save() --------------------------------------------
@@ -256,12 +321,15 @@ class Report:
     def _md_section_body(self, s: Section) -> str:
         """Render the body of one Section as Markdown."""
         if s.kind == "kv":
-            rows = "\n".join(f"| {k} | {v} |" for k, v in s.rows)
+            rows = "\n".join(f"| {_md_cell(k)} | {_md_cell(v)} |" for k, v in s.rows)
             return f"| Metric | Value |\n|:-------|------:|\n{rows}"
         if s.kind == "table":
             header = "| " + " | ".join(s.headers or []) + " |"
             sep = "|" + "|".join(["---"] * len(s.headers or [])) + "|"
-            body = "\n".join("| " + " | ".join(str(c) for c in r) + " |" for r in s.rows)
+            body = "\n".join(
+                "| " + " | ".join(_md_cell(c) for c in r) + " |"
+                for r in s.rows
+            )
             return "\n".join([header, sep, body])
         if s.kind == "list":
             return "\n".join(f"- {item}" for item in s.rows)

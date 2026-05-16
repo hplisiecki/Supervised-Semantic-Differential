@@ -60,5 +60,5 @@ show("ols_k20.stats", ols_k20.stats)
 show("ols_k20.words", ols_k20.words)
 
 print("\n══════ Markdown report ══════")
-print(ols.report(top_words=15, clusters=30))
-# ols.report(top_words=15, clusters=30).save("report_ols.md")
+print(ols.report(clusters={"n": 30, "n_words": 10, "n_snippets": 1}))
+# ols.report(clusters={"n": 30, "n_words": 10, "n_snippets": 1}).save("report_ols.md")

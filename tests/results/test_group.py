@@ -248,6 +248,59 @@ def test_words_save_xlsx_3g(group_result_3g):
 
 
 # ---------------------------------------------------------------------------
+# Invariant 12b — shim-view save(k=N) works for clusters/snippets, not just words
+# ---------------------------------------------------------------------------
+# Regression for an old gap: the fan-out tests only exercised ``gr.words.save``,
+# whose leaves are WordsView (slice-safe). The same logic for ``gr.clusters``
+# (leaves: ClustersView) was broken at the per-leaf ``_resized(k)`` step and
+# only surfaced in the desktop app's export path.
+
+_SHIM_NAMES = ["words", "clusters", "snippets"]
+
+
+@pytest.mark.parametrize("shim_name", _SHIM_NAMES)
+def test_shim_save_csv_2g_with_k(group_result_2g, shim_name):
+    """2-group: shim.save(out.csv, k=N) delegates to single child; no crash."""
+    gr = group_result_2g
+    shim = getattr(gr, shim_name)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        out = Path(tmpdir) / f"{shim_name}.csv"
+        # n=1 → delegates to child.save which routes through View._resized(k)
+        shim.save(str(out), k=2)
+        assert out.exists(), f"{shim_name}: expected flat CSV for 2-group save"
+
+
+@pytest.mark.parametrize("shim_name", _SHIM_NAMES)
+def test_shim_save_csv_3g_fanout_with_k(group_result_3g, shim_name):
+    """3-group: shim.save(out.csv, k=N) fans out; each pair file has ≤ N rows."""
+    import csv as _csv
+    import warnings
+
+    gr = group_result_3g
+    shim = getattr(gr, shim_name)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        out = Path(tmpdir) / f"{shim_name}.csv"
+        k = 2
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            shim.save(str(out), k=k)
+        subfolder = Path(tmpdir) / shim_name
+        assert subfolder.is_dir(), (
+            f"{shim_name}: expected fan-out subfolder for 3-group save"
+        )
+        csv_files = list(subfolder.glob("*.csv"))
+        assert len(csv_files) == _n_pairs(3), (
+            f"{shim_name}: expected {_n_pairs(3)} files, got {len(csv_files)}"
+        )
+        for csv_file in csv_files:
+            with open(csv_file, newline="", encoding="utf-8") as f:
+                rows = list(_csv.DictReader(f))
+            assert len(rows) <= k, (
+                f"{shim_name}/{csv_file.name}: {len(rows)} rows; expected ≤ {k}"
+            )
+
+
+# ---------------------------------------------------------------------------
 # Invariant 13 — report().to_text() contains "Omnibus" and "Pairwise"
 # ---------------------------------------------------------------------------
 
