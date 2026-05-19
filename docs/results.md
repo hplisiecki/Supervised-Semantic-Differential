@@ -127,7 +127,7 @@ Everything on `PLSResult`, plus:
 - `.stats` adds `r2_adj`
 - `.pca_k`, `.pca_components`, `.pca_weights` — PCA basis and OLS coefficients
 - `.sweep_result`, `.sweep` — full sweep diagnostics (`None` if `fixed_k` was set)
-- `.plot_sweep(path=None, dpi=300)` — dual-axis chart of interpretability vs β-change; returns PNG bytes. Needs matplotlib.
+- `.plot_sweep(path=None, dpi=300)` — dual-axis chart of interpretability vs β-change. Returns the matplotlib `Figure`; writes to `path` when given, otherwise calls `plt.show()`. Needs matplotlib.
 
 ---
 
