@@ -1716,8 +1716,11 @@ class PCAOLSResult(ContinuousResult):
             "       ols.plot_sweep('sweep.png')           # chart"
         )
 
-    def plot_sweep(self, path: str | None = None, *, dpi: int = 300) -> bytes:
-        """Dual-axis PCA-K sweep chart. Unchanged from v0.x behaviour.
+    def plot_sweep(self, path: str | None = None, *, dpi: int = 300):
+        """Dual-axis PCA-K sweep chart.
+
+        Returns the matplotlib ``Figure``. When ``path`` is given the figure
+        is also written to disk; otherwise it is shown interactively.
 
         Raises RuntimeError when `sweep_result is None`.
         """
@@ -1735,8 +1738,6 @@ class PCAOLSResult(ContinuousResult):
                 "matplotlib is required for plot_sweep(). "
                 "Install it with: pip install ssdiff[results]"
             ) from None
-
-        import io
 
         rows = self.sweep_result.df_joined
         x = [r["PCA_K"] for r in rows]
@@ -1763,18 +1764,11 @@ class PCAOLSResult(ContinuousResult):
         ax1.axvline(self.sweep_result.best_k, color="red", linewidth=2,
                      label=f"best K = {self.sweep_result.best_k}")
 
-        plt.tight_layout()
-
-        buf = io.BytesIO()
-        plt.savefig(buf, format="png", dpi=dpi)
-        buf.seek(0)
-        png = buf.getvalue()
+        fig.tight_layout()
 
         if path is not None:
-            with open(path, "wb") as f:
-                f.write(png)
+            fig.savefig(path, dpi=dpi)
         else:
             plt.show()
 
-        plt.close(fig)
-        return png
+        return fig

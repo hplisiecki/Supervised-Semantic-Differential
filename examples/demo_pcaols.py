@@ -52,7 +52,7 @@ show("ols.words", ols.words)
 show("ols.clusters", ols.clusters)
 show("ols.clusters.pos.words", ols.clusters.pos.words)
 show("ols.clusters.neg.words", ols.clusters.neg.words)
-# ols.plot_sweep(path="sweep_plot.png")
+# ols.plot_sweep("sweep_plot.png")
 
 print("\n══════ PCA + OLS, fixed k=20 ══════")
 ols_k20 = ssd.fit_ols(fixed_k=20, verbose=True)
