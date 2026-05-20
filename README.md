@@ -187,7 +187,7 @@ python -m spacy download en_core_web_sm
 
 ## Lexicon Utilities
 
-These helpers make lexicon selection transparent and data-driven (you can also hand-pick tokens). All three are **methods on `Corpus`** — they operate on the already-lemmatized tokens, so what they score is exactly what `SSD` will consume.
+These helpers make lexicon selection transparent and data-driven (you can also hand-pick tokens). They are **methods on `Corpus`** — they operate on the already-lemmatized tokens, so what they score is exactly what `SSD` will consume.
 
 ### `corpus.suggest_lexicon(y, ...)`
 
@@ -209,33 +209,30 @@ ssd = SSD(emb, corpus, y, lexicon=result.tokens)
 | `corr_cap` | `float` | `0.30` | Penalty threshold for outcome association |
 | `var_type` | `str` | `"continuous"` | `"continuous"` or `"categorical"` |
 
-### `corpus.token_stats(y, lexicon, ...)`
-
-Per-token coverage and association diagnostics for a chosen lexicon:
-
-```python
-rows = corpus.token_stats(
-    y, lexicon=["happy", "sad", "anger"],
-    n_bins=4, corr_cap=0.30, var_type="continuous",
-)
-# list[dict]: token, freq, cov_all, cov_bal, corr, rank, pvalue, direction
-```
-
-### `corpus.coverage_summary(y, lexicon, ...)`
-
-Aggregate coverage stats for your chosen lexicon:
-
-```python
-summary = corpus.coverage_summary(
-    y, lexicon=["happy", "sad", "anger"],
-    n_bins=4, var_type="continuous",
-)
-# dict: docs_any, cov_all, q1, q4, corr_any, hits_mean, hits_median, ...
-```
-
 ### `corpus.evaluate_lexicon(y, lexicon, ...)`
 
-Convenience wrapper returning a `LexiconResult` that bundles the summary, per-token table, and a narrative report — useful when comparing several candidate lexicons.
+Score an existing lexicon against an outcome. Returns a `LexiconResult` bundling per-token diagnostics (`.suggestions`) and an aggregate coverage summary (`.summary`) — both saveable, with `.report()` producing a narrative markdown overview.
+
+```python
+corpus = Corpus(texts, lang="en")
+lex = corpus.evaluate_lexicon(y, lexicon=["happy", "sad", "anger"])
+
+print(lex)                              # tabular view
+lex.suggestions.save("tokens.csv")      # per-token rows
+lex.summary.save("coverage.csv")        # aggregate stats
+lex.report().save("lexicon.md")         # narrative overview
+```
+
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `y` | `array-like` | — | Outcome variable (numeric or categorical) |
+| `lexicon` | `iterable[str]` | — | Tokens to evaluate (matched against lemmatized corpus) |
+| `n_bins` | `int` | `4` | Quantile bins for balanced coverage |
+| `corr_cap` | `float` | `0.30` | Penalty threshold for outcome association |
+| `var_type` | `str` | `"continuous"` | `"continuous"` or `"categorical"` |
+
+`.suggestions` columns: `token, freq, cov_all, cov_bal, corr, pvalue, direction, rank`.
+`.summary` fields: `docs_any, cov_all, q1, q4, corr_any, hits_mean, hits_median, types_mean, types_median` (plus `group_cov` for categorical `y`).
 
 ---
 
@@ -584,9 +581,7 @@ from ssdiff.results.multi_pls_result import MultiPLSResult
 - `.pre_docs` — sentence-level structure for snippet extraction
 - `.n_texts` — number of documents
 - `.suggest_lexicon(y, *, top_k=30, ...)` -> `LexiconResult` — data-driven seed word selection
-- `.token_stats(y, lexicon, ...)` -> `list[dict]` — per-token coverage / association
-- `.coverage_summary(y, lexicon, ...)` -> `dict` — aggregate coverage diagnostics
-- `.evaluate_lexicon(y, lexicon, ...)` -> `LexiconResult` — combined summary + per-token table
+- `.evaluate_lexicon(y, lexicon, ...)` -> `LexiconResult` — score an existing lexicon (per-token + aggregate)
 
 ### `SSD`
 
@@ -633,13 +628,11 @@ The lexicon helpers are **methods on `Corpus`**, not standalone imports:
 
 ```python
 corpus = Corpus(texts, lang="en")
-suggestions = corpus.suggest_lexicon(y, top_k=30)   # → LexiconResult
-stats = corpus.token_stats(y, lexicon=["happy", "sad"])
-cov = corpus.coverage_summary(y, lexicon=["happy", "sad"])
-lex = corpus.evaluate_lexicon(y, lexicon=["happy", "sad"])
+suggestions = corpus.suggest_lexicon(y, top_k=30)           # → LexiconResult
+lex = corpus.evaluate_lexicon(y, lexicon=["happy", "sad"])  # → LexiconResult
 ```
 
-All views support `.to_df()` (requires `ssdiff[results]`), `.to_dict()`, `.to_records()`, and `.save("file.{csv,json,md,xlsx,docx,tex,html}")`.
+`LexiconResult` views (`.suggestions`, `.summary`) and `.report()` support `.to_df()` (requires `ssdiff[results]`), `.to_dict()`, `.to_records()`, and `.save("file.{csv,json,md,xlsx,docx,tex,html}")`.
 
 ---
 
