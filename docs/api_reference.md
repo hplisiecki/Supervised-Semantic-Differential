@@ -127,7 +127,7 @@ Supported languages out of the box: ca, da, de, el, en, es, fr, hr, it, lt, mk, 
 
 ### Lexicon helpers
 
-All three return a `LexiconResult` (see [`results.md`](results.md)).
+Both return a `LexiconResult` (see [`results.md`](results.md)).
 
 ```python
 corpus.suggest_lexicon(y, *, top_k=30, min_docs=5, n_bins=4,
@@ -135,19 +135,16 @@ corpus.suggest_lexicon(y, *, top_k=30, min_docs=5, n_bins=4,
 
 corpus.evaluate_lexicon(y, lexicon, *, n_bins=4, corr_cap=0.30,
                         var_type="continuous")
-
-corpus.token_stats(y, lexicon, *, n_bins=4, corr_cap=0.30,
-                   var_type="continuous")   # → list[dict]
-
-corpus.coverage_summary(y, lexicon, *, n_bins=4,
-                        var_type="continuous")  # → dict
 ```
+
+`suggest_lexicon` ranks corpus tokens for use as seeds; `evaluate_lexicon` scores an existing lexicon, returning per-token diagnostics (`.suggestions`) and aggregate coverage (`.summary`).
 
 | Argument | Type | Default | Description |
 |---|---|---|---|
 | `y` | array-like | — | Outcome aligned with `corpus.docs`. NaN / `None` filtered. |
+| `lexicon` | iterable[str] | — | Tokens to score (`evaluate_lexicon`). |
 | `top_k` | `int` | `30` | Maximum candidates to return (`suggest_lexicon`). |
-| `min_docs` | `int` | `5` | Minimum document frequency. |
+| `min_docs` | `int` | `5` | Minimum document frequency (`suggest_lexicon`). |
 | `n_bins` | `int` | `4` | Quantile bins for balanced coverage (continuous). |
 | `corr_cap` | `float` | `0.30` | Cap applied to `|corr|` in the rank penalty. |
 | `var_type` | `str` | `"continuous"` | `"continuous"` or `"categorical"`. |
