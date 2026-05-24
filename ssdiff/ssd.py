@@ -241,10 +241,10 @@ class SSD:
 
         Significance is always tested with the split_nb method
         (Lenartowicz, 2026). For ``k="auto"`` the reported p-value is the
-        **honest k=1 confirmatory** test — independent of the
+        **same sample k=1 confirmatory** test — independent of the
         ``find_k_optimal`` selection that picks ``k_star`` for the actual
         fit. When ``k_star == 1`` the find_k chain entry at index 0 is
-        reused as the k=1 honest p (it is the same statistic).
+        reused as the k=1 same sample p (it is the same statistic).
 
         Parameters
         ----------
@@ -254,7 +254,7 @@ class SSD:
             - ``int`` — fit at exactly this k; p-value comes from
               ``plskit.pls1_confirmatory_test`` at this k.
             - ``"auto"`` — let ``plskit.pls1_find_k_optimal`` pick
-              ``k_star`` (selector ``"r2_se"``); p-value is the honest
+              ``k_star`` (selector ``"r2_se"``); p-value is the same sample
               k=1 confirmatory split_nb statistic.
         k_max : int, default 5
             Cap for ``k="auto"``. Further clamped to ``min(k_max, n-1, D)``.
@@ -317,9 +317,9 @@ class SSD:
                 if verbose:
                     print(
                         f"[fit_pls] k_star = 1 — reusing chain[0] as the "
-                        f"honest k=1 p (split_nb)"
+                        f"k=1 p (split_nb)"
                     )
-                    print(f"[fit_pls] honest p (k=1) = {pvalue:.6g}")
+                    print(f"[fit_pls] p-value (k=1) = {pvalue:.6g}")
             else:
                 if verbose:
                     chain = ", ".join(
@@ -332,7 +332,7 @@ class SSD:
                     )
                     print(
                         f"        path-max: {path_max:.3g}  "
-                        f"[same-sample, not honest — informational only]"
+                        f"[same-sample]"
                     )
                     print(
                         f"[fit_pls] running k=1 confirmatory test "
@@ -348,7 +348,7 @@ class SSD:
                 )
                 pvalue = float(r.pvalue)
                 if verbose:
-                    print(f"[fit_pls] honest p (k=1) = {pvalue:.6g}")
+                    print(f"[fit_pls] p-value (k=1) = {pvalue:.6g}")
             n_comp = k_star
             p_at_k = 1
         elif isinstance(k, int):
@@ -430,7 +430,7 @@ class SSD:
     ):
         """Fit PLS1, rotate the W-subspace, return a :class:`MultiPLSResult`.
 
-        Container-level p-value follows :meth:`fit_pls` (honest k=1 for
+        Container-level p-value follows :meth:`fit_pls` (same sample k=1 for
         ``k="auto"``, confirmatory at ``k`` for ``k=int``). In addition,
         each rotated dim leaf gains a diagnostic ``pvalue`` field: for
         ``k="auto"`` these are read off the ``find_k_optimal`` chain;
@@ -514,9 +514,9 @@ class SSD:
                 if verbose:
                     print(
                         f"[fit_multipls] k_star = 1 — reusing chain[0] as "
-                        f"the honest k=1 p (split_nb)"
+                        f"the k=1 p (split_nb)"
                     )
-                    print(f"[fit_multipls] honest p (k=1) = {pvalue:.6g}")
+                    print(f"[fit_multipls] p-value (k=1) = {pvalue:.6g}")
             else:
                 if verbose:
                     chain = ", ".join(
@@ -540,7 +540,7 @@ class SSD:
                 )
                 pvalue = float(r.pvalue)
                 if verbose:
-                    print(f"[fit_multipls] honest p (k=1) = {pvalue:.6g}")
+                    print(f"[fit_multipls] p-value (k=1) = {pvalue:.6g}")
             n_comp = k_star
             p_at_k = 1
             chain_pvalues = np.asarray(
