@@ -76,9 +76,11 @@ emb.save("model_norm")  # → model_norm.ssdembed
 
 # Each subsequent run:
 emb = Embeddings.load("model_norm.ssdembed", ram_efficient=True)
-emb.attach_corpus(corpus)
-ssd = SSD(emb, corpus, y, lexicon).fit_pls()
+ssd = SSD(emb, corpus, y, lexicon).fit_pls()  # loads the words your corpus needs
 ```
+
+`SSD(...)` pulls in any corpus words beyond the top-50k automatically, so the
+same `ram_efficient=True` load can be reused across several corpora.
 
 RAM mode is read-only: `normalize`, `save`, and `SSD.fit_multipls` raise.
 For the full PLS / PCA+OLS / group-comparison pipeline this is enough —

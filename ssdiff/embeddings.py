@@ -28,14 +28,13 @@ class Embeddings:
     >>> emb.save("model_norm")          # saves model_norm.ssdembed
 
     For low-RAM environments, pass ``ram_efficient=True`` to
-    :meth:`load` (uncompressed ``.ssdembed`` only) and call
-    :meth:`attach_corpus` before constructing ``SSD``. RAM-mode
-    embeddings are read-only — :meth:`normalize`, :meth:`save`, and
-    ``SSD.fit_multipls`` raise.
+    :meth:`load` (uncompressed ``.ssdembed`` only). Constructing ``SSD``
+    then loads the corpus words automatically, leaving ``emb`` reusable
+    across corpora. RAM-mode embeddings are read-only — :meth:`normalize`,
+    :meth:`save`, and ``SSD.fit_multipls`` raise.
 
     >>> emb = Embeddings.load("model.ssdembed", ram_efficient=True)
-    >>> emb.attach_corpus(corpus)
-    >>> ssd = SSD(emb, corpus, y, lexicon).fit_pls()
+    >>> ssd = SSD(emb, corpus, y, lexicon).fit_pls()  # corpus words loaded automatically
     """
 
     def __init__(self, keys: list[str] | tuple[str, ...], vectors: np.ndarray) -> None:
@@ -65,6 +64,7 @@ class Embeddings:
         self._partial: bool = False
         self._corpus_attached: bool = False
         self._local_row: dict[int, int] | None = None
+        self._extras: np.ndarray | None = None
         self._mmap = None
         self._full_vocab_size: int | None = None
         self._prefix_size: int | None = None
@@ -111,6 +111,7 @@ class Embeddings:
             ("_partial", False),
             ("_corpus_attached", False),
             ("_local_row", None),
+            ("_extras", None),
             ("_mmap", None),
             ("_full_vocab_size", None),
             ("_prefix_size", None),
@@ -144,9 +145,8 @@ class Embeddings:
         ram_efficient : bool, default False
             Low-RAM fallback. Requires uncompressed ``.ssdembed``.
             Materialises only the first ``_RAM_TOP_N`` rows (rank-aligned
-            prefix) at load time; call :meth:`attach_corpus` afterwards
-            to materialise the corpus tokens. RAM-mode embeddings are
-            read-only.
+            prefix) at load time; constructing ``SSD`` then loads the
+            corpus words automatically. RAM-mode embeddings are read-only.
 
         Returns
         -------
@@ -208,7 +208,7 @@ class Embeddings:
             return shim
 
         # Phase 1: copy the first _RAM_TOP_N rows into RAM; keep mmap open
-        # for Phase 2 (attach_corpus).
+        # so the corpus tail can be loaded later.
         try:
             slice_rows = np.array(mmap[:_RAM_TOP_N])
             norms = np.sqrt(np.einsum("ij,ij->i", slice_rows, slice_rows))
@@ -309,21 +309,21 @@ class Embeddings:
 
         return self
 
-    def attach_corpus(self, corpus) -> Embeddings:
-        """Materialise corpus-token rows above the rank-aligned prefix.
+    def _read_extras(self, corpus) -> tuple[list[int], np.ndarray | None]:
+        """Find corpus tokens above the rank-aligned prefix and read their rows.
 
-        No-op when ``_partial`` is False (full-mode embedding). After
-        this call the mmap handle is closed and the embedding is fully
-        in RAM.
+        Returns ``(extra_indices, rows)`` where ``rows[k]`` is the vector for
+        original vocab index ``extra_indices[k]`` (read from the open mmap).
+        Returns ``([], None)`` when the corpus needs nothing beyond what is
+        already materialised. Raises ``RuntimeError`` if new rows are needed
+        but the mmap has already been closed.
         """
-        if not self._partial:
-            return self
         from ssdiff.utils.lexicon import _texts_to_token_lists
 
         flat_docs = _texts_to_token_lists(corpus.docs)
+        cap = self.vectors.shape[0]  # rows already in the base matrix
         extras: list[int] = []
         seen: set[int] = set()
-        cap = self.vectors.shape[0]  # equals _RAM_TOP_N at the moment of load
         for doc in flat_docs:
             for token in doc:
                 oi = self.key_to_index.get(token)
@@ -331,14 +331,77 @@ class Embeddings:
                     continue
                 seen.add(oi)
                 extras.append(oi)
+        if not extras:
+            return [], None
+        if self._mmap is None:
+            raise RuntimeError(
+                "Cannot materialise new corpus tokens: the memory-map is "
+                "already closed. Reload with Embeddings.load(ram_efficient=True) "
+                "for this corpus."
+            )
+        rows = np.asarray(self._mmap[extras])
+        return extras, rows
+
+    def _local_vector(self, local: int) -> np.ndarray:
+        """Resolve a local row index across the base matrix and the side buffer.
+
+        Rows ``< self.vectors.shape[0]`` live in the (possibly shared) base
+        matrix; rows above it live in ``self._extras`` (filled by
+        :meth:`with_corpus`). In-place :meth:`attach_corpus` keeps every row in
+        ``self.vectors``, so ``_extras`` is simply never consulted there.
+        """
+        base_n = self.vectors.shape[0]
+        if local < base_n:
+            return self.vectors[local]
+        return self._extras[local - base_n]
+
+    def _attach_corpus(self, corpus) -> Embeddings:
+        """Materialise corpus-token rows **in place** (mutates ``self``).
+
+        No-op when ``_partial`` is False. Appends the corpus tail to
+        ``self.vectors`` and closes the mmap. For a non-mutating alternative
+        that leaves ``self`` reusable, see :meth:`with_corpus`.
+        """
+        if not self._partial:
+            return self
+        extras, rows = self._read_extras(corpus)
         if extras:
-            new_rows = np.asarray(self._mmap[extras])
-            self.vectors = np.vstack([self.vectors, new_rows])
-            for i, oi in enumerate(extras):
-                self._local_row[oi] = cap + i
+            cap = self.vectors.shape[0]
+            self.vectors = np.vstack([self.vectors, rows])
+            for k, oi in enumerate(extras):
+                self._local_row[oi] = cap + k
         self._mmap = None
         self._corpus_attached = True
         return self
+
+    def with_corpus(self, corpus) -> Embeddings:
+        """Return a corpus-extended *view* without mutating ``self``.
+
+        Full-mode embeddings return ``self`` unchanged. In RAM-efficient mode,
+        the returned view shares the base prefix matrix and vocabulary *by
+        reference* (no copy) and carries its own materialised corpus rows in a
+        private ``_extras`` buffer. ``self`` keeps its mmap open, so it can
+        produce further views for other corpora.
+        """
+        if not self._partial:
+            return self
+        extras, rows = self._read_extras(corpus)
+
+        view = object.__new__(type(self))
+        view.__dict__.update(self.__dict__)  # shares vectors/vocab by ref, no rebuild
+        # Override view-owned state (everything else is shared read-only).
+        view._norms = None
+        view._mmap = None  # the original keeps the live handle
+        view._corpus_attached = True
+        view._local_row = dict(self._local_row)
+        if extras:
+            view._extras = rows
+            base_n = self.vectors.shape[0]
+            for k, oi in enumerate(extras):
+                view._local_row[oi] = base_n + k
+        else:
+            view._extras = None
+        return view
 
     # ---- internal helpers ----
 
@@ -383,10 +446,10 @@ class Embeddings:
             local = self._local_row.get(oi)
             if local is None:
                 raise KeyError(
-                    f"{word!r} is in vocab but not materialised; "
-                    "call attach_corpus(corpus) first"
+                    f"{word!r} is in the vocabulary but not loaded in "
+                    "RAM-efficient mode (SSD loads corpus words automatically)."
                 )
-            return self.vectors[local]
+            return self._local_vector(local)
         return self.vectors[oi]
 
     def __repr__(self) -> str:
@@ -425,8 +488,8 @@ class Embeddings:
         Raises
         ------
         KeyError
-            If *word* is not in the vocabulary, or in RAM mode if it is in
-            vocab but has not been materialised (call ``attach_corpus`` first).
+            If *word* is not in the vocabulary, or in RAM-efficient mode if
+            it is in vocab but has not been loaded.
         RuntimeError
             If ``norm=True`` and ``self.l2_normalized`` is False.
         """
@@ -440,10 +503,10 @@ class Embeddings:
             local = self._local_row.get(idx)
             if local is None:
                 raise KeyError(
-                    f"{word!r} is in vocab but not materialised; "
-                    "call attach_corpus(corpus) first"
+                    f"{word!r} is in the vocabulary but not loaded in "
+                    "RAM-efficient mode (SSD loads corpus words automatically)."
                 )
-            return self.vectors[local]
+            return self._local_vector(local)
         return self.vectors[idx]
 
     # ---- persistence ----

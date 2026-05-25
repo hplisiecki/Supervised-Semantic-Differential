@@ -566,7 +566,6 @@ from ssdiff.results.multi_pls_result import MultiPLSResult
 
 - `Embeddings.load(path, *, verbose=False, parallel=False, ram_efficient=False)` — load `.ssdembed`, `.kv`, `.bin`, `.txt`, `.vec` (and `.gz` variants)
 - `.normalize(l2=True, abtt=1, re_normalize=True)` — in-place L2 + ABTT; tracks state, safe to call repeatedly
-- `.attach_corpus(corpus)` — required after `ram_efficient=True` load
 - `.save(filename=None, fmt="ssdembed")` — save to native, text, binary, or gensim format
 - `emb["word"]` / `emb.get_vector("word", norm=False)` — vector lookup
 - `"word" in emb` — membership check
