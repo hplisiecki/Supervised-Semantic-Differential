@@ -95,10 +95,9 @@ class SSD:
             )
 
         if getattr(embeddings, "_partial", False) and not getattr(embeddings, "_corpus_attached", False):
-            raise RuntimeError(
-                "RAM-efficient embeddings: call emb.attach_corpus(corpus) "
-                "before constructing SSD."
-            )
+            # Materialise the corpus tail into a private view; never mutate the
+            # caller's embedding, so one partial emb stays reusable across corpora.
+            embeddings = embeddings.with_corpus(corpus)
 
         self.embeddings = embeddings
         self.corpus = corpus

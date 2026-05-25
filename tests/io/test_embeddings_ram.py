@@ -102,7 +102,7 @@ def test_attach_corpus_materialises_extras_flat(tmp_path, monkeypatch):
     # Corpus references words at ranks 7, 12, 18 — none in the prefix.
     docs = [["w7", "w12"], ["w18"]]
     corpus = Corpus(docs, lang="en", pretokenized=True)
-    ram.attach_corpus(corpus)
+    ram._attach_corpus(corpus)
 
     assert ram._corpus_attached is True
     assert ram._mmap is None
@@ -128,7 +128,7 @@ def test_attach_corpus_materialises_extras_profile(tmp_path, monkeypatch):
     ram = Embeddings.load(path, ram_efficient=True)
     docs = [[["w7"], ["w12"]], [["w18", "w7"]]]  # nested profile shape
     corpus = Corpus(docs, lang="en", pretokenized=True)
-    ram.attach_corpus(corpus)
+    ram._attach_corpus(corpus)
 
     assert ram._corpus_attached is True
     assert ram.vectors.shape == (8, 4)
@@ -137,13 +137,13 @@ def test_attach_corpus_materialises_extras_profile(tmp_path, monkeypatch):
 def test_attach_corpus_no_op_in_full_mode(tiny_kv, sample_docs):
     """attach_corpus on a full-mode embedding is a no-op."""
     corpus = Corpus(sample_docs, lang="pl", pretokenized=True)
-    ret = tiny_kv.attach_corpus(corpus)
+    ret = tiny_kv._attach_corpus(corpus)
     assert ret is tiny_kv
     assert tiny_kv._partial is False
 
 
-def test_ssd_init_raises_if_attach_corpus_skipped(tmp_path, monkeypatch):
-    """SSD raises a clear error when partial embeddings haven't been attached."""
+def test_ssd_auto_attaches_partial_embedding_without_mutating_it(tmp_path, monkeypatch):
+    """SSD auto-materialises the corpus tail via with_corpus, leaving emb reusable."""
     import ssdiff.embeddings as em
     monkeypatch.setattr(em, "_RAM_TOP_N", 5)
 
@@ -154,8 +154,16 @@ def test_ssd_init_raises_if_attach_corpus_skipped(tmp_path, monkeypatch):
     docs = [["w0", "w7"], ["w12"]]
     corpus = Corpus(docs, lang="en", pretokenized=True)
     y = [0.1, 0.2]
-    with pytest.raises(RuntimeError, match="attach_corpus"):
-        SSD(ram, corpus, y, lexicon={"w0"})
+
+    ssd = SSD(ram, corpus, y, use_full_doc=True)
+
+    # SSD holds a corpus-attached view, not the caller's embedding.
+    assert ssd.embeddings is not ram
+    assert ssd.embeddings._corpus_attached is True
+    # Caller's embedding is untouched and still reusable.
+    assert ram._corpus_attached is False
+    assert ram._mmap is not None
+    assert ram.vectors.shape == (5, 4)
 
 
 def test_ram_normalize_raises(tmp_path, monkeypatch):
@@ -200,7 +208,7 @@ def test_fit_multipls_no_warn_in_ram_mode_with_varimax(tmp_path, monkeypatch):
 
     docs = [[f"w{i % 40}" for i in range(j, j + 4)] for j in range(20)]
     corpus = Corpus(docs, lang="en", pretokenized=True)
-    ram.attach_corpus(corpus)
+    ram._attach_corpus(corpus)
 
     y = list(np.linspace(0.0, 1.0, 20))
     ssd = SSD(ram, corpus, y, lexicon={"w0", "w1", "w2"})
@@ -226,7 +234,7 @@ def test_fit_multipls_raw_rotation_no_warn_in_ram_mode(tmp_path, monkeypatch):
 
     docs = [[f"w{i % 40}" for i in range(j, j + 4)] for j in range(20)]
     corpus = Corpus(docs, lang="en", pretokenized=True)
-    ram.attach_corpus(corpus)
+    ram._attach_corpus(corpus)
 
     y = list(np.linspace(0.0, 1.0, 20))
     ssd = SSD(ram, corpus, y, lexicon={"w0", "w1", "w2"})
@@ -308,7 +316,7 @@ def test_ram_vs_full_pls_equivalence(tmp_path, monkeypatch, docs_kind):
     full_pls = SSD(full, corpus, y_num, lexicon).fit_pls()
 
     ram = Embeddings.load(path, ram_efficient=True)
-    ram.attach_corpus(corpus)
+    ram._attach_corpus(corpus)
     ram_pls = SSD(ram, corpus, y_num, lexicon).fit_pls()
 
     np.testing.assert_array_equal(full_pls.beta, ram_pls.beta)
@@ -329,7 +337,7 @@ def test_ram_vs_full_ols_equivalence(tmp_path, monkeypatch):
     full_ols = SSD(full, corpus, y_num, lexicon).fit_ols(fixed_k=2)
 
     ram = Embeddings.load(path, ram_efficient=True)
-    ram.attach_corpus(corpus)
+    ram._attach_corpus(corpus)
     ram_ols = SSD(ram, corpus, y_num, lexicon).fit_ols(fixed_k=2)
 
     np.testing.assert_array_equal(full_ols.beta, ram_ols.beta)
@@ -353,7 +361,7 @@ def test_ram_vs_full_groups_equivalence(tmp_path, monkeypatch):
     full_grp = SSD(full, corpus, y_grp, lexicon).fit_groups()
 
     ram = Embeddings.load(path, ram_efficient=True)
-    ram.attach_corpus(corpus)
+    ram._attach_corpus(corpus)
     ram_grp = SSD(ram, corpus, y_grp, lexicon).fit_groups()
 
     assert list(full_grp.pairs) == list(ram_grp.pairs)
@@ -380,7 +388,7 @@ def test_get_vector_partial_mode_uses_local_row(tmp_path, monkeypatch):
     ram = Embeddings.load(path, ram_efficient=True)
     docs = [["w7", "w12", "w18"]]
     corpus = Corpus(docs, lang="en", pretokenized=True)
-    ram.attach_corpus(corpus)
+    ram._attach_corpus(corpus)
 
     # An extras token (vocab index 12, local row 5+k after attach_corpus).
     np.testing.assert_array_equal(ram.get_vector("w12"), full["w12"])
@@ -388,7 +396,7 @@ def test_get_vector_partial_mode_uses_local_row(tmp_path, monkeypatch):
 
     # OOV / not-materialised should still raise.
     # Use a word that is in vocab but was NOT in the corpus (rank 8 not in docs).
-    with pytest.raises(KeyError, match="not materialised"):
+    with pytest.raises(KeyError, match="not loaded in RAM-efficient mode"):
         ram.get_vector("w8")
 
 
@@ -408,7 +416,7 @@ def test_similar_by_vector_after_attach_corpus_returns_correct_words(tmp_path, m
     ram = Embeddings.load(path, ram_efficient=True)
     docs = [["w7", "w12", "w18"]]
     corpus = Corpus(docs, lang="en", pretokenized=True)
-    ram.attach_corpus(corpus)
+    ram._attach_corpus(corpus)
     # vectors.shape[0] is now 8 (5 prefix + 3 extras), but only the prefix
     # has rank-aligned (word, row) pairs.
 
@@ -464,3 +472,107 @@ def test_ram_format_guard_kv(tmp_path):
 
     with pytest.raises(ValueError, match=r"\.ssdembed"):
         Embeddings.load(str(p) + ".kv", ram_efficient=True)
+
+
+def test_local_vector_helper_reads_base_and_extras(tmp_path, monkeypatch):
+    """_local_vector resolves base rows from .vectors and extra rows from ._extras."""
+    import ssdiff.embeddings as em
+    monkeypatch.setattr(em, "_RAM_TOP_N", 5)
+
+    words = [f"w{i}" for i in range(20)]
+    path = _make_ssdembed_with_named_words(tmp_path, words)
+    ram = Embeddings.load(path, ram_efficient=True)
+
+    # Plain partial: only the 5-row prefix is materialised, no extras buffer yet.
+    assert ram._extras is None
+    np.testing.assert_array_equal(ram._local_vector(0), ram.vectors[0])
+
+    # Simulate one extra row sitting in the side buffer at local index 5.
+    extra = np.full((1, 4), 0.5, dtype=np.float32)
+    ram._extras = extra
+    np.testing.assert_array_equal(ram._local_vector(5), extra[0])
+
+
+def test_read_extras_returns_indices_and_rows_then_raises_when_closed(tmp_path, monkeypatch):
+    """_read_extras returns (indices, rows) from the mmap; raises if mmap is closed."""
+    import ssdiff.embeddings as em
+    monkeypatch.setattr(em, "_RAM_TOP_N", 5)
+
+    words = [f"w{i}" for i in range(20)]
+    path = _make_ssdembed_with_named_words(tmp_path, words)
+    ram = Embeddings.load(path, ram_efficient=True)
+    full = Embeddings.load(path)
+
+    corpus = Corpus([["w7", "w12"], ["w18"]], lang="en", pretokenized=True)
+    extras, rows = ram._read_extras(corpus)
+    assert sorted(extras) == [7, 12, 18]
+    # rows are aligned to the returned `extras` order, read from the source file.
+    for oi, row in zip(extras, rows):
+        np.testing.assert_array_equal(row, full.vectors[oi])
+
+    # Tokens already in the prefix / OOV produce no extras.
+    empty_extras, empty_rows = ram._read_extras(Corpus([["w0", "nope"]], lang="en", pretokenized=True))
+    assert empty_extras == [] and empty_rows is None
+
+    # With the mmap closed and a genuinely new token requested, raise clearly.
+    ram._mmap = None
+    with pytest.raises(RuntimeError, match="memory-map is already closed"):
+        ram._read_extras(Corpus([["w9"]], lang="en", pretokenized=True))
+
+
+def test_with_corpus_does_not_mutate_original_and_shares_base(tmp_path, monkeypatch):
+    """with_corpus returns a view; original stays partial, unattached, mmap open."""
+    import ssdiff.embeddings as em
+    monkeypatch.setattr(em, "_RAM_TOP_N", 5)
+
+    words = [f"w{i}" for i in range(20)]
+    path = _make_ssdembed_with_named_words(tmp_path, words)
+    ram = Embeddings.load(path, ram_efficient=True)
+    full = Embeddings.load(path)
+
+    corpus = Corpus([["w7", "w12"], ["w18"]], lang="en", pretokenized=True)
+    view = ram.with_corpus(corpus)
+
+    # Original is untouched and still reusable.
+    assert ram is not view
+    assert ram._corpus_attached is False
+    assert ram._mmap is not None
+    assert ram.vectors.shape == (5, 4)
+    assert ram._extras is None
+
+    # View resolves the corpus tail; base matrix is shared by reference (no copy).
+    assert view._corpus_attached is True
+    assert view.vectors is ram.vectors
+    assert view._extras.shape == (3, 4)
+    for w in ("w7", "w12", "w18"):
+        np.testing.assert_array_equal(view[w], full[w])
+    # Prefix words still resolve through the shared base.
+    np.testing.assert_array_equal(view["w0"], ram["w0"])
+
+
+def test_with_corpus_full_mode_returns_self(tiny_kv, sample_docs):
+    """On a full-mode embedding, with_corpus is a no-op returning self."""
+    corpus = Corpus(sample_docs, lang="pl", pretokenized=True)
+    assert tiny_kv.with_corpus(corpus) is tiny_kv
+
+
+def test_with_corpus_reusable_across_two_corpora(tmp_path, monkeypatch):
+    """One partial embedding yields independent views for two different corpora."""
+    import ssdiff.embeddings as em
+    monkeypatch.setattr(em, "_RAM_TOP_N", 5)
+
+    words = [f"w{i}" for i in range(20)]
+    path = _make_ssdembed_with_named_words(tmp_path, words)
+    ram = Embeddings.load(path, ram_efficient=True)
+    full = Embeddings.load(path)
+
+    view_a = ram.with_corpus(Corpus([["w7"]], lang="en", pretokenized=True))
+    view_b = ram.with_corpus(Corpus([["w15"]], lang="en", pretokenized=True))
+
+    np.testing.assert_array_equal(view_a["w7"], full["w7"])
+    np.testing.assert_array_equal(view_b["w15"], full["w15"])
+    # Views are independent: A never materialised w15, B never materialised w7.
+    with pytest.raises(KeyError):
+        view_a["w15"]
+    with pytest.raises(KeyError):
+        view_b["w7"]

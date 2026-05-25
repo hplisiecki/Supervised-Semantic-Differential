@@ -1,11 +1,10 @@
-"""Low-RAM mode demo — partial-load + attach_corpus.
+"""Low-RAM mode demo — partial load.
 
-Note: ``ram_efficient=True`` materialises only the top-50,000 frequency-
-ranked rows at load time, then ``attach_corpus()`` adds the corpus-needed
-rows from the long tail. The bundled embedding has V=25,729 < 50,000,
-so the partial load already covers the whole vocab and ``attach_corpus``
-is effectively a no-op here. The API call still demonstrates the
-intended workflow for production-scale embeddings (V >> 50k).
+``ram_efficient=True`` keeps only the top-50,000 most-frequent rows in RAM;
+``SSD(emb, corpus, ...)`` then loads any extra words your corpus needs. The
+bundled embedding has V=25,729 < 50,000, so the whole vocab already fits and
+there is nothing extra to load here — the workflow is identical at production
+scale (V >> 50k).
 
 INTERACTIVE USE
 ───────────────
@@ -46,10 +45,6 @@ show("emb", emb)
 df = pd.read_csv(RATINGS)
 corpus = Corpus(df["word"].astype(str).str.strip().tolist(), lang="en")
 show("corpus", corpus)
-
-print("\n══════ After attach_corpus ══════")
-emb.attach_corpus(corpus)
-show("emb", emb)
 
 print("\n══════ Fit ══════")
 ssd = SSD(emb, corpus, df["valence"].to_numpy(), use_full_doc=True)
