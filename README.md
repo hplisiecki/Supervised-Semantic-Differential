@@ -17,7 +17,7 @@ learns a **semantic gradient (beta)** that best predicts the outcome, and then p
 - **Cross-group comparisons** with permutation inference
 
 The method has been presented in the following preprint:
-https://doi.org/10.31234/osf.io/gvrsb_v1
+https://doi.org/10.31234/osf.io/gvrsb_v3
 
 > **No-code option:** a GUI desktop application for SSD is available at [hplisiecki/SSD_APP](https://github.com/hplisiecki/SSD_APP). It wraps this package into a point-and-click interface with a guided three-stage workflow, interactive lexicon builder, and APA-formatted export — pre-built binaries for Windows, Linux, and macOS are available with no Python installation required.
 
@@ -257,6 +257,52 @@ ssd = SSD(
 )
 ```
 
+### PCA + OLS
+
+Original SSD algorithm from the paper.
+
+```python
+result = ssd.fit_ols(
+    fixed_k=None,         # None = auto-select via interpretability+stability sweep
+    k_min=2,
+    k_max=120,
+    k_step=2,
+    verbose=False,
+)
+```
+
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `fixed_k` | `int \| None` | `None` | Fixed PCA components. `None` = auto-select via sweep |
+| `k_min` | `int` | `2` | Minimum PCA-K for sweep |
+| `k_max` | `int` | `120` | Maximum PCA-K for sweep |
+| `k_step` | `int` | `2` | Step size |
+| `verbose` | `bool` | `False` | Print progress |
+
+#### Automatic K selection (PCA sweep)
+
+Selecting the number of PCA components (`fixed_k = K`) can be a researcher degree of freedom. Pass `fixed_k=None` (the default) to run an automatic **PCA sweep** that evaluates a range of K values and selects the most robust solution.
+
+For each candidate PCA dimensionality K, the sweep fits SSD and tracks:
+
+1. **Interpretability quality** — based on clustering the nearest neighbors at each pole of the semantic gradient and computing aggregate cluster coherence and alignment with beta.
+
+2. **Stability of the semantic gradient** — measured as the cosine change between consecutive gradients: `beta_delta = 1 - cos(gradient(K-1), gradient(K))`. Smaller values mean more stable gradients.
+
+These signals are smoothed using an AUCK window.
+
+```python
+result = ssd.fit_ols(fixed_k=None, k_min=2, k_max=120, verbose=True)
+print(f"Selected K = {result.n_components}")
+print(result.stats)
+
+result.plot_sweep("sweep.png")   # save sweep plot
+result.plot_sweep()              # display interactively
+```
+
+The **blue curve** shows **detrended interpretability** as a function of K. The **orange curve** shows **solution stability**. The **red vertical line** marks the selected K.
+
+
 ### PLS
 
 New proposed algorithm. PLS regression operates directly in the full embedding space, finding latent directions that maximize covariance between document vectors and the outcome without a separate dimensionality-reduction step. With a single component it recovers one semantic gradient in a single pass, sidestepping the researcher degree of freedom in choosing PCA dimensionality. With `k="auto"` (default) the number of components is selected via `plskit.pls1_find_k_optimal` (selector `r2_se`); the reported p-value is always the **honest k=1 confirmatory** `split_nb` (Lenartowicz, 2026) split-half statistic, independent of selection.
@@ -315,50 +361,6 @@ Container-level p-value follows `fit_pls` semantics (honest k=1 confirmatory). E
 
 > **Status.** API is stable for research use; feature parity with `PLSResult` (per-leaf docs, snippets, misdiagnosed) is still being rolled out. See [`examples/demo_multipls.py`](examples/demo_multipls.py) and [`docs/api_reference.md`](docs/api_reference.md). RAM-efficient embeddings (`Embeddings.load(ram_efficient=True)`) are not supported by `fit_multipls` — it needs the full vocabulary as a rotation target.
 
-### PCA + OLS
-
-Original SSD algorithm from the paper.
-
-```python
-result = ssd.fit_ols(
-    fixed_k=None,         # None = auto-select via interpretability+stability sweep
-    k_min=2,
-    k_max=120,
-    k_step=2,
-    verbose=False,
-)
-```
-
-| Argument | Type | Default | Description |
-|----------|------|---------|-------------|
-| `fixed_k` | `int \| None` | `None` | Fixed PCA components. `None` = auto-select via sweep |
-| `k_min` | `int` | `2` | Minimum PCA-K for sweep |
-| `k_max` | `int` | `120` | Maximum PCA-K for sweep |
-| `k_step` | `int` | `2` | Step size |
-| `verbose` | `bool` | `False` | Print progress |
-
-#### Automatic K selection (PCA sweep)
-
-Selecting the number of PCA components (`fixed_k = K`) can be a researcher degree of freedom. Pass `fixed_k=None` (the default) to run an automatic **PCA sweep** that evaluates a range of K values and selects the most robust solution.
-
-For each candidate PCA dimensionality K, the sweep fits SSD and tracks:
-
-1. **Interpretability quality** — based on clustering the nearest neighbors at each pole of the semantic gradient and computing aggregate cluster coherence and alignment with beta.
-
-2. **Stability of the semantic gradient** — measured as the cosine change between consecutive gradients: `beta_delta = 1 - cos(gradient(K-1), gradient(K))`. Smaller values mean more stable gradients.
-
-These signals are smoothed using an AUCK window.
-
-```python
-result = ssd.fit_ols(fixed_k=None, k_min=2, k_max=120, verbose=True)
-print(f"Selected K = {result.n_components}")
-print(result.stats)
-
-result.plot_sweep("sweep.png")   # save sweep plot
-result.plot_sweep()              # display interactively
-```
-
-The **blue curve** shows **detrended interpretability** as a function of K. The **orange curve** shows **solution stability**. The **red vertical line** marks the selected K.
 
 ### Cross-Group Comparison
 
