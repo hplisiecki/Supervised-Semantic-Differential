@@ -29,4 +29,4 @@ jobs:
         run: pip install -e ".[dev,results]"
 
       - name: Run tests
-        run: pytest -m "not slow and not local" -v --timeout=60
+        run: pytest -v --timeout=60
