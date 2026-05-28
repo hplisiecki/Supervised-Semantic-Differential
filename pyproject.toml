@@ -63,10 +63,6 @@ Repository = "https://github.com/hplisiecki/Supervised-Semantic-Differential"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = [
-  "slow: marks tests as slow (deselect with '-m \"not slow\"')",
-  "local: marks tests that need local files not in repo",
-]
 filterwarnings = [
   "ignore:Saving as .*normalization and ABTT metadata will be lost.*:UserWarning",
 ]
