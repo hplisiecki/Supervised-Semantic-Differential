@@ -5,6 +5,8 @@ on:
     branches: [main, dev]
   pull_request:
     branches: [main, dev]
+  schedule:
+    - cron: "0 6 * * 5"  # Fridays 06:00 UTC — catch upstream dependency drift
 
 jobs:
   test:

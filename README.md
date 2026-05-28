@@ -32,9 +32,9 @@ https://doi.org/10.31234/osf.io/gvrsb_v3
 - [Preprocessing (Corpus)](#preprocessing-corpus)
 - [Lexicon Utilities](#lexicon-utilities)
 - [Fitting SSD](#fitting-ssd)
+  - [PCA + OLS](#pca--ols)
   - [PLS](#pls)
   - [Multi-component PLS (in development)](#multi-component-pls-in-development)
-  - [PCA + OLS](#pca--ols)
   - [Cross-Group Comparison](#cross-group-comparison)
   - [Inspecting results](#inspecting-results)
 - [Neighbors & Clustering](#neighbors--clustering)
@@ -305,7 +305,7 @@ The **blue curve** shows **detrended interpretability** as a function of K. The 
 
 ### PLS
 
-New proposed algorithm. PLS regression operates directly in the full embedding space, finding latent directions that maximize covariance between document vectors and the outcome without a separate dimensionality-reduction step. With a single component it recovers one semantic gradient in a single pass, sidestepping the researcher degree of freedom in choosing PCA dimensionality. With `k="auto"` (default) the number of components is selected via `plskit.pls1_find_k_optimal` (selector `r2_se`); the reported p-value is always the **honest k=1 confirmatory** `split_nb` (Lenartowicz, 2026) split-half statistic, independent of selection.
+PLS regression operates directly in the full embedding space, finding latent directions that maximize covariance between document vectors and the outcome without a separate dimensionality-reduction step. With a single component it recovers one semantic gradient in a single pass. With `k="auto"` (default) the number of components is selected via selector `r2_se`); the reported p-value is always the k=1 split-half statistic, independent of selection.
 
 ```python
 result = ssd.fit_pls(
