@@ -1,23 +1,56 @@
-# ssdiff/__init__.py
-from .core import SSD
-from .crossgroup import SSDGroup, SSDContrast
-from .clusters import cluster_top_neighbors
-from .utils import (
-    load_embeddings, normalize_kv, compute_global_sif,
-    build_doc_vectors, filtered_neighbors
+"""ssdiff — Supervised Semantic Differential.
+
+Top-level package: re-exports the primary public API (``SSD``, ``Corpus``,
+``Embeddings``, result classes, view classes) so users can do ``from ssdiff import SSD``
+without knowing the internal module structure.
+"""
+
+from ssdiff.corpus import Corpus
+from ssdiff.embeddings import Embeddings
+from ssdiff.results import (
+    ClusterWordsView,
+    ClusterWordsViewSided,
+    ClustersView,
+    ClustersViewSided,
+    GroupResult,
+    LexiconResult,
+    PCAOLSResult,
+    PLSResult,
+    Result,
+    SnippetsView,
+    SnippetsViewSided,
+    WordsView,
+    WordsViewSided,
+    set_repr_hints,
 )
-from .lexicon import suggest_lexicon, coverage_by_lexicon, token_presence_stats
-from .preprocess import load_spacy, load_stopwords, preprocess_texts, build_docs_from_preprocessed
-from .sweep import pca_sweep
+from ssdiff.ssd import SSD
+from ssdiff.utils.diagnostics import progress_hook
 
 __all__ = [
     "SSD",
-    "SSDGroup",
-    "SSDContrast",
-    "cluster_top_neighbors",
-    "load_embeddings", "normalize_kv", "compute_global_sif",
-    "build_doc_vectors", "filtered_neighbors", "build_docs_from_preprocessed",
-    "suggest_lexicon", "coverage_by_lexicon", "token_presence_stats",
-    "load_spacy", "load_stopwords", "preprocess_texts",
-    "pca_sweep",
+    "Corpus",
+    "Embeddings",
+    "ClusterWordsView",
+    "ClusterWordsViewSided",
+    "ClustersView",
+    "ClustersViewSided",
+    "GroupResult",
+    "LexiconResult",
+    "PCAOLSResult",
+    "PLSResult",
+    "Result",
+    "SnippetsView",
+    "SnippetsViewSided",
+    "WordsView",
+    "WordsViewSided",
+    "progress_hook",
+    "set_repr_hints",
 ]
+
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _version
+
+try:
+    __version__ = _version("ssdiff")
+except PackageNotFoundError:
+    __version__ = "1.0.0"

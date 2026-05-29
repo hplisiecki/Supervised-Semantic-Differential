@@ -1,27 +1,35 @@
-# Python builds
+# Byte-compiled / optimized
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
 dist/
 build/
 *.egg-info/
-.eggs/
-pip-wheel-metadata/
-.idea/
-# Virtual envs
-.venv/
-venv/
-ENV/
+*.egg
 
-# Caches
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-.ipynb_checkpoints/
-.mypy_cache/
+# Testing / coverage
 .pytest_cache/
 .coverage
 htmlcov/
-.claude
+
+# Linting / type-checking
+.ruff_cache/
+.mypy_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment
+.env
+*.env
+venv/
+.venv/
+
 # OS junk
 .DS_Store
 Thumbs.db
-

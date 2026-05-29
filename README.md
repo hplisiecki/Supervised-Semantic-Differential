@@ -1,24 +1,23 @@
 # Supervised Semantic Differential (SSD)
 
-[![PyPI version](https://img.shields.io/pypi/v/ssdiff.svg)](https://pypi.org/project/ssdiff/)
+[![Tests](https://github.com/hplisiecki/Supervised-Semantic-Differential/workflows/Tests/badge.svg)](https://github.com/hplisiecki/Supervised-Semantic-Differential/actions)
+[![PyPI](https://img.shields.io/pypi/v/ssdiff)](https://pypi.org/project/ssdiff/)
+[![Python](https://img.shields.io/pypi/pyversions/ssdiff)](https://pypi.org/project/ssdiff/)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![DOI](https://img.shields.io/badge/DOI-10.31234%2Fosf.io%2Fgvrsb__v1-blue)](https://doi.org/10.31234/osf.io/gvrsb_v1)
 
+**SSD** lets you recover **interpretable semantic directions** related to specific concepts directly from open-ended text and relate them to **numeric outcomes**
+(e.g., psychometric scales, judgments) or **categorical groups** (e.g., clinical diagnosis, experimental condition). It builds per-document concept vectors from **local contexts around seed words**,
+learns a **semantic gradient (beta)** that best predicts the outcome, and then provides multiple interpretability layers:
 
-**SSD**  lets you recover **interpretable semantic directions** related to specific concepts directly from open-ended text and relate them to **numeric outcomes**
-(e.g., psychometric scales, judgments). It builds per-essay concept vectors from **local contexts around seed words**,
-learns a **semantic gradient (β̂)** that best predicts the outcome, and then provides multiple interpretability layers:
-
-- **Nearest neighbors** of each pole (+β̂ / −β̂)
+- **Nearest neighbors** of each pole (+beta / -beta)
 - **Clustering** of neighbors into themes
-- **Text snippets**: top sentences whose local contexts align with each cluster centroid or the β̂ axis
-- **Per-essay scores** (cosine alignments) for further analysis
-
-**SSDGroup** extends SSD to **cross-group comparisons** (e.g., clinical vs. control, different nationalities). Instead of regressing onto a continuous outcome, it computes **group centroid contrasts** in the same concept-vector space and uses **permutation inference** to test whether groups differ in how they represent the concept. The resulting contrast vectors plug directly into the same interpretation pipeline (neighbors, clusters, snippets).
-
-The goal of the package is to allow psycholinguistic researchers to draw data-driven insights about
-how people use language depending on their attitudes, traits, or other numeric variables of interest.
+- **Text snippets**: top sentences whose local contexts align with each cluster centroid or the beta axis
+- **Per-document scores** (cosine alignments) for further analysis
+- **Cross-group comparisons** with permutation inference
 
 The method has been presented in the following preprint:
-https://doi.org/10.31234/osf.io/gvrsb_v1
+https://doi.org/10.31234/osf.io/gvrsb_v3
 
 > **No-code option:** a GUI desktop application for SSD is available at [hplisiecki/SSD_APP](https://github.com/hplisiecki/SSD_APP). It wraps this package into a point-and-click interface with a guided three-stage workflow, interactive lexicon builder, and APA-formatted export — pre-built binaries for Windows, Linux, and macOS are available with no Python installation required.
 
@@ -29,14 +28,18 @@ https://doi.org/10.31234/osf.io/gvrsb_v1
 - [Installation](#installation)
 - [Quickstart](#quickstart)
 - [Core Concepts](#core-concepts)
-- [Preprocessing (spaCy)](#preprocessing-spacy)
+- [Word Embeddings](#word-embeddings)
+- [Preprocessing (Corpus)](#preprocessing-corpus)
 - [Lexicon Utilities](#lexicon-utilities)
-- [Choosing PCA dimensionality (PCA Sweep)](#choosing-pca-dimensionality-pca-sweep)
 - [Fitting SSD](#fitting-ssd)
+  - [PCA + OLS](#pca--ols)
+  - [PLS](#pls)
+  - [Multi-component PLS (in development)](#multi-component-pls-in-development)
+  - [Cross-Group Comparison](#cross-group-comparison)
+  - [Inspecting results](#inspecting-results)
 - [Neighbors & Clustering](#neighbors--clustering)
 - [Interpreting with Snippets](#interpreting-with-snippets)
-- [Per-Essay SSD Scores](#per-essay-ssd-scores)
-- [Cross-Group Comparison (SSDGroup)](#cross-group-comparison-ssdgroup)
+- [Per-Document SSD Scores](#per-document-ssd-scores)
 - [API Summary](#api-summary)
 - [Citing & License](#citing--license)
 
@@ -48,708 +51,605 @@ https://doi.org/10.31234/osf.io/gvrsb_v1
 pip install ssdiff
 ```
 
-Dependencies (installed automatically): `numpy`, `pandas`, `scikit-learn`, `gensim`, `spacy`.
+**Python**: 3.10 – 3.14.
 
+Core dependencies (installed automatically): `numpy`, `spacy`.
+
+Optional extras:
+- `ssdiff[results]` — pandas / openpyxl / python-docx / matplotlib for `to_df()`, `.xlsx`/`.docx` export, and `plot_sweep()`.
+- `ssdiff[gensim]` — only needed to *save* embeddings in `.kv` format.
+
+> Loading `.kv` files works without gensim (handled by an internal unpickler shim).
 
 ---
 
 ## Quickstart
 
-Below is an end-to-end minimal example using the Polish model and an example dataset. 
-Adjust paths and column names to your data.
+Below is an end-to-end minimal example. Adjust paths and column names to your data.
 
 ```python
-from ssdiff import (
-    SSD, load_embeddings, normalize_kv,
-    load_spacy, load_stopwords, preprocess_texts, build_docs_from_preprocessed,
-    suggest_lexicon, token_presence_stats, coverage_by_lexicon, pca_sweep,
-)
+from ssdiff import Embeddings, Corpus, SSD
+import numpy as np
 
-import pandas as pd
-
-MODEL_PATH = r"NLPResources\word2vec_model.kv"
-DATA_PATH  = r"data\example_dataset.csv"
-
-# 1) Load and normalize embeddings (L2 + ABTT on word space)
-kv = normalize_kv(load_embeddings(MODEL_PATH), l2=True, abtt_m=1)
+# 1) Load and normalize embeddings
+emb = Embeddings.load("path/to/embeddings.txt", verbose=True)
+emb.normalize(l2=True, abtt=1)
 
 # 2) Load your data
-df = pd.read_csv(DATA_PATH)
-text_raw_col = "text_raw" # column with raw text
-y_col        = "questionnaire_result" # numeric outcome column
+texts = [...]                          # list of raw text strings
+scores = np.array([...])               # numeric outcome
 
-# 3) Preprocess (spaCy) — keep original sentences and lemmas linked
-nlp = load_spacy("pl_core_news_lg") # polish spacy model
-stopwords = load_stopwords("pl") # polish stopwords
-texts_raw = df[text_raw_col].fillna("").astype(str).tolist()
-pre_docs = preprocess_texts(texts_raw, nlp, stopwords)
+# 3) Tokenize texts
+corpus = Corpus(texts, lang="en")      # spaCy tokenization + lemmatization
 
-# 4) Build lemma docs for modeling and filter to non-NaN y
-docs = build_docs_from_preprocessed(pre_docs)       # list[list[str]]
-y = pd.to_numeric(df[y_col], errors="coerce")
-mask = ~y.isna()
-docs = [docs[i] for i in range(len(docs)) if mask.iat[i]]
-pre_docs = [pre_docs[i] for i in range(len(pre_docs)) if mask.iat[i]]
-y = y[mask].to_numpy()
+# 4) Define a lexicon (tokens must match lemmatized forms)
+lexicon = ["happy", "sad", "joy", "anger"]
 
-# 5) Define a lexicon (tokens must match your preprocessing) Check lexicon utilities section for data-driven selection.
-lexicon = {"concept_keyword_1", "concept_keyword_2", "concept_keyword_3", "concept_keyword_4"} # keywords that define your concept
+# 5) Build SSD and fit
+ssd = SSD(emb, corpus, y=scores, lexicon=lexicon)
+result = ssd.fit_pls()                 # or ssd.fit_ols() for PCA+OLS
 
-# 6) Choose PCA dimensionality based on interpretability + stability
-# This method was not a part of the original SSD paper. It was developed later.
-
-sel = pca_sweep(
-    kv=kv,
-    docs=docs,
-    y=y,
-    lexicon={"concept_keyword_1", "concept_keyword_2", "concept_keyword_3"},
-    use_full_doc=False,
-    pca_k_values=list(range(1, 121, 2)),
-    window=3,      # context window ±3 tokens (same meaning as in SSD)
-    SIF_a=1e-3,
-    prefix="concept",
-)
-
-PCA_K = sel.best_k
-
-# 7) Fit SSD
-ssd = SSD(
-    kv=kv,
-    docs=docs,
-    y=y,
-    lexicon=lexicon,
-    l2_normalize_docs=True, # normalize per-essay vectors
-    N_PCA=PCA_K,
-    use_unit_beta=True, # unit β̂ for neighbors/interpretation
-    window = 3, # context window ±3 tokens
-    SIF_a = 1e-3, # SIF weighting parameter
-)
-
-# 8) Inspect regression readout
-print({
-    "R2": ssd.r2,
-    "adj_R2": float(getattr(ssd, "r2_adj", float("nan"))),
-    "F": ssd.f_stat,
-    "p": ssd.f_pvalue,
-    "beta_norm": ssd.beta_norm_stdCN,        # ||β|| in SD(y) per +1.0 cosine
-    "delta_per_0.10_raw": ssd.delta_per_0p10_raw,
-    "IQR_effect_raw": ssd.iqr_effect_raw,
-    "corr_y_pred": ssd.y_corr_pred,
-    "n_raw": int(getattr(ssd, "n_raw", len(docs))),
-    "n_kept": int(getattr(ssd, "n_kept", len(docs))),
-    "n_dropped": int(getattr(ssd, "n_dropped", 0)),    
-})
-
-# 9) Neighbors
-ssd.top_words(n = 20, verbose = True)
-
-# 10) Cluster themes (e.g., Clustering by silhouette)
-df_clusters, df_members = ssd.cluster_neighbors(topn = 100, k=None, k_min = 2, k_max = 10, verbose = True, top_words = 5)
-
-# 11) Snippets for interpretation
-snips = ssd.cluster_snippets(pre_docs=pre_docs, side="both", window_sentences=1, top_per_cluster=100)
-df_pos_snip = snips["pos"]
-df_neg_snip = snips["neg"]
-
-beta_snips = ssd.beta_snippets(pre_docs=pre_docs, window_sentences=1, top_per_side=200)
-df_beta_pos = beta_snips["beta_pos"]
-df_beta_neg = beta_snips["beta_neg"]
-
-# 12) Per-essay SSD scores
-scores = ssd.ssd_scores(docs, include_all=True)
-
+# 6) Inspect
+print(result.stats)            # r², p-value, n_kept, β-norm, IQR effect
+print(result.words.pos)        # top β-positive neighbours
+print(result.words.neg)        # top β-negative neighbours
+print(result.clusters.pos(topn=100))   # cluster the 100 nearest +β neighbours
+result.report().save("report.md")
 ```
+
+Every result attribute is a view: print it, slice with `(n)`, dispatch
+to one side with `.pos` / `.neg`, or export with `.to_df()` / `.save(...)`.
+
 ---
 
 ## Core Concepts
 
-- **Seed lexicon**: a small set of tokens (lemmas) indicating the concept of interest (e.g., {klimat, klimatyczny, zmiana}).
-- **Per-essay vector**: SIF-weighted average of context vectors around each seed occurrence (±3 tokens), then averaged across occurrences.
-- **SSD fitting**: PCA on standardized doc vectors, OLS from components to standardized outcome 𝑦, then back-project to doc space to get β (the semantic gradient).
-- **Interpretation**: nearest neighbors to +β̂/−β̂, clustering neighbors into themes, and showing original sentences whose local context aligns with centroids or β̂.
-
-
-
-
----
-## Word2Vec Embeddings
-
-The method requires pre-trained word embeddings in either the .kv, .bin, .txt, or a .gz compression of the previous formats.
-In order to capture only the semantic information, without frequency-based artifacts, it is recommended to apply L2 normalization 
-and All-But-The-Top (ABTT) transformation to the embeddings before fitting SSD.
-
-```python
-from ssdiff import load_embeddings, normalize_kv
-
-MODEL_PATH = r"NLPResources\word2vec_model.kv"
-
-kv = load_embeddings(MODEL_PATH) # load embeddings
-
-kv = normalize_kv(kv, l2=True, abtt_m=1)  # L2 + ABTT (remove top-1 PC)
-```
-
-The model is not included in the package, and will differ depending on your language and domain.
-Look for pre-trained embeddings in your language, the more data they were trained on, the better.
-Pay attention to the vocabulary coverage of your texts.
-
-For polish, the nkjp+wiki-lemmas-all-300-cbow-hs.txt.gz (no. 25) from the [Polish Word2Vec model list](https://dsmodels.nlp.ipipan.waw.pl) was found to work well.
+- **Seed lexicon**: a small set of tokens (lemmas) indicating the concept of interest (e.g., {climate, warming, change}).
+- **Per-document vector**: SIF-weighted average of context vectors around each seed occurrence (+-3 tokens), then averaged across occurrences.
+- **SSD fitting**: Learn a semantic gradient (beta) that best predicts the outcome y. Two backends are available:
+  - **PLS**: Partial Least Squares regression directly in embedding space.
+  - **PCA+OLS**: PCA dimensionality reduction followed by OLS regression (matches original SSD paper).
+- **Interpretation**: nearest neighbors to +beta/-beta, clustering neighbors into themes, and showing original sentences whose local context aligns with centroids or beta.
 
 ---
-## Preprocessing (spaCy)
 
-SSD uses spaCy to keep original sentences and lemmas aligned for later snippet extraction.
+## Word Embeddings
+
+The method requires pre-trained word embeddings in one of the supported formats:
+
+| Format | Extension | Notes |
+|--------|-----------|-------|
+| SSD native | `.ssdembed` | Fastest to load (pickle + `.vectors.npy` sidecar) |
+| gensim KeyedVectors | `.kv` | Loads without gensim via internal shim |
+| word2vec binary | `.bin` | Standard binary format |
+| Text | `.txt`, `.vec` | One word per line + floats |
+| Compressed | `.txt.gz`, `.vec.gz`, `.bin.gz` | Gzip-compressed versions of the above |
+
+To capture semantic information without frequency-based artifacts, apply L2 normalization
+and All-But-The-Top (ABTT) transformation:
 
 ```python
-from ssdiff import load_spacy, load_stopwords, preprocess_texts, build_docs_from_preprocessed
+from ssdiff import Embeddings
 
-nlp = load_spacy("pl_core_news_lg")   # or another language model
-stopwords = load_stopwords("pl")      # same stopword source across app & package
-
-pre_docs = preprocess_texts(texts_raw, nlp, stopwords)
-docs = build_docs_from_preprocessed(pre_docs)  # → list[list[str]] (lemmas without stopwords/punct)
+emb = Embeddings.load("path/to/model.bin", verbose=True)
+emb.normalize(l2=True, abtt=1)   # L2 + ABTT (remove top-1 PC)
 ```
 
-Each PreprocessedDoc stores:
+Calling `normalize()` with no arguments applies both L2 and ABTT (m=1) by default.
+Processing state is tracked — calling it again safely skips already-applied steps.
 
-- **raw**: original raw text
-- **sents_surface**: list[str], original sentences
-- **sents_lemmas**: list[list[str]]
-- **doc_lemmas**: flattened lemmas (list[str])
-- **sent_char_spans**: list of (start_char, end_char) per sentence
-- **token_to_sent**: index mapping lemma positions → sentence index
+> **Tip:** Save normalized embeddings as `.ssdembed` to preserve both vectors and processing metadata (L2, ABTT state). Other formats (`.kv`, `.bin`, `.txt`) only store raw vectors.
 
-Spacy models for various languages can be found [here](https://spacy.io/models).
+The model is not included in the package and will differ depending on your language and domain.
+Look for pre-trained static word embeddings in your language with good vocabulary coverage for your domain. GloVe and word2vec trained on large general corpora are a reliable starting point.
 
-To install a spaCy model, run e.g.:
+For Polish, the `nkjp+wiki-lemmas-all-300-cbow-hs.txt.gz` (no. 25) from the [Polish Word2Vec model list](https://dsmodels.nlp.ipipan.waw.pl) was found to work well.
+
+---
+
+## Preprocessing (Corpus)
+
+The `Corpus` class encapsulates the full spaCy preprocessing pipeline — tokenization, lemmatization, and stopword removal.
+
+```python
+from ssdiff import Corpus
+
+corpus = Corpus(texts, lang="en")      # auto-downloads spaCy model if needed
+corpus.docs       # list[list[str]] — lemmatized tokens per document
+corpus.pre_docs   # list[PreprocessedDoc] — for snippet extraction
+corpus.n_texts    # number of documents
+```
+
+You can also pass a pre-loaded spaCy pipeline or pre-tokenized data:
+
+```python
+# Custom spaCy pipeline
+import spacy
+nlp = spacy.load("en_core_web_lg", disable=["ner"])
+corpus = Corpus(texts, nlp=nlp)
+
+# Pre-tokenized input
+docs = [["happy", "day", "sunshine"], ["sad", "rain", "cold"], ...]
+corpus = Corpus(docs, pretokenized=True, lang="en")
+```
+
+**Supported languages (20)**: ca, da, de, el, en, es, fr, hr, it, lt, mk, nb, nl, pl, pt, ro, ru, sl, sv, uk.
+
+> CJK languages (Chinese, Japanese, Korean) are not included due to fundamental differences in tokenization and lemmatization. If you need CJK support, you can pass a custom spaCy pipeline via `nlp=` and pre-trained embeddings with matching vocabulary.
+
+spaCy models for various languages can be found [here](https://spacy.io/models). To install a model manually:
+
 ```bash
-python -m spacy download pl_core_news_lg
+python -m spacy download en_core_web_sm
 ```
 
 ---
+
 ## Lexicon Utilities
 
-These helpers make lexicon selection transparent and data-driven (you can also hand-pick tokens).
+These helpers make lexicon selection transparent and data-driven (you can also hand-pick tokens). They are **methods on `Corpus`** — they operate on the already-lemmatized tokens, so what they score is exactly what `SSD` will consume.
 
-### `suggest_lexicon(...)`
+### `corpus.suggest_lexicon(y, ...)`
 
-Rank tokens by balanced coverage with a mild penalty for strong association with the outcome.
-
-All three lexicon utilities accept `var_type='continuous'` (default) or `var_type='categorical'`:
-
-| | `var_type='continuous'` | `var_type='categorical'` |
-|---|---|---|
-| `cov_bal` | average presence across 𝑛 quantile bins of 𝑦 | average presence across group labels |
-| `corr` | Pearson correlation between 0/1 presence and standardized 𝑦 | Cramér's V between 0/1 presence and group label |
-| `q1` / `q4` | coverage in lowest / highest 𝑦 quantile bin | min / max group coverage |
-| `rank` | `cov_bal * (1 - min(1, \|corr\|/corr_cap))` | same formula (Cramér's V replaces Pearson) |
-
-Accepts a DataFrame (`text_col`, `score_col`) or a `(texts, y)` tuple where texts can be raw strings or token lists.
+Rank tokens by balanced coverage with a mild penalty for strong association with the outcome. Returns a `LexiconResult` view (printable, exportable, sliceable).
 
 ```python
-from ssdiff import suggest_lexicon
-
-# Continuous outcome (default)
-cands_df = suggest_lexicon(df, text_col="lemmatized", score_col="questionnaire_result", top_k=150)
-
-# Or using a tuple (texts, y)
-texts = [" ".join(doc) for doc in docs]
-cands_df2 = suggest_lexicon((docs, y), top_k=150)
-
-# Categorical groups
-cands_cat = suggest_lexicon(df, text_col="lemmatized", score_col="diagnosis", top_k=150, var_type="categorical")
-cands_cat2 = suggest_lexicon((docs, groups), top_k=150, var_type="categorical")
-```
-### `token_presence_stats(...)`
-
-Per-token coverage & association diagnostics:
-```python
-from ssdiff import token_presence_stats
-
-# Continuous
-stats = token_presence_stats(texts, y, token="concept_keyword_1", n_bins=4, verbose=True)
-print(stats)  # dict: token, docs, cov_all, cov_bal, corr, rank, q1, q4
-
-# Categorical — output also includes group_cov (per-group coverage dict)
-stats = token_presence_stats(texts, groups, token="concept_keyword_1", var_type="categorical", verbose=True)
-print(stats["group_cov"])  # e.g. {"control": 0.45, "depression": 0.62}
+corpus = Corpus(texts, lang="en")
+result = corpus.suggest_lexicon(y, top_k=30)
+print(result)                      # tabular view
+ssd = SSD(emb, corpus, y, lexicon=result.tokens)
 ```
 
-### `coverage_by_lexicon(...)`
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `y` | `array-like` | — | Outcome variable (numeric or categorical) |
+| `top_k` | `int` | `30` | Maximum number of words to return |
+| `min_docs` | `int` | `5` | Minimum document frequency |
+| `n_bins` | `int` | `4` | Quantile bins for balanced coverage |
+| `corr_cap` | `float` | `0.30` | Penalty threshold for outcome association |
+| `var_type` | `str` | `"continuous"` | `"continuous"` or `"categorical"` |
 
-Summary for your chosen lexicon:
-- `summary` : `docs_any`, `cov_all`, `q1`, `q4`, `corr_any`, `hits_mean`, `hits_median`, `types_mean`, `types_median`
-  - `q1` / `q4`: coverage within the lowest/highest 𝑦 bins (continuous) or min/max group coverage (categorical)
-  - when `var_type='categorical'`, summary also includes `group_cov` (per-group coverage dict)
-- `per_token_df`: per-token stats
+### `corpus.evaluate_lexicon(y, lexicon, ...)`
+
+Score an existing lexicon against an outcome. Returns a `LexiconResult` bundling per-token diagnostics (`.suggestions`) and an aggregate coverage summary (`.summary`) — both saveable, with `.report()` producing a narrative markdown overview.
 
 ```python
-from ssdiff import coverage_by_lexicon
+corpus = Corpus(texts, lang="en")
+lex = corpus.evaluate_lexicon(y, lexicon=["happy", "sad", "anger"])
 
-# Continuous
-summary, per_tok = coverage_by_lexicon(
-    (texts, y),
-    lexicon={"concept_keyword_1", "concept_keyword_2", "concept_keyword_3", "concept_keyword_4"},
-    n_bins=4,
-    verbose=True,
-)
-
-# Categorical
-summary, per_tok = coverage_by_lexicon(
-    (texts, groups),
-    lexicon={"concept_keyword_1", "concept_keyword_2"},
-    var_type="categorical",
-    verbose=True,
-)
-print(summary["group_cov"])  # e.g. {"control": 0.80, "depression": 0.75}
+print(lex)                              # tabular view
+lex.suggestions.save("tokens.csv")      # per-token rows
+lex.summary.save("coverage.csv")        # aggregate stats
+lex.report().save("lexicon.md")         # narrative overview
 ```
+
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `y` | `array-like` | — | Outcome variable (numeric or categorical) |
+| `lexicon` | `iterable[str]` | — | Tokens to evaluate (matched against lemmatized corpus) |
+| `n_bins` | `int` | `4` | Quantile bins for balanced coverage |
+| `corr_cap` | `float` | `0.30` | Penalty threshold for outcome association |
+| `var_type` | `str` | `"continuous"` | `"continuous"` or `"categorical"` |
+
+`.suggestions` columns: `token, freq, cov_all, cov_bal, corr, pvalue, direction, rank`.
+`.summary` fields: `docs_any, cov_all, q1, q4, corr_any, hits_mean, hits_median, types_mean, types_median` (plus `group_cov` for categorical `y`).
 
 ---
-
 
 ## Fitting SSD
 
-Instantiate `SSD` with normalized embeddings, tokenized documents, a numeric outcome, and a lexicon
-(defining the concept of interest):
+Create an SSD instance with embeddings, corpus, outcome, and lexicon.
+The constructor builds document vectors but does **not** fit a model — call `fit_pls()`, `fit_multipls()`, `fit_ols()`, or `fit_groups()` explicitly.
 
 ```python
-from ssdiff import SSD, load_embeddings, normalize_kv
+from ssdiff import Embeddings, Corpus, SSD
 
-kv = normalize_kv(load_embeddings(MODEL_PATH), l2=True, abtt_m=1)
+emb = Embeddings.load("model.ssdembed")
+emb.normalize(l2=True, abtt=1)
+corpus = Corpus(texts, lang="en")
 
-PCA_K = min(20, max(3, n_docs // 20))  # simple heuristic, or use pca_sweep(...)
 ssd = SSD(
-    kv=kv,
-    docs=docs,
-    y=y,
-    lexicon={"concept_keyword_1", "concept_keyword_2", "concept_keyword_3"},
-    N_PCA=PCA_K,
-    window=3,       # context window ±3 tokens around lexicon hits
-    SIF_a=1e-3,      # SIF weighting parameter
-    use_full_doc=False,
-    use_unit_beta=True,
+    emb, corpus, y=scores,
+    lexicon=["word1", "word2", "word3"],
+    window=3,           # context window +/-3 tokens around lexicon hits
+    sif_a=1e-3,         # SIF weighting parameter
+    use_full_doc=False,  # False = seed context windows (default)
 )
-
-print(ssd.r2, ssd.f_stat, ssd.f_pvalue)
 ```
 
-Key outputs attached to the instance:
-- `beta` / `beta_unit` — semantic gradient (doc space)
-- `r2`, `f_stat`, `f_pvalue`, 'r2_adj' — regression fit stats
-- `beta_norm_stdCN` — ||β|| in SD(y) per +1.0 cosine
-- `delta_per_0p10_raw` — change in raw 𝑦 per +0.10 cosine
-- `iqr_effect_raw` — IQR(of cosine)*slope in raw 𝑦
-- `y_corr_pred` — correlation of standardized 𝑦 with predicted values
+### PCA + OLS
 
-
---- 
-## Choosing PCA dimensionality (PCA Sweep)
-
-The original SSD pipeline applies PCA to document vectors before regression to reduce redundancy and enable fitting on small corpora.
-However, selecting the number of components (`N_PCA = K`) can otherwise become a researcher degree of freedom.
-
-To make this choice more systematic and transparent, `ssdiff` includes a **PCA sweep procedure** that evaluates a sequence of `K` values and selects the most robust solution.
-
-### What PCA Sweep optimizes
-
-For each candidate PCA dimensionality `K`, the sweep fits SSD and tracks:
-
-1) **Interpretability quality**
-   - based on clustering the nearest neighbors at each pole of the semantic gradient (β̂)
-   - aggregate interpretability combines:
-     - cluster coherence (how semantically tight clusters are)
-     - alignment with the semantic gradient (|cos(centroid, β̂)|)
-
-2) **Stability of the semantic gradient**
-   - measured as the cosine change between consecutive gradients:
-     - `beta_delta = 1 - cos(beta_unit(K-Δ), beta_unit(K))`
-   - smaller values mean **more stable** gradients as `K` increases
-
-These signals are smoothed across nearby K values using an **AUCK window**:
-for `auck_radius=r`, the sweep averages across a sliding window of `2r+1` values (edge-safe).
-
-The sweep returns the selected `best_k`, and also provides per-K tables that can be saved for transparency.
-
-
-### Minimal example (PCA Sweep → final SSD)
+Original SSD algorithm from the paper.
 
 ```python
-from ssdiff import SSD, load_embeddings, normalize_kv, pca_sweep
-
-kv = normalize_kv(load_embeddings(MODEL_PATH), l2=True, abtt_m=1)
-
-# Pick PCA_K automatically with a sweep (robust: interpretability + beta stability)
-sel = pca_sweep(
-    kv=kv,
-    docs=docs,
-    y=y,
-    lexicon={"concept_keyword_1", "concept_keyword_2", "concept_keyword_3"},
-    use_full_doc=False,
-    pca_k_values=list(range(1, 121, 2)),
-    window=3,      # context window ±3 tokens (same meaning as in SSD)
-    SIF_a=1e-3,
-    save_figures=True,
-    out_dir=RESULTS_DIR,
-    prefix="climate",
+result = ssd.fit_ols(
+    fixed_k=None,         # None = auto-select via interpretability+stability sweep
+    k_min=2,
+    k_max=120,
+    k_step=2,
+    verbose=False,
 )
-
-PCA_K = sel.best_k
-
-ssd = SSD(
-    kv=kv,
-    docs=docs,
-    y=y,
-    lexicon={"concept_keyword_1", "concept_keyword_2", "concept_keyword_3"},
-    N_PCA=PCA_K,
-    use_unit_beta=True,
-    windpow=3,
-    SIF_a=1e-3,
-)
-
-print("PCA_K:", PCA_K)
-print(ssd.r2, ssd.f_stat, ssd.f_pvalue)
 ```
 
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `fixed_k` | `int \| None` | `None` | Fixed PCA components. `None` = auto-select via sweep |
+| `k_min` | `int` | `2` | Minimum PCA-K for sweep |
+| `k_max` | `int` | `120` | Maximum PCA-K for sweep |
+| `k_step` | `int` | `2` | Step size |
+| `verbose` | `bool` | `False` | Print progress |
+
+#### Automatic K selection (PCA sweep)
+
+Selecting the number of PCA components (`fixed_k = K`) can be a researcher degree of freedom. Pass `fixed_k=None` (the default) to run an automatic **PCA sweep** that evaluates a range of K values and selects the most robust solution.
+
+For each candidate PCA dimensionality K, the sweep fits SSD and tracks:
+
+1. **Interpretability quality** — based on clustering the nearest neighbors at each pole of the semantic gradient and computing aggregate cluster coherence and alignment with beta.
+
+2. **Stability of the semantic gradient** — measured as the cosine change between consecutive gradients: `beta_delta = 1 - cos(gradient(K-1), gradient(K))`. Smaller values mean more stable gradients.
+
+These signals are smoothed using an AUCK window.
+
+```python
+result = ssd.fit_ols(fixed_k=None, k_min=2, k_max=120, verbose=True)
+print(f"Selected K = {result.n_components}")
+print(result.stats)
+
+result.plot_sweep("sweep.png")   # save sweep plot
+result.plot_sweep()              # display interactively
+```
+
+The **blue curve** shows **detrended interpretability** as a function of K. The **orange curve** shows **solution stability**. The **red vertical line** marks the selected K.
 
 
-### Sweep outputs
+### PLS
 
-If `save_tables=True`, PCA Sweep saves:
+PLS regression operates directly in the full embedding space, finding latent directions that maximize covariance between document vectors and the outcome without a separate dimensionality-reduction step. With a single component it recovers one semantic gradient in a single pass. With `k="auto"` (default) the number of components is selected via selector `r2_se`); the reported p-value is always the k=1 split-half statistic, independent of selection.
 
-- `{prefix}_pca_k_joint_auck_table.xlsx`
+```python
+result = ssd.fit_pls(
+    k="auto",             # int, or "auto" for find_k_optimal
+    k_max=5,              # cap for "auto"
+    n_splits=50,          # split_nb iterations
+    random_state=2137,
+    verbose=False,
+)
+```
 
-If `save_figures=True`, PCA Sweep saves:
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `k` | `int \| "auto"` | `"auto"` | Number of PLS components. `int` fits at exactly that k. `"auto"` calls `plskit.pls1_find_k_optimal` (selector `r2_se`, diagnostic `split_nb`); p-value is the honest k=1 confirmatory `split_nb` statistic. |
+| `k_max` | `int` | `5` | Cap for `k="auto"`, clamped to `min(k_max, n-1, D)`. Ignored when `k` is an int. |
+| `n_splits` | `int` | `50` | Random splits for the `split_nb` test. |
+| `random_state` | `int` | `2137` | Random seed. |
+| `verbose` | `bool` | `False` | Print K-selection chain and confirmatory test progress. |
 
-- `{prefix}_sweep_plot.png`
+To re-run the test with different settings, call `result.test(n_splits=200)` — it overwrites `result.stats.pvalue` and `result.test.pvalue` in place.
 
-These files document the sweep for transparency and reproducibility.
+### Multi-component PLS (in development)
+
+When you expect more than one interpretable semantic axis related to the outcome, `fit_multipls()` fits `k` PLS components and rotates the W-subspace (`"varimax"` or `"raw"`). The returned `MultiPLSResult` is a container of per-dim leaves keyed by `"dim-1"`, `"dim-2"`, … (one per rotated axis).
+
+```python
+result = ssd.fit_multipls(
+    k="auto",             # or an int
+    k_max=5,
+    rotate="varimax",     # or "raw"
+    rotation_vocab=50_000,
+    n_splits=50,
+    random_state=2137,
+    verbose=False,
+)
+
+print(result.stats)             # container-level r², pvalue, n_components
+print(result.test)              # honest k=1 confirmatory split_nb
+result.words                    # pivoted top-words view across rotated dims
+result["dim-1"].words           # zoom into rotated axis 1
+result["dim-1"].clusters.pos    # cluster +β neighbours on that axis
+```
+
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `k` | `int \| "auto"` | `"auto"` | Number of PLS components. Same semantics as `fit_pls`. |
+| `k_max` | `int` | `5` | Cap for `k="auto"`, clamped to `min(k_max, n-1, D)`. |
+| `rotate` | `"raw" \| "varimax"` | `"varimax"` | Rotation applied to the W-subspace. |
+| `rotation_vocab` | `int \| None` | `50_000` | Leading vocabulary rows fed to varimax as the simple-structure target. Assumes frequency-ranked vocab. `None` uses the full matrix. No-op for `rotate="raw"`. |
+| `n_splits`, `random_state`, `verbose` | — | — | Same meaning and defaults as `fit_pls`. |
+
+Container-level p-value follows `fit_pls` semantics (honest k=1 confirmatory). Each rotated leaf carries a diagnostic per-dim p-value remapped via the `mpls_fit` rotation `order`.
+
+> **Status.** API is stable for research use; feature parity with `PLSResult` (per-leaf docs, snippets, misdiagnosed) is still being rolled out. See [`examples/demo_multipls.py`](examples/demo_multipls.py) and [`docs/api_reference.md`](docs/api_reference.md). RAM-efficient embeddings (`Embeddings.load(ram_efficient=True)`) are not supported by `fit_multipls` — it needs the full vocabulary as a rotation target.
 
 
-### PCA sweep plot example
+### Cross-Group Comparison
 
-<img src="https://github.com/hplisiecki/Supervised-Semantic-Differential/blob/main/images/sweep_plot.png" width="500">
+When your research question involves **categorical groups** rather than a continuous outcome, use `ssd.fit_groups()`.
 
-**Figure. PCA sweep for SSD.**  
-The **blue curve** shows **detrended interpretability** of the SSD solution as a function of the PCA dimensionality **K**.  
-For each **K**, SSD clusters the nearest neighbors of the learned semantic gradient and computes an interpretability score:
+| Scenario | Use |
+|---|---|
+| Continuous outcome (scale score, rating) | `fit_pls()` or `fit_ols()` |
+| Categorical groups (diagnosis, condition) | `fit_groups()` |
+| Continuous outcome AND group labels | Both — `fit_pls()` for the continuous analysis, `fit_groups()` for the group comparison |
 
-**aggregate(K) = weighted_mean(coherence) × weighted_mean(|cos(beta_hat, centroid)|)**,
+```python
+# Categorical groups
+ssd = SSD(emb, corpus, y=group_labels, lexicon=lexicon)
+result = ssd.fit_groups(n_perm=5000, correction="holm")
 
-where both terms are **weighted by cluster size**. The aggregate score is then **detrended** by regressing it on
-**log(% variance explained)** and plotting the resulting residuals (z-scored), so the blue curve reflects interpretability
-**beyond what is trivially expected from retaining more variance at larger K**.
+# Or: median split on continuous y
+ssd = SSD(emb, corpus, y=scores, lexicon=lexicon)
+result = ssd.fit_groups(median_split=True, n_perm=5000)
+```
 
-The **orange curve** shows **solution stability**, measured as the change of the unit semantic gradient between consecutive
-K values: **delta_beta(K) = 1 − cos(beta_hat(K−Δ), beta_hat(K))** (smoothed for readability).
-Lower values indicate that increasing K does not substantially rotate the inferred semantic direction.
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `median_split` | `bool` | `False` | Split continuous y into "low"/"high" at median |
+| `n_perm` | `int` | `5000` | Permutation iterations |
+| `correction` | `str` | `"holm"` | P-value correction: `"holm"`, `"bonferroni"`, `"fdr_bh"`, `"none"` |
+| `random_state` | `int` | `2137` | Random seed |
 
-The **red vertical line** marks the selected **K**, chosen by maximizing a **robust joint score** that averages
-(1) local AUCK-smoothed detrended interpretability and (2) local AUCK-smoothed stability (favoring small delta_beta),
-with ties resolved by selecting the **smallest** K on a plateau.
+Groups with fewer than 20 documents are automatically dropped.
+
+Groups are canonicalised internally — original labels are remapped to `"g1"`, `"g2"`, … (in sorted order). The original-label mapping is exposed on `result.group_labels`.
+
+#### Interpreting group results
+
+```python
+print(result)                  # header + view directory
+print(result.stats)            # G, n_kept, n_perm, correction, omnibus pvalue
+print(result.test)             # omnibus pvalue + pairwise contrasts block
+
+# Pairwise rows (T, p_raw, p_corrected, cohens_d, n_g1, n_g2 per contrast)
+result.pairs                   # PairsView — exports via .to_df() / .save()
+
+# Pivoted interpretation across all contrasts (adds a "contrast" column)
+result.words.pos
+result.clusters.pos(topn=100)
+result.snippets.pos
+
+# Zoom into one pair → PairResult (canonical keys: "g1", "g2", ...)
+pair = result[("g1", "g2")]
+pair.words.pos
+pair.clusters.pos
+pair.snippets
+
+# Re-run the permutation test with different settings
+result.test(n_perm=10_000, correction="fdr_bh")
+```
+
+Key attributes:
+- `result.G` — number of retained groups (after the 20-doc minimum filter)
+- `result.n_kept` — total documents across retained groups
+- `result.group_labels` — `dict` mapping canonical keys (`"g1"`, …) to original labels
+- `result.test.omnibus_T`, `result.test.omnibus_p` — omnibus statistic and permutation p
+- `result.pairs` — list-like view of `Pair` rows with per-contrast `T`, `p_raw`, `p_corrected`, `cohens_d`, `n_g1`, `n_g2`, `contrast_norm`
+
+### Inspecting results
+
+Both `PLSResult` and `PCAOLSResult` share the same interpretation API — everything is a printable, exportable view:
+
+```python
+print(result)                   # header + view/array directory
+print(result.stats)             # backend, r², r²_adj (OLS only), p, n_kept,
+                                # β-norm, Δ (per +0.10 cosine), IQR effect,
+                                # |corr(y, ŷ)|, y_mean, y_std
+print(result.fit_info)          # n_components, p_at_k, random_state,
+                                # plus PCA-K sweep info for OLS
+
+# Direct array attributes (numpy ndarrays)
+result.beta                     # raw direction in embedding space
+result.gradient                 # unit-length version of beta
+result.beta_norm                # ||beta|| (effect-size summary)
+result.alignment_scores         # per-doc cosine to gradient
+result.n_components             # number of PLS / PCA components
+
+# Comprehensive narrative report — every section is on by default; pass
+# section=False to drop one.
+print(result.report(clusters={"n": 100, "n_words": 10, "n_snippets": 2},
+                    extreme_docs={"n": 30}, misdiagnosed={"n": 20}))
+result.report().save("report.md")    # also .html / .docx / .tex
+
+# Re-run the significance test in place
+result.test(n_splits=200)            # PLSResult — overwrites stats.pvalue
+```
+
+For `MultiPLSResult` and `GroupResult`, see the "Multi-component PLS" and "Cross-Group Comparison" sections above.
 
 ---
+
 ## Neighbors & Clustering
 
 ### Nearest neighbors
 
-Get the top N nearest neighbors of +β̂/−β̂:
+`result.words` is a tabular view with columns `side`, `rank`, `word`, `cos_beta`:
 
 ```python
-top_words = ssd.top_words(n = 20, verbose = True)
+result.words            # default: top 20 per pole
+result.words.pos        # one-sided, default 20 rows
+result.words.pos(50)    # resize to 50 rows
+result.words.neg(None)  # all available rows on this side
+
+# Standard view exports
+result.words.to_df()              # pandas DataFrame
+result.words.save("words.csv")    # csv / json / md / xlsx / docx / tex
 ```
 
 ### Clustering neighbors into themes
-Use `cluster_neighbors_sign` to group the top N neighbors of +β̂/−β̂ into k clusters (k-means; Euclidean on unit vectors ≈ cosine):
+
+`result.clusters` k-means clusters the top neighbours per pole (k auto-selected via silhouette unless pinned):
 
 ```python
-df_clusters, df_members = ssd.cluster_neighbors(topn = 100, 
-                                                k=None,
-                                                k_min = 2, 
-                                                k_max = 10, 
-                                                verbose = True,
-                                                random_state = 13, # for reproducibility
-                                                top_words = 5,
-                                                verbose = True)
+result.clusters.pos              # default topn=100
+result.clusters.pos(topn=200, k=4)         # recompute with different params
+result.clusters.pos(cluster_id=0).words    # zoom into one cluster
+result.clusters.pos(cluster_id=0).snippets # snippets aligned with that centroid
+result.clusters.words            # flat per-side cluster-words table
+
+# Columns: cluster_id, side, size, coherence, centroid_cos_beta
+result.clusters.pos.to_df()
+result.clusters.save("clusters.csv")
 ```
 
-Returns
-- df_clusters (one row per cluster):
-- side, cluster_rank, size, centroid_cos_beta, coherence, top_words
-- df_members (one row per word):
-  side, cluster_rank, word, cos_to_centroid, cos_to_beta
-
-The raw clusters (with all per-word cosines and internal ids) are kept internally as:
-- ssd.pos_clusters_raw
-- ssd.neg_clusters_raw
-
 ---
+
 ## Interpreting with Snippets
-After clustering, SSD lets you **link the abstract directions in embedding space back to actual language** by inspecting **text snippets**.  
- The script:
-1. Locates each **occurrence of a seed word** (from your lexicon) in the corpus.  
-2. Extracts a **small window of surrounding context** (±3 tokens).  
-3. Represents that window as a **SIF-weighted context vector** in the same embedding space as β̂ and the cluster centroids.  
-4. Computes the **cosine similarity** between each such local context vector and  
-   - a **cluster centroid** (to find passages representative of that theme), or  
-   - the overall **semantic gradient β̂** (to find passages aligned with the global direction).
 
-### Snippets by cluster centroids
+After fitting, SSD lets you link the abstract directions in embedding space back to actual language by inspecting text snippets near seed-word occurrences. Snippets are pulled from the `Corpus` attached at fit time — no need to pass `pre_docs` manually.
 
 ```python
-snips = ssd.cluster_snippets(
-    pre_docs=pre_docs,    # from preprocess_texts(...)
-    side="both",          # "pos", "neg", or "both"
-    window_sentences=1,   # [sent-1, sent, sent+1]
-    top_per_cluster=100,  # keep best K per cluster
-)
+result.snippets                       # default: top 30 per pole
+result.snippets.pos                   # SnippetsViewSided, top 30
+result.snippets.pos(50)               # resize
+result.snippets(top_per_side=200, min_cosine=0.1)   # recompute extraction
 
-df_pos_snip = snips["pos"]  # columns: centroid_label, doc_id, cosine, seed, sentence_before, sentence_anchor, sentence_after, window_text_surface, ...
-df_neg_snip = snips["neg"]
+# Snippets aligned with a specific cluster centroid
+result.clusters.pos(cluster_id=0).snippets
 
-
-
-df_pos_snip = snips["pos"] 
-df_neg_snip = snips["neg"]
+# Columns: snippet_id, side, doc_id, cosine, seed, start/end indices,
+# text_window, text_surface, text_lemmas, cluster_id, contrast
+result.snippets.to_df()
+result.snippets.save("snippets.xlsx")
 ```
-Each returned row represents a seed occurrence window, not a whole essay.  
-The `cosine` column is the similarity between the context vector (built around that seed occurrence) and the cluster centroid.  
-Surface text (`sentence_before`, `sentence_anchor`, `sentence_after`) lets you read the passage in context.
 
-### Snippets along β̂
-You can also extract windows that best illustrate the main semantic direction (rather than specific clusters):
-```python
-
-beta_snips = ssd.beta_snippets(
-    pre_docs=pre_docs,
-    window_sentences=1,
-    seeds=ssd.lexicon,
-    top_per_side=200,
-)
-
-df_beta_pos = beta_snips["beta_pos"]
-df_beta_neg = beta_snips["beta_neg"]
-```
-Here, the cosine is taken between each seed-centered context vector and β̂ (the main semantic gradient).
-Sorting by this cosine reveals which local language usages most strongly express the positive or negative pole of your concept.
+The snippet extraction:
+1. Locates each occurrence of a seed word in the corpus.
+2. Extracts a small window of surrounding context.
+3. Represents that window as a SIF-weighted context vector.
+4. Computes cosine similarity between the context vector and β, ranking snippets by alignment.
 
 ---
-## Per-Essay SSD Scores
 
-The **SSD score** for each essay quantifies **how closely the text’s meaning aligns with the main semantic direction (β̂)** discovered by the model.  
-These scores can be used for individual-difference analyses, correlations with psychological scales, or visualization of semantic alignment across groups.
+## Per-Document SSD Scores
 
-Internally, each essay is represented by a **SIF-weighted average of local context vectors** (around the lexicon seeds).  
-The SSD score is then computed as the **cosine similarity between that essay’s vector and β̂**.  
-In addition, the model’s regression weights allow you to compute the **predicted outcome** for each essay — both in standardized units and in the original scale of your dependent variable.
-
-
-### How scores are computed
-
-For each document \(i\):
-- (x_i) — document vector (normalized if `l2_normalize_docs=True`)
-- (β̂) — unit semantic gradient in embedding space  
-- `cos[i] = cos(x_i, β̂)` → **semantic alignment score**  
-- `yhat_std[i] = x_i · β` → predicted standardized outcome  
-- `yhat_raw[i] = mean(y) + std(y) * yhat_std[i]` → prediction in original units  
-
-These are available for **all documents**, with NaNs for those that did not contain any lexicon occurrences (i.e., were dropped before fitting).
+`result.docs` exposes per-document predictions and the cosine alignment score (the SSD score, ⟨d_i, gradient⟩):
 
 ```python
-scores = ssd.ssd_scores(
-    docs, # list[list[str]]
-    include_all=True) # include all docs, even those dropped due to no seed contexts
+result.docs                          # all rows; columns: doc_id, y_true,
+                                     # y_hat, residual, alignment_score
+result.docs.pos(20)                  # 20 most β-positive (highest y_hat)
+result.docs.neg(20)                  # 20 most β-negative
+result.docs.id(42)                   # single-doc detail (incl. raw text)
 
+# Misdiagnosed — largest |residual|
+result.docs.misdiagnosed(20)                     # both over and under
+result.docs.misdiagnosed(20, direction="over")   # y_hat > y_true
+result.docs.misdiagnosed(20, direction="under")  # y_hat < y_true
+
+result.docs.to_df()
+result.docs.save("docs.csv")
 ```
 
-Returned columns:
-- `doc_index`	Original document index (0-based)
-- `kept`	Whether the essay had valid seed contexts (True/False)
-- `cos`	Cosine alignment of essay vector to β̂
-- `yhat_std`	Predicted outcome (standardized units)
-- `yhat_raw`	Predicted outcome (original scale of your dependent variable)
-- `y_true_std`	True standardized outcome (NaN for dropped docs)
-- `y_true_raw`	True raw outcome (NaN for dropped docs)
-
----
-## Cross-Group Comparison (SSDGroup)
-
-When your research question involves **categorical groups** rather than a continuous outcome (e.g., clinical diagnosis, experimental condition, nationality), use `SSDGroup` instead of `SSD`.
-
-`SSDGroup` builds per-essay concept vectors using the same pipeline as `SSD`, then:
-1. Computes **unit-length group centroids** in doc-vector space.
-2. Runs an **omnibus permutation test** (mean pairwise cosine distance between centroids) to test whether any groups differ.
-3. Runs **pairwise permutation tests** with Bonferroni correction.
-4. Constructs **centroid contrast vectors** for each pair, which plug into the same interpretation tools (neighbors, clusters, snippets).
-
-For two groups, the omnibus test is skipped (it is identical to the single pairwise test).
-
-The cross-group extension was introduced in:
-Plisiecki, H., Sterna, A., Maciejewska, E., & Moskalewicz, M. (2026). Computational phenomenology of self and time in borderline and narcissistic personality disorders: Cross-group supervised semantic differential. *PsyArXiv*. [https://doi.org/10.31234/osf.io/r8y6b_v1](https://doi.org/10.31234/osf.io/r8y6b_v1)
-
-### When to use SSDGroup vs SSD
-
-| Scenario | Use |
-|---|---|
-| Continuous outcome (scale score, rating) | `SSD` |
-| Categorical groups (diagnosis, condition) | `SSDGroup` |
-| Continuous outcome AND group labels | Both — `SSD` for the continuous analysis, `SSDGroup` for the group comparison |
-
-Do **not** discretize a continuous variable (e.g., median split) just to use `SSDGroup`. `SSD` with the continuous outcome is strictly more powerful in that case.
-
-### Fitting SSDGroup
+The full per-document alignment vector is also available directly:
 
 ```python
-from ssdiff import SSDGroup
-
-sg = SSDGroup(
-    kv=kv,
-    docs=docs,
-    groups=diagnosis_labels,   # e.g. ["BPD", "NPD", "HC", "BPD", ...]
-    lexicon=lexicon,
-    n_perm=5000,               # number of permutations (default 5000)
-    random_state=42,           # for reproducibility
-    window=3,
-    sif_a=1e-3,
-)
-```
-
-Parameters:
-- `kv` — pretrained embeddings (KeyedVectors or path)
-- `docs` — documents as token lists (same format as `SSD`)
-- `groups` — group label per document (same length as `docs`); any hashable type. `None`/`NaN`/empty string entries are dropped.
-- `lexicon` — seed words for the concept
-- `n_perm` — number of permutations for inference (default 5000)
-- `random_state` — RNG seed for reproducibility
-- `l2_normalize_docs`, `window`, `sif_a`, `use_full_doc` — same as `SSD`
-
-### Omnibus and pairwise results
-
-```python
-# Pretty-print all results
-sg.print_results()
-
-# Pairwise results as a DataFrame
-sg.results_table()
-#   group_A  group_B  n_A  n_B  cosine_distance  p_raw  p_corrected  cohens_d  contrast_norm
-```
-
-Key attributes:
-- `sg.omnibus_T` — observed test statistic (mean pairwise cosine distance)
-- `sg.omnibus_p` — permutation p-value
-- `sg.pairwise` — dict mapping `(group_A, group_B)` tuples to result dicts containing `T`, `p_raw`, `p_corrected`, `cohens_d`, `contrast_unit`, etc.
-
-### Interpreting a contrast
-
-Extract a contrast between two groups using `get_contrast()`. The returned `SSDContrast` object exposes the same interpretation API as `SSD` (neighbors, clusters, snippets):
-
-```python
-c = sg.get_contrast("BPD", "NPD")
-
-# Top words along the contrast direction
-# +contrast → more BPD-like, −contrast → more NPD-like
-c.top_words(n=15, verbose=True)
-
-# Cluster themes on both poles
-c.cluster_neighbors(topn=100, verbose=True)
-
-# Text snippets aligned with the contrast
-snips = c.beta_snippets(pre_docs=pre_docs, top_per_side=100)
-df_pos = snips["beta_pos"]   # passages more BPD-like
-df_neg = snips["beta_neg"]   # passages more NPD-like
-
-# Snippets per cluster centroid (requires cluster_neighbors first)
-cluster_snips = c.cluster_snippets(pre_docs=pre_docs, side="both", top_per_cluster=50)
-```
-
-Requesting the reversed contrast flips the direction automatically:
-
-```python
-c_flipped = sg.get_contrast("NPD", "BPD")
-# +contrast is now NPD-like, −contrast is now BPD-like
-```
-
-### Per-participant scores
-
-Project all participants onto a contrast direction for visualization (e.g., violin or density plots):
-
-```python
-scores = sg.contrast_scores("BPD", "NPD")
-# DataFrame with columns: group, cos_to_contrast
+result.alignment_scores              # ndarray of shape (n_kept,)
 ```
 
 ---
+
 ## API Summary
-The `ssdiff` top-level package re-exports the main objects so you can write:
+
+The `ssdiff` top-level package exports three primary classes plus result and view classes:
 
 ```python
+from ssdiff import Embeddings, Corpus, SSD
+# Result / view classes (re-exported for type hints, isinstance checks, pickling):
 from ssdiff import (
-  SSD,                       # continuous outcome analysis
-  SSDGroup,                  # cross-group comparison
-  SSDContrast,               # pairwise contrast (returned by SSDGroup.get_contrast)
-  load_embeddings, normalize_kv,
-  load_spacy, load_stopwords, preprocess_texts, build_docs_from_preprocessed,
-  suggest_lexicon, token_presence_stats, coverage_by_lexicon,
+    PLSResult, PCAOLSResult, GroupResult, LexiconResult,
+    WordsView, WordsViewSided, ClustersView, ClustersViewSided,
+    ClusterWordsView, ClusterWordsViewSided, SnippetsView, SnippetsViewSided,
 )
+# In-development; not exported at top level:
+from ssdiff.results.multi_pls_result import MultiPLSResult
 ```
 
-### `SSD` (class)
+### `Embeddings`
 
-- `__init__(kv, docs, y, lexicon, *, l2_normalize_docs=True,  N_PCA=20, use_unit_beta=True)`
-- Attributes after fit: `beta`, `beta_unit`, `r2`, `f_stat`, `f_pvalue`, `beta_norm_stdCN`,
-`delta_per_0p10_raw`, `iqr_effect_raw`, `y_corr_pred`, `n_kept`, etc.
-- Methods:
-  - `nbrs(sign=+1, n=20)` → list[(word, cosine)]
-  - `cluster_neighbors_sign(side="pos", topn=100, k=None, k_min=2, k_max=10, restrict_vocab=50000, random_state=13, min_cluster_size=2, top_words=10, verbose=False)` → `(df_clusters, df_members)` and stores raw clusters in `pos_clusters_raw`/`neg_clusters_raw`
-  - `cluster_snippets(pre_docs, side="both", top_per_cluster=100)` → dict with `"pos"`/`"neg"` DataFrames
-  - `beta_snippets(pre_docs, top_per_side=200)` → dict with `"beta_pos"`/`"beta_neg"` DataFrames
-  - `ssd_scores(include_all=True)` → DataFrame of per-essay scores
+- `Embeddings.load(path, *, verbose=False, parallel=False, ram_efficient=False)` — load `.ssdembed`, `.kv`, `.bin`, `.txt`, `.vec` (and `.gz` variants)
+- `.normalize(l2=True, abtt=1, re_normalize=True)` — in-place L2 + ABTT; tracks state, safe to call repeatedly
+- `.save(filename=None, fmt="ssdembed")` — save to native, text, binary, or gensim format
+- `emb["word"]` / `emb.get_vector("word", norm=False)` — vector lookup
+- `"word" in emb` — membership check
+- `len(emb)` / `.vocab_size` — vocabulary size
+- `.vector_size` (alias `.dim`) — embedding dimensionality
+- `.similar_by_vector(vec, topn=10, restrict_vocab=None)` — nearest neighbor search
 
-### `SSDGroup` (class)
+### `Corpus`
 
-- `__init__(kv, docs, groups, lexicon, *, n_perm=5000, random_state=42, l2_normalize_docs=True, window=3, sif_a=1e-3, use_full_doc=False)`
-- Attributes after fit: `omnibus_T`, `omnibus_p`, `pairwise`, `centroids`, `group_labels`, `G`, `n_kept`, `n_dropped`
-- Methods:
-  - `print_results()` — pretty-print omnibus + pairwise results
-  - `results_table()` → DataFrame of pairwise results
-  - `get_contrast(group_a, group_b)` → `SSDContrast` (auto-flips if needed)
-  - `contrast_scores(group_a, group_b)` → DataFrame with `group` and `cos_to_contrast` columns
+- `Corpus(texts, *, lang=None, model=None, nlp=None, stopwords=None, pretokenized=False, auto_download=None)`
+- `.docs` — lemmatized tokens per document
+- `.pre_docs` — sentence-level structure for snippet extraction
+- `.n_texts` — number of documents
+- `.suggest_lexicon(y, *, top_k=30, ...)` -> `LexiconResult` — data-driven seed word selection
+- `.evaluate_lexicon(y, lexicon, ...)` -> `LexiconResult` — score an existing lexicon (per-token + aggregate)
 
-### `SSDContrast` (class)
+### `SSD`
 
-Returned by `SSDGroup.get_contrast()`. Duck-types with `SSD` for interpretation:
-- `nbrs(sign=+1, n=16)` → nearest neighbors to the contrast direction
-- `top_words(n=10, verbose=False)` → DataFrame of top words on both poles
-- `cluster_neighbors(topn=100, verbose=False)` → `(df_clusters, df_members)`
-- `beta_snippets(pre_docs, top_per_side=200)` → dict with `"beta_pos"`/`"beta_neg"` DataFrames
-- `cluster_snippets(pre_docs, side="both", top_per_cluster=100)` → dict with `"pos"`/`"neg"` DataFrames
+- `SSD(embeddings, corpus, y, lexicon, *, window=3, sif_a=1e-3, use_full_doc=False)`
+- `.fit_pls(*, k="auto", k_max=5, n_splits=50, random_state=2137, verbose=False)` -> `PLSResult`
+- `.fit_multipls(*, k="auto", k_max=5, rotate="varimax", rotation_vocab=50_000, n_splits=50, ...)` -> `MultiPLSResult` *(in development)*
+- `.fit_ols(*, fixed_k=None, k_min=2, k_max=120, k_step=2, verbose=False)` -> `PCAOLSResult`
+- `.fit_groups(*, median_split=False, n_perm=5000, correction="holm", random_state=2137, verbose=False)` -> `GroupResult`
 
-### Embeddings
-- `load_embeddings(path)` → `gensim.models.KeyedVectors`
-- `normalize_kv(kv, l2=True, abtt_m=0)` → new KeyedVectors with L2 + optional ABTT (“all-but-the-top”, top-m PCs removed)
+### `PLSResult` / `PCAOLSResult`
 
-### Preprocessing
-- `load_spacy(model_name="pl_core_news_lg")` → spaCy nlp
-- `load_stopwords(lang="pl")` → list of stopwords (remote Polish list with sensible fallback)
-- `preprocess_texts(texts, nlp, stopwords)` → list of PreprocessedDoc
-- `build_docs_from_preprocessed(pre_docs)` → list[list[str]] (lemmas for modeling)
+**Direct array attributes**: `beta`, `gradient`, `beta_norm`, `alignment_scores`, `n_components`, `x`, `y`. PLS adds `component_scores`, `component_weights`, `find_k_result`, `cv_scores`. PCA+OLS adds `pca_components`, `pca_weights`, `pca_k`, `sweep_result`.
 
-### Lexicon
-- `suggest_lexicon(df_or_tuple, text_col=None, score_col=None, top_k=150, min_docs=5, n_bins=4, corr_cap=0.30, var_type='continuous')` → DataFrame
-- `token_presence_stats(texts, y, token, n_bins=4, corr_cap=0.30, verbose=False, var_type='continuous')` → dict
-- `coverage_by_lexicon(df_or_tuple, text_col=None, score_col=None, lexicon=(), n_bins=4, verbose=False, var_type='continuous')` → `(summary, per_token_df)`
-- `var_type`: `'continuous'` (numeric outcome, default) or `'categorical'` (group labels). When categorical, `corr` is Cramér's V, `cov_bal` is balanced across groups, and `q1`/`q4` are min/max group coverage.
+**Scalar views** (all expose `.r2`, `.pvalue`, … as attributes; print to read, export with `.to_df()` / `.save(...)`):
+- `.stats` — `backend`, `r2`, `r2_adj` (OLS only), `pvalue`, `n_raw`, `n_kept`, `n_dropped`, `y_mean`, `y_std`, `beta_norm`, `delta`, `iqr_effect`, `y_corr_pred`
+- `.fit_info` — `n_components`, `p_at_k`, `n_splits`, `random_state`, plus PCA-K sweep info for OLS
 
---- 
+**Tabular views**:
+- `.words` → `WordsView` (with `.pos` / `.neg` → `WordsViewSided`, callable `(n)` to resize)
+- `.clusters` → `ClustersView` (with `.pos` / `.neg` → `ClustersViewSided`, callable `(topn=…, k=…)` to recompute or `(cluster_id)` to zoom)
+- `.snippets` → `SnippetsView` (with `.pos` / `.neg`, callable `(top_per_side=…)` to recompute)
+- `.docs` → `DocsView` with `.pos(k)`, `.neg(k)`, `.misdiagnosed(k, direction=…)`, `.id(doc_id)`
+- `.sweep` → `SweepView` (PCA+OLS only) — per-K interpretability/stability rows
+- `.test` → `TestView` — callable to **re-run** the test in place (`result.test(n_splits=200)` overwrites `stats.pvalue` and `test.pvalue`)
+
+**Methods**:
+- `.report(clusters=True, top_words=True, extreme_docs=True, misdiagnosed=True)` -> `Report` — every section is on by default; pass `section=False` to drop one. Each section toggle is `True` / `False` / `None` / `dict` (e.g. `clusters={"n": 20, "n_words": 5, "n_snippets": 1}`). Stats + Fit info are always included. Use `.to_text()`, `.to_html()`, `.save("report.md")`.
+- `.attach(corpus=None, embeddings=None)` — re-attach after un-pickling
+- `.plot_sweep(path=None)` — PCA-K sweep chart (`PCAOLSResult` only)
+
+### `GroupResult`
+
+**Direct attributes**: `G`, `n_kept`, `n_perm`, `correction`, `random_state`, `group_labels` (canonical → original label dict), `x`, `groups`, `beta`, `gradient`, `beta_norm`, `alignment_scores`.
+
+**Views**: `.stats`, `.test` (omnibus `pvalue`, `omnibus_T`, `omnibus_p`), `.pairs` (per-contrast `T`, `p_raw`, `p_corrected`, `cohens_d`, `n_g1`, `n_g2`), `.words`, `.clusters`, `.snippets` (all pivoted across contrasts, add a `contrast` column).
+
+**Pair access**: `result[("g1", "g2")]` → `PairResult` (canonical keys only) with its own `.words`, `.clusters`, `.snippets`, `.gradient`, `.beta`. Use `result.keys()` to list available pair keys; `result.group_labels` to map canonical → original.
+
+**Methods**: `.report(clusters=True, top_words=True)` — both sections on by default; pass `section=False` to drop one. Each toggle is `True` / `False` / `None` / `dict` (e.g. `clusters={"n": 20, "n_words": 5, "n_snippets": 1}`). Omnibus + Group labels + Pairwise contrasts are always included. `.test(n_perm=…, correction=…)` (re-runs in place); `.attach(...)`.
+
+### Lexicon utilities
+
+The lexicon helpers are **methods on `Corpus`**, not standalone imports:
+
+```python
+corpus = Corpus(texts, lang="en")
+suggestions = corpus.suggest_lexicon(y, top_k=30)           # → LexiconResult
+lex = corpus.evaluate_lexicon(y, lexicon=["happy", "sad"])  # → LexiconResult
+```
+
+`LexiconResult` views (`.suggestions`, `.summary`) and `.report()` support `.to_df()` (requires `ssdiff[results]`), `.to_dict()`, `.to_records()`, and `.save("file.{csv,json,md,xlsx,docx,tex,html}")`.
+
+---
+
 ## Citing & License
 
-- License: MIT (see LICENSE).
+- License: GPL v3 (see LICENSE).
 - If you use SSD in published work, please cite the associated paper.
 - A suggested citation:
 
-Plisiecki, H., Lenartowicz, P., Pokropek, A., Małyska, K., & Flakus, M. (2025). Measuring Individual Differences in Meaning: The Supervised Semantic Differential. PsyArXiv. https://doi.org/10.31234/osf.io/gvrsb_v1
+Plisiecki, H., Lenartowicz, P., Pokropek, A., Malyska, K., & Flakus, M. (2025). Measuring Individual Differences in Meaning: The Supervised Semantic Differential. PsyArXiv. https://doi.org/10.31234/osf.io/gvrsb_v1
 
 ---
+
 ## Questions / Contributions
-- File issues and feature requests on the repo’s Issues page.
+
+- File issues and feature requests on the repo's Issues page.
 - Pull requests welcome — especially for:
   - Robustness diagnostics and visualization helpers
   - Documentation improvements
