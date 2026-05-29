@@ -34,20 +34,15 @@ def test_public_api_importable():
 
 
 def test_version_matches_pyproject():
-    """ssdiff.__version__ must match the version declared in pyproject.toml."""
-    import re
     from pathlib import Path
+    import re
+    pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
+    content = pyproject.read_text(encoding="utf-8")
 
-    pyproject = Path(__file__).parent.parent / "pyproject.toml"
-    content = pyproject.read_text()
-    match = re.search(r'^version\s*=\s*"([^"]+)"', content, re.MULTILINE)
-    assert match, "Could not find version in pyproject.toml"
-    expected = match.group(1)
+    match = re.search(r'version\s*=\s*"([^"]+)"', content)
+    assert match is not None
 
-    assert ssdiff.__version__ == expected, (
-        f"ssdiff.__version__ ({ssdiff.__version__!r}) != pyproject.toml version ({expected!r})"
-    )
-
+    assert ssdiff.__version__ == match.group(1)
 
 def test_all_contains_core_names():
     """ssdiff.__all__ must exist and include SSD, Corpus, and Embeddings."""
