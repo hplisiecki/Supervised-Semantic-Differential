@@ -293,7 +293,7 @@ These signals are smoothed using an AUCK window.
 
 ```python
 result = ssd.fit_ols(fixed_k=None, k_min=2, k_max=120, verbose=True)
-print(f"Selected K = {result.n_components}")
+print(f"Selected K = {result.pca_k}")   # PCAOLSResult exposes .pca_k (PLSResult uses .n_components)
 print(result.stats)
 
 result.plot_sweep("sweep.png")   # save sweep plot
@@ -442,7 +442,10 @@ result.beta                     # raw direction in embedding space
 result.gradient                 # unit-length version of beta
 result.beta_norm                # ||beta|| (effect-size summary)
 result.alignment_scores         # per-doc cosine to gradient
-result.n_components             # number of PLS / PCA components
+# Number of components — the attribute name differs by backend:
+result.n_components             # PLSResult only
+result.pca_k                    # PCAOLSResult only
+result.fit_info.n_components    # both backends (use this if the backend may vary)
 
 # Comprehensive narrative report — every section is on by default; pass
 # section=False to drop one.
@@ -594,7 +597,7 @@ from ssdiff.results.multi_pls_result import MultiPLSResult
 
 ### `PLSResult` / `PCAOLSResult`
 
-**Direct array attributes**: `beta`, `gradient`, `beta_norm`, `alignment_scores`, `n_components`, `x`, `y`. PLS adds `component_scores`, `component_weights`, `find_k_result`, `cv_scores`. PCA+OLS adds `pca_components`, `pca_weights`, `pca_k`, `sweep_result`.
+**Direct array attributes**: `beta`, `gradient`, `beta_norm`, `alignment_scores`, `x`, `y`. The component count is named per backend: **PLS** exposes `n_components`, **PCA+OLS** exposes `pca_k` (both are also available as `result.fit_info.n_components`). PLS adds `component_scores`, `component_weights`, `find_k_result`, `cv_scores`. PCA+OLS adds `pca_components`, `pca_weights`, `sweep_result`.
 
 **Scalar views** (all expose `.r2`, `.pvalue`, … as attributes; print to read, export with `.to_df()` / `.save(...)`):
 - `.stats` — `backend`, `r2`, `r2_adj` (OLS only), `pvalue`, `n_raw`, `n_kept`, `n_dropped`, `y_mean`, `y_std`, `beta_norm`, `delta`, `iqr_effect`, `y_corr_pred`
