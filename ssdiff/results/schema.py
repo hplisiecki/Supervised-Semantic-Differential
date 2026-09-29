@@ -34,6 +34,14 @@ class Word:
 
 
 @dataclass(frozen=True, slots=True)
+class Outcome:
+    """One outcome's loading on a PLS3 dimension (or a group's mean loading)."""
+    outcome: str
+    group: str | None
+    loading: float
+
+
+@dataclass(frozen=True, slots=True)
 class Cluster:
     """Summary row for one word cluster on a β pole.
 
@@ -324,6 +332,7 @@ class FitInfo:
     n_splits: int | None = None
     split_mean_r: float | None = None
     random_state: int | None = None
+    keep: int | None = None          # sparse PLS1 keep-count; None for dense
     # PCA+OLS specific
     k_min: int | None = None
     k_max: int | None = None

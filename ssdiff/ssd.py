@@ -22,9 +22,13 @@ class SSD:
         Matrix of per-document vectors. In the standard SSD pipeline each
         row is a **personal concept vector (PCV)**; in the lexical-norm mode
         each row is a single word embedding.
-    y : ndarray of shape (n,)
+    y : ndarray of shape (n,) or (n, q)
         Outcome values, numeric (continuous case) or object (group case),
-        with NaN / empty entries dropped.
+        with NaN / empty entries dropped. 2-D for several numeric outcomes
+        (:meth:`fit_multipls`); a row is dropped if any outcome is NaN.
+    outcome_names : list of str or None
+        Names of the ``q`` outcome columns for 2-D ``y`` (DataFrame column
+        names as strings, else ``"y1"``, …, ``"yq"``); ``None`` for 1-D ``y``.
 
     Builds document vectors from corpus + lexicon, then fit with a backend:
 
@@ -63,9 +67,11 @@ class SSD:
             Word embeddings instance providing the vector space.
         corpus : Corpus
             Tokenized corpus (``Corpus`` instance) aligned with ``y``.
-        y : array-like of float
-            Outcome variable. Entries with NaN are silently dropped together
-            with the corresponding documents.
+        y : array-like of shape (n,) or (n, q), or DataFrame
+            Outcome variable: 1-D numeric or categorical labels, or a 2-D
+            numeric matrix / DataFrame of several outcomes. Entries (rows,
+            for 2-D) with NaN are silently dropped together with the
+            corresponding documents.
         lexicon : sequence or set of str, optional
             Seed words used for context-window extraction. Required in the
             default seed-context mode; ignored when ``use_full_doc=True``.
@@ -80,8 +86,8 @@ class SSD:
         Raises
         ------
         ValueError
-            If ``len(y) != len(corpus)``, or if ``lexicon`` is empty and
-            ``use_full_doc=False``.
+            If ``len(y) != len(corpus)``, if 2-D ``y`` is not numeric, or if
+            ``lexicon`` is empty and ``use_full_doc=False``.
         """
         if window < 1:
             raise ValueError(f"window must be >= 1, got {window}")
@@ -114,6 +120,10 @@ class SSD:
         # Build doc vectors
         docs = corpus.docs
 
+        outcome_names = (
+            [str(c) for c in y.columns] if hasattr(y, "columns") else None
+        )
+
         # Accept both numeric and categorical y
         y_raw = np.asarray(y)
         try:
@@ -122,6 +132,12 @@ class SSD:
         except (ValueError, TypeError):
             y_num = None
             is_numeric = False
+
+        if y_raw.ndim == 2:
+            if not is_numeric:
+                raise ValueError("2-D y (several outcomes) must be numeric.")
+            if outcome_names is None:
+                outcome_names = [f"y{j + 1}" for j in range(y_raw.shape[1])]
 
         if len(y_raw) != len(docs):
             raise ValueError(
@@ -132,6 +148,8 @@ class SSD:
         # Filter invalid y entries
         if is_numeric:
             finite = np.isfinite(y_num)
+            if finite.ndim == 2:
+                finite = finite.all(axis=1)
             if not finite.all():
                 docs = [d for d, m in zip(docs, finite) if m]
                 y_num = y_num[finite]
@@ -157,8 +175,21 @@ class SSD:
         self.x = np.asarray(X, dtype=np.float64)
         self.y = y_clean[keep]
         self.is_numeric = is_numeric
+        self.outcome_names = outcome_names
 
     # ── Shared helpers ─────────────────────────────────────────
+
+    def _require_1d_y(self, method: str) -> None:
+        if self.y.ndim == 2 and self.y.shape[1] == 1:
+            raise ValueError(
+                f"{method}() takes a 1-D y, but y has shape {self.y.shape}. "
+                "Pass a single column as 1-D, e.g. df['col']."
+            )
+        if self.y.ndim == 2:
+            raise ValueError(
+                f"{method}() takes one outcome, but y has "
+                f"{self.y.shape[1]} columns. Use fit_multipls() for several outcomes."
+            )
 
     def _compute_fit_stats(
         self, ys: np.ndarray, y_pred: np.ndarray, p: int,
@@ -232,18 +263,19 @@ class SSD:
         *,
         k: int | Literal["auto"] = "auto",
         k_max: int = 5,
+        keep: int | Literal["auto"] | None = None,
         n_splits: int = 50,
         random_state: int = 2137,
         verbose: bool = False,
     ):
         """Fit PLS1 NIPALS and return PLSResult.
 
-        Significance is always tested with the split_nb method
-        (Lenartowicz, 2026). For ``k="auto"`` the reported p-value is the
-        **same sample k=1 confirmatory** test — independent of the
-        ``find_k_optimal`` selection that picks ``k_star`` for the actual
-        fit. When ``k_star == 1`` the find_k chain entry at index 0 is
-        reused as the k=1 same sample p (it is the same statistic).
+        Significance is always tested with the split_exact method
+        (permutation-calibrated split-half test; Lenartowicz, 2026). The
+        ``find_k_optimal`` diagnostic chain stays on the cheaper split_nb.
+        For ``k="auto"`` the reported p-value is the **same sample k=1
+        confirmatory** test — independent of the ``find_k_optimal``
+        selection that picks ``k_star`` for the actual fit.
 
         Parameters
         ----------
@@ -254,12 +286,23 @@ class SSD:
               ``plskit.pls1_confirmatory_test`` at this k.
             - ``"auto"`` — let ``plskit.pls1_find_k_optimal`` pick
               ``k_star`` (selector ``"r2_se"``); p-value is the same sample
-              k=1 confirmatory split_nb statistic.
+              k=1 confirmatory split_exact statistic.
         k_max : int, default 5
             Cap for ``k="auto"``. Further clamped to ``min(k_max, n-1, D)``.
             Ignored when ``k`` is an int.
+        keep : int, ``"auto"``, or None, default None
+            Sparse-PLS knob. ``None`` gives dense PLS1. ``"auto"`` tunes the
+            keep-count at the fixed ``k`` via ``spls1_find_keep_optimal``
+            (raises if it returns 0). An ``int`` fixes the keep-count in
+            ``[1, n_features]``. Sparse mode requires an explicit integer
+            ``k``; ``keep`` with ``k="auto"`` raises ``ValueError``.
+
+            In sparse mode the p-value is the path-max of the sequential
+            chain (``nanmax`` over ``spls1_find_k_sequence``, split_nb),
+            not a single confirmatory test at k as in the dense path;
+            ``result.test.name`` is ``"split_nb_seq"`` and ``.test()`` cannot rerun it.
         n_splits : int, default 50
-            Random splits for the split_nb test.
+            Random splits for the split-half tests.
         random_state : int, default 2137
             Random seed.
         verbose : bool
@@ -272,6 +315,7 @@ class SSD:
 
         from ssdiff.results.continuous_result import PLSResult
 
+        self._require_1d_y("fit_pls")
         if not self.is_numeric:
             raise ValueError(
                 "fit_pls() requires numeric y. This SSD was constructed with "
@@ -291,7 +335,16 @@ class SSD:
 
         n_kept, D = Xs.shape
 
+        if keep is not None and k == "auto":
+            raise ValueError(
+                "keep= requires an explicit integer k (sparse PLS tunes "
+                "the keep-count at a fixed k); got k='auto'."
+            )
+
         find_k_raw = None
+        seq = None
+        keep_star = None
+        test_name = "split_exact"
         if k == "auto":
             eff_k_max = max(min(int(k_max), n_kept - 1, D), 1)
             if verbose:
@@ -309,18 +362,14 @@ class SSD:
                 verbose=verbose,
             )
             k_star = int(find_k_raw.k_star)
+            if k_star < 1:
+                raise ValueError(
+                    "fit_pls(k='auto'): plskit found no component "
+                    "(k_star = 0); y shows no signal in X."
+                )
             if verbose:
                 print(f"[fit_pls] k_star = {k_star}")
-            if k_star == 1:
-                pvalue = float(find_k_raw.pvalues[0])
-                if verbose:
-                    print(
-                        f"[fit_pls] k_star = 1 — reusing chain[0] as the "
-                        f"k=1 p (split_nb)"
-                    )
-                    print(f"[fit_pls] p-value (k=1) = {pvalue:.6g}")
-            else:
-                if verbose:
+                if k_star > 1:
                     chain = ", ".join(
                         f"{p:.3g}" for p in find_k_raw.pvalues[:k_star]
                     )
@@ -333,21 +382,21 @@ class SSD:
                         f"        path-max: {path_max:.3g}  "
                         f"[same-sample]"
                     )
-                    print(
-                        f"[fit_pls] running k=1 confirmatory test "
-                        f"(split_nb, n_splits={n_splits})"
-                    )
-                r = plskit.pls1_confirmatory_test(
-                    Xs, ys, 1,
-                    method="split_nb",
-                    args={"n_splits": int(n_splits)},
-                    pre_standardized=True,
-                    seed=random_state,
-                    verbose=verbose,
+                print(
+                    f"[fit_pls] running k=1 confirmatory test "
+                    f"(split_exact, n_splits={n_splits})"
                 )
-                pvalue = float(r.pvalue)
-                if verbose:
-                    print(f"[fit_pls] p-value (k=1) = {pvalue:.6g}")
+            r = plskit.pls1_confirmatory_test(
+                Xs, ys, 1,
+                method="split_exact",
+                args={"n_splits": int(n_splits)},
+                pre_standardized=True,
+                seed=random_state,
+                verbose=verbose,
+            )
+            pvalue = float(r.pvalue)
+            if verbose:
+                print(f"[fit_pls] p-value (k=1) = {pvalue:.6g}")
             n_comp = k_star
             p_at_k = 1
         elif isinstance(k, int):
@@ -359,22 +408,72 @@ class SSD:
                     f"Cannot fit PLS: need at least 2 samples and 1 feature, "
                     f"got n={n_kept}, features={D}, requested k={k}"
                 )
-            r = plskit.pls1_confirmatory_test(
-                Xs, ys, n_comp,
-                method="split_nb",
-                args={"n_splits": int(n_splits)},
-                pre_standardized=True,
-                seed=random_state,
-                verbose=verbose,
-            )
-            pvalue = float(r.pvalue)
-            p_at_k = n_comp
+            if keep is None:
+                r = plskit.pls1_confirmatory_test(
+                    Xs, ys, n_comp,
+                    method="split_exact",
+                    args={"n_splits": int(n_splits)},
+                    pre_standardized=True,
+                    seed=random_state,
+                    verbose=verbose,
+                )
+                pvalue = float(r.pvalue)
+                p_at_k = n_comp
+            else:
+                if keep == "auto":
+                    keep_star = int(plskit.spls1_find_keep_optimal(
+                        Xs, ys, n_comp, seed=random_state, verbose=verbose,
+                    ).keep_star)
+                    if keep_star < 1:
+                        raise ValueError(
+                            "fit_pls(keep='auto'): plskit found no keep-count "
+                            "(keep_star = 0); y carries no signal above the "
+                            "truncation floor."
+                        )
+                else:
+                    keep_star = int(keep)
+                    if not (1 <= keep_star <= D):
+                        raise ValueError(
+                            f"keep must be in [1, {D}] (n_features), got {keep_star}"
+                        )
+                seq = plskit.spls1_find_k_sequence(
+                    Xs, ys, n_comp, keep_star,
+                    test_method="split_nb", args={"n_splits": int(n_splits)},
+                    pre_standardized=True, seed=random_state, verbose=verbose,
+                )
+                chain_pvalues = np.asarray(seq.pvalues[:n_comp], dtype=float)
+                pvalue = (
+                    float(np.nanmax(chain_pvalues))
+                    if np.isfinite(chain_pvalues).any() else float("nan")
+                )
+                p_at_k = n_comp
+                test_name = "split_nb_seq"
         else:
             raise ValueError(f"k must be int or 'auto', got {k!r}")
 
-        m = plskit.pls1_fit(
-            Xs, ys, k=n_comp, pre_standardized=True, seed=random_state,
-        )
+        if keep is None:
+            m = plskit.pls1_fit(
+                Xs, ys, k=n_comp, pre_standardized=True, seed=random_state,
+            )
+        else:
+            try:
+                m = plskit.spls1_fit(
+                    Xs, ys, n_comp, keep_star, pre_standardized=True,
+                )
+            except plskit.PlsKitError as exc:
+                raise ValueError(
+                    f"plskit fit rejected n_components={n_comp}, "
+                    f"keep={keep_star}: {exc}. Reduce n_components/keep or "
+                    f"check for near-duplicate rows / near-zero variance "
+                    f"columns in X."
+                ) from exc
+            if m.W.shape[1] < n_comp:
+                raise ValueError(
+                    f"plskit.spls1_fit returned {m.W.shape[1]} components but "
+                    f"n_components={n_comp} was requested (NIPALS deflation "
+                    f"collapsed). Reduce n_components or check for "
+                    f"near-duplicate rows / near-zero variance columns in X."
+                )
         T, P, W, Q, coef = m.T, m.P, m.W, m.Q, m.coef
 
         y_pred = Xs @ coef
@@ -403,232 +502,242 @@ class SSD:
                 "p_at_k": p_at_k,
                 "n_splits": int(n_splits),
                 "random_state": random_state,
+                "keep": keep_star,
             },
             raw_diagnostics={
-                "find_k_result": find_k_raw,
+                (
+                    "find_k_result" if keep is None else "find_k_sequence_result"
+                ): find_k_raw if keep is None else seq,
                 "component_scores": T,
                 "component_weights": W,
             },
-            test_name="split_nb",
+            test_name=test_name,
             test_info=test_info,
             **kwargs,
         )
 
-    # ── Multi-dimensional PLS backend ──────────────────────────
+    # ── PLS3 backend (several outcomes) ────────────────────────
 
     def fit_multipls(
         self,
         *,
-        k: int | Literal["auto"] = "auto",
-        k_max: int = 5,
-        rotate: Literal["raw", "varimax"] = "varimax",
-        rotation_vocab: int | None = 50_000,
+        k: int,
+        rotate: Literal["words", "outcomes"] | None = None,
+        outcome_groups: dict[str, list[str]] | None = None,
         n_splits: int = 50,
+        n_perm: int = 1000,
         random_state: int = 2137,
         verbose: bool = False,
     ):
-        """Fit PLS1, rotate the W-subspace, return a :class:`MultiPLSResult`.
+        """Fit PLS3 (PLSC) of the doc vectors against several outcomes.
 
-        Container-level p-value follows :meth:`fit_pls` (same sample k=1 for
-        ``k="auto"``, confirmatory at ``k`` for ``k=int``). In addition,
-        each rotated dim leaf gains a diagnostic ``pvalue`` field: for
-        ``k="auto"`` these are read off the ``find_k_optimal`` chain;
-        for ``k=int`` they come from ``n_comp`` individual
-        ``pls1_confirmatory_test(ki)`` calls (ki=1..n_comp). In both
-        cases the chain is remapped via ``mpls_fit``'s ``order``
-        permutation.
+        PLS3 takes the SVD of the standardized cross-covariance ``Xs' Ys``:
+        dimension i pairs a word-space direction ``U[:, i]`` with an
+        outcome-loading vector ``V[:, i]``. Needs 2-D ``y`` with at least
+        two columns; use :meth:`fit_pls` for one outcome.
+
+        Significance is the split_exact PLS3 test at LV1
+        (``plskit.pls3_confirmatory_test``): a container-level p-value that
+        does not depend on ``rotate``. Leaves carry no p-value.
 
         Parameters
         ----------
-        k : int or ``"auto"``, default ``"auto"``
-            Same semantics as :meth:`fit_pls`. Raises if NIPALS deflation
-            produces fewer than the resolved count.
-        k_max : int, default 5
-            Cap for ``k="auto"``. Clamped to ``min(k_max, n-1, D)``.
-        rotate : {"raw", "varimax"}, default "varimax"
-            Rotation applied to the W-subspace.
-        rotation_vocab : int or None, default 50_000
-            Number of leading vocabulary rows fed to varimax as the
-            simple-structure target. Vocab rows are assumed to be
-            frequency-ranked (the word2vec/GloVe convention), so the
-            top-N is the well-estimated head; the long tail of rare-word
-            vectors is noisy and pulls varimax toward fitting noise.
-            ``None`` uses the full vocabulary. Clamped silently to the
-            available row count. No-op for ``rotate="raw"`` (which
-            doesn't touch the embedding matrix). Matches the 50k
-            convention shared with ``cluster_top_neighbors`` and
-            ``Embeddings.load(ram_efficient=True)``.
+        k : int
+            Number of dimensions, ``1 <= k <= min(q, n - 1, D)``. Required:
+            at ``k = q`` every component is kept and ``cov_explained`` is 1
+            by construction.
+        rotate : {None, "words", "outcomes"}, default None
+            One orthogonal ``R`` applied to both sides (``U_rot = U @ R``,
+            ``V_rot = V @ R``).
+
+            - ``None`` — SVD dimensions as they are.
+            - ``"words"`` — varimax against the projection of the leading
+              vocabulary rows onto ``U``.
+            - ``"outcomes"`` — varimax against the outcome loadings ``V``
+              (or the group rows from ``outcome_groups``). Needs ``k < q``.
+
+            Varimax modes reorder dimensions by squared cross-covariance.
+            Every mode flips signs so the largest-magnitude outcome loading
+            of each dimension is positive.
+        outcome_groups : dict of str to list of str, optional
+            Only with ``rotate="outcomes"``. Each group becomes one rotation
+            target row, the mean of its outcomes' loadings; outcomes in no
+            group keep their own row. Names refer to ``outcome_names``.
+            ``k`` must not exceed the number of target rows.
         n_splits : int, default 50
-            Random splits for the split_nb test.
-        random_state, verbose
-            Same as :meth:`fit_pls`.
+            Random splits for the split_exact test.
+        n_perm : int, default 1000
+            Permutations for the split_exact test.
+        random_state : int, default 2137
+            Random seed for the test.
+        verbose : bool
 
         Returns
         -------
         MultiPLSResult
+
+        Raises
+        ------
+        ValueError
+            On 1-D ``y``, fewer than two outcomes, a constant outcome, an
+            invalid ``rotate`` / ``outcome_groups`` / ``k``, or when plskit
+            keeps fewer than ``k`` components (``k_used < k``).
+        RuntimeError
+            If no embeddings are attached.
         """
         import plskit
 
-        from ssdiff.backends.pls import mpls_fit
+        from ssdiff.backends.pca_sweep import _RESTRICT_VOCAB
+        from ssdiff.backends.pls import pls3_rotate
         from ssdiff.results.multi_pls_result import MultiPLSResult
 
-        if not self.is_numeric:
+        if self.y.ndim != 2 or self.y.shape[1] < 2:
             raise ValueError(
-                "fit_multipls() requires numeric y. This SSD was constructed "
-                "with categorical labels — use fit_groups() instead."
+                "fit_multipls() needs several outcomes (2-D y with at least "
+                "two columns). For one outcome pass a 1-D y and use fit_pls()."
+            )
+        names = self.outcome_names
+        n_kept, D = self.x.shape
+        q = self.y.shape[1]
+
+        y_std = self.y.std(axis=0)
+        constant = [name for name, s in zip(names, y_std) if s <= 1e-12]
+        if constant:
+            raise ValueError(
+                f"fit_multipls() requires outcomes with nonzero variance; "
+                f"constant: {constant}."
             )
         if self.embeddings is None:
             raise RuntimeError(
-                "fit_multipls() rotates against the embedding vocabulary, "
-                "which requires Embeddings; none attached. Call result.attach("
-                "embeddings=...) or re-construct SSD with embeddings."
+                "fit_multipls() requires Embeddings (the per-dimension views "
+                "and rotate='words' use the vocabulary); none attached. "
+                "Re-construct SSD with embeddings."
             )
+        if rotate not in (None, "words", "outcomes"):
+            raise ValueError(
+                f"rotate must be None, 'words' or 'outcomes'; got {rotate!r}"
+            )
+
+        grouped: dict[str, str] = {}
+        if outcome_groups is not None:
+            if rotate != "outcomes":
+                raise ValueError(
+                    f"outcome_groups requires rotate='outcomes'; got rotate={rotate!r}"
+                )
+            for g, members in outcome_groups.items():
+                if len(members) == 0:
+                    raise ValueError(f"outcome_groups[{g!r}] is empty.")
+                for name in members:
+                    if name not in names:
+                        raise ValueError(
+                            f"outcome_groups[{g!r}]: unknown outcome {name!r}; "
+                            f"outcomes are {names}."
+                        )
+                    if name in grouped:
+                        raise ValueError(
+                            f"outcome {name!r} is in two groups: "
+                            f"{grouped[name]!r} and {g!r}."
+                        )
+                    grouped[name] = g
+
+        k_max = min(q, n_kept - 1, D)
+        if not isinstance(k, int) or not 1 <= k <= k_max:
+            raise ValueError(
+                f"k must be an int in [1, {k_max}] (min(q, n - 1, D) = "
+                f"min({q}, {n_kept - 1}, {D})); got {k!r}"
+            )
+        if rotate == "outcomes":
+            if k >= q:
+                raise ValueError(
+                    f"rotate='outcomes' needs k < q = {q}; got k={k}. At k = q "
+                    "varimax only permutes and flips the outcome axes."
+                )
+            n_rows = len(outcome_groups) + q - len(grouped) if outcome_groups else q
+            if k > n_rows:
+                raise ValueError(
+                    f"rotate='outcomes' needs k <= the number of rotation target "
+                    f"rows ({n_rows}: one per group plus one per ungrouped "
+                    f"outcome); got k={k}"
+                )
 
         Xs, X_mean, X_scale = standardize(self.x)
-        ys_2d, _, _ = standardize(self.y.reshape(-1, 1))
-        ys = ys_2d.ravel()
-        n_kept, D = Xs.shape
-
-        if k == "auto":
-            eff_k_max = max(min(int(k_max), n_kept - 1, D), 1)
-            if verbose:
-                print(
-                    f"[fit_multipls] auto-selecting k via find_k_optimal "
-                    f"(selector=r2_se, k_max={eff_k_max})"
-                )
-            find_k_raw = plskit.pls1_find_k_optimal(
-                Xs, ys, eff_k_max,
-                selector="r2_se",
-                diagnostic="split_nb",
-                args={"n_folds": 5, "n_splits": int(n_splits)},
-                pre_standardized=True,
-                seed=random_state,
-                verbose=verbose,
+        Ys, _, _ = standardize(self.y)
+        try:
+            m = plskit.pls3_fit(
+                Xs, Ys, k=k, pre_standardized_X=True, pre_standardized_Y=True,
             )
-            k_star = int(find_k_raw.k_star)
-            if verbose:
-                print(f"[fit_multipls] k_star = {k_star}")
-            if k_star == 1:
-                pvalue = float(find_k_raw.pvalues[0])
-                if verbose:
-                    print(
-                        f"[fit_multipls] k_star = 1 — reusing chain[0] as "
-                        f"the k=1 p (split_nb)"
-                    )
-                    print(f"[fit_multipls] p-value (k=1) = {pvalue:.6g}")
+        except plskit.PlsKitError as exc:
+            raise ValueError(f"plskit.pls3_fit rejected k={k}: {exc}") from exc
+        if m.k_used < k:
+            raise ValueError(
+                f"plskit.pls3_fit kept k_used={m.k_used} of k={k} components; "
+                f"the rest fall below its truncation floor (e.g. collinear "
+                f"outcomes). Refit with k <= {m.k_used}."
+            )
+        U, V, sigma = m.U, m.V, m.singular_values  # (D, k), (q, k), (k,)
+
+        L = None
+        if rotate == "words":
+            emb = self.embeddings.vectors
+            emb_dtype = emb.dtype
+            X_mean_v = X_mean.astype(emb_dtype, copy=False)
+            scale_v = X_scale.astype(emb_dtype, copy=False)
+            n_rot = min(_RESTRICT_VOCAB, int(emb.shape[0]))
+            # Fold standardisation into the matmul instead of materialising a
+            # standardised (n_rot, D) copy of the vocabulary.
+            M = (U / scale_v[:, None]).astype(emb_dtype, copy=False)
+            L = emb[:n_rot] @ M
+            L -= X_mean_v @ M
+            L = L.astype(np.float64, copy=False)
+        elif rotate == "outcomes":
+            if outcome_groups is None:
+                L = V
             else:
-                if verbose:
-                    chain = ", ".join(
-                        f"{p:.3g}" for p in find_k_raw.pvalues[:k_star]
-                    )
-                    print(
-                        f"[fit_multipls] diagnostic chain "
-                        f"(split_nb, k=1..{k_star}): {chain}"
-                    )
-                    print(
-                        f"[fit_multipls] running k=1 confirmatory test "
-                        f"(split_nb, n_splits={n_splits})"
-                    )
-                r = plskit.pls1_confirmatory_test(
-                    Xs, ys, 1,
-                    method="split_nb",
-                    args={"n_splits": int(n_splits)},
-                    pre_standardized=True,
-                    seed=random_state,
-                    verbose=verbose,
+                col = {name: j for j, name in enumerate(names)}
+                L = np.vstack(
+                    [V[[col[n] for n in members]].mean(axis=0)
+                     for members in outcome_groups.values()]
+                    + [V[j] for j, name in enumerate(names) if name not in grouped]
                 )
-                pvalue = float(r.pvalue)
-                if verbose:
-                    print(f"[fit_multipls] p-value (k=1) = {pvalue:.6g}")
-            n_comp = k_star
-            p_at_k = 1
-            chain_pvalues = np.asarray(
-                find_k_raw.pvalues[:n_comp], dtype=float,
+
+        rot = pls3_rotate(U, V, sigma, rotate=rotate, L=L)
+        U_rot, V_rot = rot["U_rot"], rot["V_rot"]
+
+        cov_explained = float(np.sum(sigma ** 2) / np.linalg.norm(Xs.T @ Ys) ** 2)
+
+        if verbose:
+            print(
+                f"[fit_multipls] running LV1 test "
+                f"(split_exact, n_splits={n_splits}, n_perm={n_perm})"
             )
-        elif isinstance(k, int):
-            if k < 1:
-                raise ValueError(f"k must be >= 1, got {k}")
-            n_comp = min(int(k), n_kept - 1, D)
-            if n_comp < 1:
-                raise ValueError(
-                    f"Cannot fit PLS: need at least 2 samples and 1 feature, "
-                    f"got n={n_kept}, features={D}, requested k={k}"
-                )
-            r = plskit.pls1_confirmatory_test(
-                Xs, ys, n_comp,
-                method="split_nb",
-                args={"n_splits": int(n_splits)},
-                pre_standardized=True,
-                seed=random_state,
-                verbose=verbose,
-            )
-            pvalue = float(r.pvalue)
-            p_at_k = n_comp
-            chain_pvalues = np.array([
-                float(plskit.pls1_confirmatory_test(
-                    Xs, ys, ki,
-                    method="split_nb",
-                    args={"n_splits": int(n_splits)},
-                    pre_standardized=True,
-                    seed=random_state,
-                    verbose=False,
-                ).pvalue)
-                for ki in range(1, n_comp + 1)
-            ], dtype=float)
-        else:
-            raise ValueError(f"k must be int or 'auto', got {k!r}")
-
-        emb = self.embeddings.vectors
-        emb_dtype = emb.dtype
-        X_mean_v = X_mean.astype(emb_dtype, copy=False)
-        scale_v = X_scale.astype(emb_dtype, copy=False)
-
-        if rotation_vocab is None:
-            n_rot = int(emb.shape[0])
-        else:
-            n_rot = min(int(rotation_vocab), int(emb.shape[0]))
-        emb_rot = emb if n_rot == emb.shape[0] else emb[:n_rot]
-
-        def project_target(W: np.ndarray) -> np.ndarray:
-            M = (W / scale_v[:, None]).astype(emb_dtype, copy=False)
-            offset = X_mean_v @ M
-            L = emb_rot @ M
-            L -= offset
-            return L
-
-        mp_out = mpls_fit(
-            Xs, ys,
-            n_components=n_comp, rotate=rotate,
-            E_target=project_target,
+        r = plskit.pls3_confirmatory_test(
+            Xs, Ys, 1,
+            method="split_exact",
+            args={"n_perm": int(n_perm), "n_splits": int(n_splits)},
+            seed=random_state,
+            verbose=verbose,
         )
-        mp_out["rotation_meta"]["rotation_vocab"] = (
-            None if rotation_vocab is None else n_rot
-        )
-
-        order = np.asarray(mp_out["order"], dtype=int)
-        per_dim_pvalues = chain_pvalues[order]
-
-        y_pred = Xs @ mp_out["beta_combined"]
-        stats = self._compute_fit_stats(ys, y_pred, n_comp)
-        r2 = stats["r2"]
-
         test_info = {
-            "pvalue": pvalue,
+            "pvalue": float(r.pvalue),
+            "statistic": float(r.statistic),
             "n_splits": int(n_splits),
+            "n_perm": int(n_perm),
             "random_state": random_state,
         }
 
         return MultiPLSResult(
             x=self.x, y=self.y,
-            W=mp_out["W"], P=mp_out["P"], Q=mp_out["Q"],
-            W_rot=mp_out["W_rot"], T_rot=mp_out["T_rot"],
-            beta_combined=mp_out["beta_combined"],
-            n_components=n_comp,
-            rotation_meta=mp_out["rotation_meta"],
-            r2=r2,
-            per_dim_pvalues=per_dim_pvalues,
-            p_at_k=p_at_k,
-            test_name="split_nb",
+            U=U, V=V, U_rot=U_rot, V_rot=V_rot,
+            singular_values=sigma,
+            x_scores=Xs @ U_rot, y_scores=Ys @ V_rot,
+            R=rot["R"], order=rot["order"], signs=rot["signs"],
+            rotation_meta=rot["rotation_meta"],
+            rotate=rotate,
+            cov_explained=cov_explained,
+            outcome_names=names,
+            outcome_groups=outcome_groups,
+            X_scale=X_scale,
+            test_name="split_exact",
             test_info=test_info,
             embeddings=self.embeddings,
             corpus=self.corpus,
@@ -679,6 +788,7 @@ class SSD:
         """
         from ssdiff.results.continuous_result import PCAOLSResult
 
+        self._require_1d_y("fit_ols")
         if not self.is_numeric:
             raise ValueError(
                 "fit_ols() requires numeric y. This SSD was constructed with "
@@ -820,6 +930,8 @@ class SSD:
         )
         from ssdiff.results.group_result import GroupResult
         from ssdiff.results.schema import Pair
+
+        self._require_1d_y("fit_groups")
 
         # Local copies — never mutate self.x or self.y
         x_local = self.x.copy()

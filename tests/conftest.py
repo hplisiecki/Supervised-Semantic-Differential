@@ -285,9 +285,17 @@ def fake_nlp():
 
 @pytest.fixture(scope="session")
 def ssd_instance(tiny_kv, sample_docs, sample_y, lexicon):
-    """SSD data container (no fit yet)."""
+    """SSD data container (no fit yet).
+
+    Built through ``FakeNlp`` rather than ``pretokenized=True`` so that
+    ``corpus.pre_docs`` is populated — snippet extraction reads the raw
+    sentence text, which the pretokenized path leaves as ``None``. The
+    lemmatized ``docs`` come out identical to the token lists, so PLS fits
+    are unchanged; the only difference is that ``.snippets`` is now non-empty.
+    """
     from ssdiff.ssd import SSD
-    corpus = Corpus(sample_docs, pretokenized=True, lang="pl")
+    texts = [" ".join(doc) for doc in sample_docs]
+    corpus = Corpus(texts, nlp=FakeNlp(), lang="pl", stopwords=[])
     return SSD(tiny_kv, corpus, sample_y, lexicon)
 
 

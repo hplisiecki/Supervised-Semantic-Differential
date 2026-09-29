@@ -54,7 +54,7 @@ class FitInfoView(ScalarView):
     _name = "fit_info"
     _columns = (
         "n_components", "pca_k", "p_at_k", "n_splits",
-        "split_mean_r", "random_state",
+        "split_mean_r", "random_state", "keep",
         "k_min", "k_max", "k_step", "best_k", "pca_k_source",
     )
 
@@ -1127,33 +1127,39 @@ class SweepView(View[SweepRow]):
 
 
 class PLSTestView(TestView):
-    """`.test` for PLSResult — split_nb confirmatory test at the fitted k."""
+    """`.test` for PLSResult — split_exact confirmatory test at the fitted k."""
 
     _columns = ("name", "pvalue", "split_r2", "n_splits", "random_state")
-    _default_name = "split_nb"
+    _default_name = "split_exact"
 
     _DEFAULTS = {
-        "split_nb": dict(n_splits=50, seed=None, verbose=False),
+        "split_exact": dict(n_splits=50, seed=None, verbose=False),
     }
 
     def _run(self, name, params):
-        """Dispatch to plskit and return ('split_nb', info_dict)."""
+        """Dispatch to plskit and return ('split_exact', info_dict)."""
         import plskit
 
-        if name is not None and name != "split_nb":
+        if self._parent.fit_info.keep is not None:
+            raise RuntimeError(
+                "sparse PLS p-values are computed by "
+                "spls1_find_k_sequence at fit time and cannot be rerun via "
+                ".test(); re-fit with a different n_splits/seed to change them."
+            )
+        if name is not None and name != "split_exact":
             raise TypeError(
-                f"PLSTestView only supports method='split_nb' "
+                f"PLSTestView only supports method='split_exact' "
                 f"(got {name!r}). Pass kwargs only: "
                 f".test(n_splits=..., seed=...)."
             )
-        merged = {**self._DEFAULTS["split_nb"], **params}
+        merged = {**self._DEFAULTS["split_exact"], **params}
         parent = self._parent
         n_comp = parent.fit_info.p_at_k or parent.fit_info.n_components or 1
         r = plskit.pls1_confirmatory_test(
             parent.x.astype(float, copy=False),
             parent.y.astype(float, copy=False),
             int(n_comp),
-            method="split_nb",
+            method="split_exact",
             args={"n_splits": int(merged["n_splits"])},
             pre_standardized=False,
             seed=merged["seed"],
@@ -1166,13 +1172,15 @@ class PLSTestView(TestView):
             "n_splits": r.n_splits,
             "random_state": r.seed,
         }
-        return "split_nb", info
+        return "split_exact", info
 
     def _on_rerun(self):
         """Propagate the updated p-value back to parent stats after a rerun."""
         self._parent._refresh_stats_pvalue(self.pvalue)
 
-    def _rerun_hint(self) -> str:
+    def _rerun_hint(self) -> str | None:
+        if self._parent.fit_info.keep is not None:
+            return None
         return "Rerun: .test(n_splits=..., seed=...)"
 
 

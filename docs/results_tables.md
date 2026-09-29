@@ -88,6 +88,7 @@ Cluster and snippet reruns with different parameters are cached separately — t
 | `n_components` | ✓ | defines the fit |
 | `pca_k` | ✓ | meaningful when PCA preprocess / PCA+OLS; `None` otherwise |
 | `p_method` | ✓ | which significance test was used |
+| `keep` |  | sparse keep-count from `fit_pls(keep=...)`; `None` for dense fits |
 | `n_perm` |  | test config — on `.test` |
 | `n_splits` |  | same |
 | `split_mean_r` |  | surfaced as `split_r2` on `.test` |
@@ -169,11 +170,10 @@ Default = full. Nothing to prune.
 
 | column | default | note |
 |---|:---:|---|
-| `name` | ✓ | `"raw_perm" \| "split_nb" \| "split_perm"` |
+| `name` | ✓ | `"split_exact"`, or `"split_nb_seq"` (sparse fits) |
 | `pvalue` | ✓ | |
-| `split_r2` | ✓ | only present after `"split_nb"` / `"split_perm"` |
+| `split_r2` | ✓ | held-out split statistic |
 | `n_splits` |  | config — reachable via `.params` |
-| `n_perm` |  | config |
 | `random_state` |  | config |
 
 ### `test` — `PCAOLSTestView` (ScalarView)
@@ -256,41 +256,63 @@ Same columns and defaults as the continuous `SnippetsView` / `SnippetsViewSided`
 
 ---
 
-## `MultiPLSResult` *(in development)*
+## `MultiPLSResult`
 
-Shared model-level views. Per-leaf views (`res['dim-1'].words` etc.) reuse the continuous `WordsView` / `SidedWordsView` classes and their defaults documented above.
+Every view below has no registered default subset, so the default is the full column list. Per-leaf `.words` / `.clusters` / `.snippets` (`res['dim-1'].words` etc.) reuse the continuous views and defaults documented above.
 
 ### `stats` — `MultiPLSStatsView` (ScalarView)
 
 | column | default | note |
 |---|:---:|---|
-| `r2` | ✓ | model-level R² from the unrotated combined β |
-| `pvalue` | ✓ | shared whole-model p (raw_perm / split_nb / split_perm) |
 | `n` | ✓ | documents in fit |
-| `n_components` | ✓ | number of rotated dims |
-| `rotate` | ✓ | `"varimax"` / `"raw"` |
+| `q` | ✓ | number of outcomes |
+| `k` | ✓ | number of dimensions |
+| `rotate` | ✓ | `None`, `"words"` or `"outcomes"` |
+| `cov_explained` | ✓ | share of squared cross-covariance captured by the `k` dimensions; the same for every `rotate` |
+| `pvalue` | ✓ | LV1 test p-value; `NaN` if no test info |
 
 ### `pls_info` — `PLSInfoView` (ScalarView)
 
 | column | default | note |
 |---|:---:|---|
-| `n_components` | ✓ | |
+| `k` | ✓ | |
 | `rotate` | ✓ | |
-| `order` |  | dim permutation applied post-rotation (identity once returned) |
-| `signs` |  | per-dim sign flips applied for `corr(t_i, y) > 0` |
-| `kaiser_normalized` |  | varimax Kaiser row-normalisation flag |
-| `sweeps` |  | varimax pairwise-sweep count |
-| `V_converged` |  | final varimax criterion value |
-| `pvalue_source` | ✓ | which test produced `stats.pvalue` |
-| `random_state` | ✓ | reproducibility anchor |
+| `order` | ✓ | dimension permutation from the varimax reordering (identity when `rotate=None`) |
+| `signs` | ✓ | per-dimension sign flip (largest outcome loading made positive) |
+| `kaiser_normalized` | ✓ | varimax Kaiser row-normalisation flag |
+| `sweeps` | ✓ | varimax pairwise-sweep count |
+| `V_converged` | ✓ | final varimax criterion value |
+| `random_state` | ✓ | seed for the LV1 test |
 
 ### `test` — `MultiPLSTestView` (ScalarView)
 
-Same columns and semantics as `PLSTestView` (see above) — both go through `backends.pls.run_signal_test`, which dispatches to `plskit.pls1_signal_test`.
+| column | default | note |
+|---|:---:|---|
+| `name` | ✓ | `"split_exact"` |
+| `pvalue` | ✓ | LV1 test; does not depend on `rotate` |
+| `statistic` | ✓ | held-out LV1 correlation |
+| `n_splits` | ✓ | |
+| `n_perm` | ✓ | |
+| `random_state` | ✓ | |
 
-### Per-leaf — `res['dim-i'].words`, `res['combined'].words`
+Rerun with `res.test(n_splits=..., n_perm=..., seed=...)`.
 
-Same columns and defaults as the continuous `WordsView` (see [Continuous results](#continuous-results--plsresult--pcaolsresult)). Per-leaf `.clusters` / `.snippets` / `.docs` are reserved for a later milestone.
+### `outcomes` — `res['dim-1'].outcomes` — `OutcomesView` (tabular)
+
+| column | default | note |
+|---|:---:|---|
+| `outcome` | ✓ | outcome name, or the group name on a group row |
+| `group` | ✓ | group the outcome belongs to; `None` without groups or for ungrouped outcomes |
+| `loading` | ✓ | outcome loading on this dimension; on a group row, the plain mean of the group's outcome loadings (outcomes scored in opposite directions cancel) |
+
+With `outcome_groups`, one extra row per group follows the per-outcome rows.
+
+### Per-leaf `stats` — `res['dim-1'].stats` — `PLSComponentStatsView` (ScalarView)
+
+| column | default | note |
+|---|:---:|---|
+| `cov_share` | ✓ | this dimension's share of the `k`-dimension cross-covariance; sums to 1 over the dimensions |
+| `score_corr` | ✓ | in-sample correlation of the word-side and outcome-side scores |
 
 ---
 

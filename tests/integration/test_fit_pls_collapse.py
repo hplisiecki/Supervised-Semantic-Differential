@@ -1,5 +1,5 @@
-"""When find_k picks k_star=1, fit_pls reuses chain[0] — no extra
-confirmatory call."""
+"""fit_pls(k='auto') always runs exactly one k=1 split_exact confirmatory
+call — the diagnostic chain is never reused as the reported p-value."""
 from __future__ import annotations
 
 from unittest.mock import patch
@@ -7,14 +7,14 @@ from unittest.mock import patch
 import plskit
 
 
-def test_fit_pls_auto_kstar1_reuses_chain_p(ssd_instance):
-    """If k_star == 1, the second pls1_confirmatory_test must NOT run."""
+def test_fit_pls_auto_kstar1_runs_one_confirmatory(ssd_instance):
+    """Even when k_star == 1, one split_exact confirmatory call runs."""
     real_ct = plskit.pls1_confirmatory_test
     real_fk = plskit.pls1_find_k_optimal
-    call_count = {"ct": 0}
+    calls = []
 
     def counting_ct(*a, **kw):
-        call_count["ct"] += 1
+        calls.append(kw.get("method"))
         return real_ct(*a, **kw)
 
     def force_kstar1(*a, **kw):
@@ -30,7 +30,6 @@ def test_fit_pls_auto_kstar1_reuses_chain_p(ssd_instance):
 
     assert res.fit_info.n_components == 1
     assert res.fit_info.p_at_k == 1
-    assert call_count["ct"] == 0, (
-        f"expected 0 confirmatory calls (chain[0] should be reused), "
-        f"got {call_count['ct']}"
+    assert calls == ["split_exact"], (
+        f"expected exactly one split_exact confirmatory call, got {calls}"
     )

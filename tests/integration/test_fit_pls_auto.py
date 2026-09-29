@@ -1,4 +1,4 @@
-"""fit_pls(k='auto') reports an honest k=1 confirmatory split_nb p-value."""
+"""fit_pls(k='auto') reports an honest k=1 confirmatory split_exact p-value."""
 from __future__ import annotations
 
 import numpy as np
@@ -16,7 +16,7 @@ def _fit_and_compare(ssd_instance, *, k_max=3, n_splits=20, seed=0):
     ys = ys.ravel()
     direct = plskit.pls1_confirmatory_test(
         Xs, ys, 1,
-        method="split_nb",
+        method="split_exact",
         args={"n_splits": n_splits},
         pre_standardized=True,
         seed=seed,
@@ -25,12 +25,11 @@ def _fit_and_compare(ssd_instance, *, k_max=3, n_splits=20, seed=0):
 
 
 def test_fit_pls_auto_reports_honest_k1_pvalue(ssd_instance):
-    """When k_star > 1, stats.pvalue equals a direct k=1 split_nb test."""
+    """stats.pvalue equals a direct k=1 split_exact test for any k_star."""
     res, direct_p = _fit_and_compare(ssd_instance, k_max=3, n_splits=20, seed=0)
-    if res.fit_info.n_components > 1:
-        assert abs(res.stats.pvalue - direct_p) < 1e-9, (
-            f"stats.pvalue={res.stats.pvalue} != direct k=1 p={direct_p}"
-        )
+    assert abs(res.stats.pvalue - direct_p) < 1e-9, (
+        f"stats.pvalue={res.stats.pvalue} != direct k=1 p={direct_p}"
+    )
 
 
 def test_fit_pls_auto_p_at_k_is_one(ssd_instance):

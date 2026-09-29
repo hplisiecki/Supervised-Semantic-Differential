@@ -13,7 +13,7 @@ def test_fit_pls_int_pvalue_matches_direct_confirmatory(ssd_instance):
     ys = ys.ravel()
     direct = plskit.pls1_confirmatory_test(
         Xs, ys, 2,
-        method="split_nb",
+        method="split_exact",
         args={"n_splits": 20},
         pre_standardized=True,
         seed=0,

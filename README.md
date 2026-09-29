@@ -34,7 +34,7 @@ https://doi.org/10.31234/osf.io/gvrsb_v3
 - [Fitting SSD](#fitting-ssd)
   - [PCA + OLS](#pca--ols)
   - [PLS](#pls)
-  - [Multi-component PLS (in development)](#multi-component-pls-in-development)
+  - [Several outcomes (PLS3)](#several-outcomes-pls3)
   - [Cross-Group Comparison](#cross-group-comparison)
   - [Inspecting results](#inspecting-results)
 - [Neighbors & Clustering](#neighbors--clustering)
@@ -239,7 +239,7 @@ lex.report().save("lexicon.md")         # narrative overview
 ## Fitting SSD
 
 Create an SSD instance with embeddings, corpus, outcome, and lexicon.
-The constructor builds document vectors but does **not** fit a model — call `fit_pls()`, `fit_multipls()`, `fit_ols()`, or `fit_groups()` explicitly.
+The constructor builds document vectors but does **not** fit a model — call `fit_pls()`, `fit_multipls()`, `fit_ols()`, or `fit_groups()` explicitly. Pass a 1-D `y` for `fit_pls`, `fit_ols` and `fit_groups`. Pass several numeric outcomes (a DataFrame or a 2-D array) for `fit_multipls`.
 
 ```python
 from ssdiff import Embeddings, Corpus, SSD
@@ -305,13 +305,14 @@ The **blue curve** shows **detrended interpretability** as a function of K. The 
 
 ### PLS
 
-PLS regression operates directly in the full embedding space, finding latent directions that maximize covariance between document vectors and the outcome without a separate dimensionality-reduction step. With a single component it recovers one semantic gradient in a single pass. With `k="auto"` (default) the number of components is selected via selector `r2_se`); the reported p-value is always the k=1 split-half statistic, independent of selection.
+PLS regression operates directly in the full embedding space, finding latent directions that maximize covariance between document vectors and the outcome without a separate dimensionality-reduction step. With a single component it recovers one semantic gradient in a single pass. With `k="auto"` (default) the number of components is selected via selector `r2_se`); the p-value comes from the `split_exact` split-half test, at the fitted `k` (for `k="auto"`, at k=1, independent of selection).
 
 ```python
 result = ssd.fit_pls(
     k="auto",             # int, or "auto" for find_k_optimal
     k_max=5,              # cap for "auto"
-    n_splits=50,          # split_nb iterations
+    keep=None,            # int | "auto" -> sparse PLS (needs an int k)
+    n_splits=50,          # split-half iterations
     random_state=2137,
     verbose=False,
 )
@@ -319,47 +320,72 @@ result = ssd.fit_pls(
 
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
-| `k` | `int \| "auto"` | `"auto"` | Number of PLS components. `int` fits at exactly that k. `"auto"` calls `plskit.pls1_find_k_optimal` (selector `r2_se`, diagnostic `split_nb`); p-value is the honest k=1 confirmatory `split_nb` statistic. |
+| `k` | `int \| "auto"` | `"auto"` | Number of PLS components. `int` fits at exactly that k. `"auto"` calls `plskit.pls1_find_k_optimal` (selector `r2_se`, diagnostic `split_nb`). The p-value is the `split_exact` test (permutation-calibrated split-half) at the fitted `k`; with `k="auto"` it is the k=1 `split_exact` test. |
 | `k_max` | `int` | `5` | Cap for `k="auto"`, clamped to `min(k_max, n-1, D)`. Ignored when `k` is an int. |
-| `n_splits` | `int` | `50` | Random splits for the `split_nb` test. |
+| `keep` | `int \| "auto" \| None` | `None` | Sparse-PLS knob. `None` is dense PLS. An `int` in `[1, n_features]` gives each component exactly that many non-zero weights. `"auto"` cross-validates the keep-count. Sparse mode needs an explicit integer `k`; `keep` with `k="auto"` raises. |
+| `n_splits` | `int` | `50` | Random splits for the split-half tests. |
 | `random_state` | `int` | `2137` | Random seed. |
 | `verbose` | `bool` | `False` | Print K-selection chain and confirmatory test progress. |
 
 To re-run the test with different settings, call `result.test(n_splits=200)` — it overwrites `result.stats.pvalue` and `result.test.pvalue` in place.
 
-### Multi-component PLS (in development)
+With `keep` set, the p-value is the largest p-value in the sequential chain of `k` tests (`result.test.name` is `"split_nb_seq"`). That is a different test from the dense p-value, so do not compare the two directly. The chain is computed at fit time, so `result.test()` raises `RuntimeError` on a sparse result. To change `n_splits` or the seed, refit. `result.fit_info.keep` holds the keep-count that was used (`None` for dense fits).
 
-When you expect more than one interpretable semantic axis related to the outcome, `fit_multipls()` fits `k` PLS components and rotates the W-subspace (`"varimax"` or `"raw"`). The returned `MultiPLSResult` is a container of per-dim leaves keyed by `"dim-1"`, `"dim-2"`, … (one per rotated axis).
+### Several outcomes (PLS3)
+
+When you have several numeric outcomes, `fit_multipls()` fits them together. Pass `y` as a DataFrame (column names become outcome names) or a 2-D array (names are `"y1"`, `"y2"`, …). Rows with a missing value in any outcome are dropped.
+
+PLS3 takes the SVD of the cross-covariance between document vectors and outcomes. Dimension `i` pairs one direction in word space with one vector of outcome loadings. The returned `MultiPLSResult` is a container of per-dimension leaves keyed by `"dim-1"`, `"dim-2"`, …
 
 ```python
 result = ssd.fit_multipls(
-    k="auto",             # or an int
-    k_max=5,
-    rotate="varimax",     # or "raw"
-    rotation_vocab=50_000,
+    k=2,                  # required, 1 <= k <= min(q, n-1, D)
+    rotate=None,          # None, "words" or "outcomes"
+    outcome_groups=None,  # dict of group name -> outcome names; needs rotate="outcomes"
     n_splits=50,
+    n_perm=1000,
     random_state=2137,
     verbose=False,
 )
 
-print(result.stats)             # container-level r², pvalue, n_components
-print(result.test)              # honest k=1 confirmatory split_nb
-result.words                    # pivoted top-words view across rotated dims
-result["dim-1"].words           # zoom into rotated axis 1
-result["dim-1"].clusters.pos    # cluster +β neighbours on that axis
+print(result.stats)             # n, q, k, rotate, cov_explained, pvalue
+print(result.test)              # LV1 test (split_exact)
+result["dim-1"].outcomes        # outcome loadings on dimension 1
+result["dim-1"].words           # words along dimension 1
+result["dim-1"].clusters.pos    # cluster +beta neighbours on that dimension
+result["dim-1"].stats           # cov_share, score_corr
 ```
 
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
-| `k` | `int \| "auto"` | `"auto"` | Number of PLS components. Same semantics as `fit_pls`. |
-| `k_max` | `int` | `5` | Cap for `k="auto"`, clamped to `min(k_max, n-1, D)`. |
-| `rotate` | `"raw" \| "varimax"` | `"varimax"` | Rotation applied to the W-subspace. |
-| `rotation_vocab` | `int \| None` | `50_000` | Leading vocabulary rows fed to varimax as the simple-structure target. Assumes frequency-ranked vocab. `None` uses the full matrix. No-op for `rotate="raw"`. |
-| `n_splits`, `random_state`, `verbose` | — | — | Same meaning and defaults as `fit_pls`. |
+| `k` | `int` | — | Number of dimensions. Required, `1 <= k <= min(q, n-1, D)`. At `k = q` every component is kept, so `cov_explained` is 1 by construction. |
+| `rotate` | `None \| "words" \| "outcomes"` | `None` | `None` keeps the SVD dimensions. `"words"` runs varimax against the projection of the leading vocabulary rows onto the word-space directions. `"outcomes"` runs varimax against the outcome loadings (or the group rows below); it needs `k < q`. |
+| `outcome_groups` | `dict[str, list[str]] \| None` | `None` | Only with `rotate="outcomes"`. Each group becomes one rotation target row. Outcomes in no group keep their own row. `k` cannot exceed the number of target rows. |
+| `n_splits`, `n_perm` | `int` | `50`, `1000` | Splits and permutations for the LV1 test. |
+| `random_state`, `verbose` | — | `2137`, `False` | Seed and progress output. |
 
-Container-level p-value follows `fit_pls` semantics (honest k=1 confirmatory). Each rotated leaf carries a diagnostic per-dim p-value remapped via the `mpls_fit` rotation `order`.
+A group's rotation target row and its `.outcomes` group loading are plain means of the group's outcome loadings. Outcomes scored in opposite directions cancel within a group.
 
-> **Status.** API is stable for research use; feature parity with `PLSResult` (per-leaf docs, snippets, misdiagnosed) is still being rolled out. See [`examples/demo_multipls.py`](examples/demo_multipls.py) and [`docs/api_reference.md`](docs/api_reference.md). RAM-efficient embeddings (`Embeddings.load(ram_efficient=True)`) are not supported by `fit_multipls` — it needs the full vocabulary as a rotation target.
+Varimax modes reorder the dimensions by their share of the cross-covariance. In every mode, the sign of each dimension is set so its largest outcome loading is positive.
+
+The container p-value comes from the split_exact PLS3 test at the first dimension (LV1) only. It does not depend on `rotate`. Leaves have no p-value and no `.test`. To rerun it with other settings, call `result.test(n_splits=100, n_perm=2000, seed=42)`.
+
+Container attributes and views:
+
+- `.stats` — `n`, `q`, `k`, `rotate`, `cov_explained` (share of squared cross-covariance captured by the `k` dimensions), `pvalue`
+- `.pls_info` — `k`, `rotate`, `order`, `signs`, `sweeps`, `V_converged`, `kaiser_normalized`, `random_state`
+- `.test` — LV1 test; call `.test(n_splits=..., n_perm=..., seed=...)` to rerun
+- `.outcome_names`, `.outcome_groups`
+- `.words`, `.clusters`, `.snippets` — fan out across dimensions
+- `.report()`, `.attach(...)`
+
+Leaf views (`result["dim-1"]`):
+
+- `.outcomes` — columns `outcome`, `group`, `loading`; with `outcome_groups`, one extra row per group
+- `.stats` — `cov_share` (share of the total cross-covariance of the `k` dimensions; sums to 1 over the dimensions), `score_corr` (in-sample correlation of the word-side and outcome-side scores)
+- `.words`, `.clusters`, `.snippets`
+
+`fit_multipls` needs `Embeddings` attached to the `SSD` (the per-dimension views and `rotate="words"` use the vocabulary). See [`examples/demo_multipls.py`](examples/demo_multipls.py) and [`docs/api_reference.md`](docs/api_reference.md).
 
 
 ### Cross-Group Comparison
@@ -457,7 +483,7 @@ result.report().save("report.md")    # also .html / .docx / .tex
 result.test(n_splits=200)            # PLSResult — overwrites stats.pvalue
 ```
 
-For `MultiPLSResult` and `GroupResult`, see the "Multi-component PLS" and "Cross-Group Comparison" sections above.
+For `MultiPLSResult` and `GroupResult`, see the "Several outcomes (PLS3)" and "Cross-Group Comparison" sections above.
 
 ---
 
@@ -563,7 +589,7 @@ from ssdiff import (
     WordsView, WordsViewSided, ClustersView, ClustersViewSided,
     ClusterWordsView, ClusterWordsViewSided, SnippetsView, SnippetsViewSided,
 )
-# In-development; not exported at top level:
+# Not exported at top level:
 from ssdiff.results.multi_pls_result import MultiPLSResult
 ```
 
@@ -590,8 +616,8 @@ from ssdiff.results.multi_pls_result import MultiPLSResult
 ### `SSD`
 
 - `SSD(embeddings, corpus, y, lexicon, *, window=3, sif_a=1e-3, use_full_doc=False)`
-- `.fit_pls(*, k="auto", k_max=5, n_splits=50, random_state=2137, verbose=False)` -> `PLSResult`
-- `.fit_multipls(*, k="auto", k_max=5, rotate="varimax", rotation_vocab=50_000, n_splits=50, ...)` -> `MultiPLSResult` *(in development)*
+- `.fit_pls(*, k="auto", k_max=5, keep=None, n_splits=50, random_state=2137, verbose=False)` -> `PLSResult`
+- `.fit_multipls(*, k, rotate=None, outcome_groups=None, n_splits=50, n_perm=1000, random_state=2137, verbose=False)` -> `MultiPLSResult`
 - `.fit_ols(*, fixed_k=None, k_min=2, k_max=120, k_step=2, verbose=False)` -> `PCAOLSResult`
 - `.fit_groups(*, median_split=False, n_perm=5000, correction="holm", random_state=2137, verbose=False)` -> `GroupResult`
 
@@ -601,7 +627,7 @@ from ssdiff.results.multi_pls_result import MultiPLSResult
 
 **Scalar views** (all expose `.r2`, `.pvalue`, … as attributes; print to read, export with `.to_df()` / `.save(...)`):
 - `.stats` — `backend`, `r2`, `r2_adj` (OLS only), `pvalue`, `n_raw`, `n_kept`, `n_dropped`, `y_mean`, `y_std`, `beta_norm`, `delta`, `iqr_effect`, `y_corr_pred`
-- `.fit_info` — `n_components`, `p_at_k`, `n_splits`, `random_state`, plus PCA-K sweep info for OLS
+- `.fit_info` — `n_components`, `p_at_k`, `n_splits`, `random_state`, `keep` (sparse PLS only), plus PCA-K sweep info for OLS
 
 **Tabular views**:
 - `.words` → `WordsView` (with `.pos` / `.neg` → `WordsViewSided`, callable `(n)` to resize)

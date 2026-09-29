@@ -14,7 +14,7 @@ For per-view column lists and how to change defaults, see [`results_tables.md`](
 - [`PLSResult`](#plsresult)
 - [`PCAOLSResult`](#pcaolsresult)
 - [`GroupResult`](#groupresult)
-- [`MultiPLSResult` *(in development)*](#multiplsresult-in-development)
+- [`MultiPLSResult`](#multiplsresult)
 - [`LexiconResult`](#lexiconresult)
 - [Picking columns — `cols=`](#picking-columns--cols)
 - [Resizing tables](#resizing-tables)
@@ -37,7 +37,7 @@ For per-view column lists and how to change defaults, see [`results_tables.md`](
 | `SSD.fit_pls()` | `PLSResult` |
 | `SSD.fit_ols()` | `PCAOLSResult` |
 | `SSD.fit_groups()` | `GroupResult` |
-| `SSD.fit_multipls()` *(in development)* | `MultiPLSResult` |
+| `SSD.fit_multipls()` | `MultiPLSResult` |
 | `Corpus.suggest_lexicon()` / `.evaluate_lexicon()` | `LexiconResult` |
 
 ```python
@@ -57,7 +57,7 @@ Every result exposes its data through **views** — small objects you can print,
 |---|---|---|
 | `View[T]` | Tabular. Iterates frozen dataclasses. | `result.words`, `result.docs` |
 | `ScalarView` | Single row. Field access via `.r2` or `["r2"]`. | `result.stats`, `result.fit_info` |
-| `TestView` | Callable ScalarView — calling it reruns the test. | `result.test("raw_perm", n_perm=5000)` |
+| `TestView` | Callable ScalarView — calling it reruns the test. | `result.test(n_splits=100)` |
 
 All views share the same output methods:
 
@@ -192,55 +192,57 @@ gr.cluster_snippets(
 
 ---
 
-## `MultiPLSResult` *(in development)*
+## `MultiPLSResult`
 
-Returned by `fit_multipls()`. A container of per-component leaves plus a `"combined"` leaf for the unrotated prediction direction. Mirrors the `GroupResult` / `PairResult` pattern.
+Returned by `fit_multipls()` (PLS3, several outcomes). A container of per-dimension leaves keyed `"dim-1"`, …, `"dim-k"`. Mirrors the `GroupResult` / `PairResult` pattern. Runnable example: [`../examples/demo_multipls.py`](../examples/demo_multipls.py).
 
-> **Status**: API is stable for research use. Per-leaf feature parity with `PLSResult` (clusters, snippets, misdiagnosed docs, per-dim diagnostics) is still being rolled out. Runnable example: [`../examples/demo_multipls.py`](../examples/demo_multipls.py).
+**Scalar views** (whole model):
 
-**Scalars:** `.n_components`, `.random_state`.
+- `.stats` — `n`, `q`, `k`, `rotate`, `cov_explained`, `pvalue`
+- `.pls_info` — `k`, `rotate`, `order`, `signs`, `sweeps`, `V_converged`, `kaiser_normalized`, `random_state`
+- `.test` — split_exact PLS3 test at LV1
 
-**Scalar views:** `.stats`, `.pls_info`, `.test` (shared, whole-model).
+**Other attributes:** `.outcome_names`, `.outcome_groups`.
 
-**Arrays:** `.W`, `.P`, `.Q` (unrotated PLS), `.W_rot`, `.T_rot` (rotated), `.beta_combined` (unrotated prediction β), `.x`, `.y`.
+**Arrays:** `.x`, `.y`, `.U`, `.V`, `.singular_values` (unrotated PLS3 fit); `.U_rot`, `.V_rot`, `.R` (after rotation); `.x_scores`, `.y_scores`.
 
 ### Leaves
 
 Each leaf is a `_PLSComponentResult` (a `_SingleResult`), so its interpretation views mirror `PLSResult`:
 
 ```python
-res = ssd.fit_multipls(k=2, rotate="varimax")
+res = ssd.fit_multipls(k=2, rotate="outcomes")
 
-res["dim-1"].words          # top neighbors along the first rotated axis
-res["dim-1"].beta           # W_rot[:, 0]  (the axis direction)
+res["dim-1"].outcomes       # outcome loadings on dimension 1
+res["dim-1"].stats          # cov_share, score_corr
+res["dim-1"].words          # top neighbors along dimension 1
+res["dim-1"].beta           # the dimension's direction in doc-vector space
 res["dim-2"].words.pos(20)
-res["combined"].words       # neighbors along the unrotated prediction β
-res["combined"].beta        # β = W(P'W)⁻¹Q  — rotation-invariant
 ```
 
-Leaf keys are `"dim-1"`, …, `"dim-k"`, `"combined"` (strings). `res.words` / `res.clusters` / `res.snippets` fan out across leaves via `_ShimView`, same as `GroupResult`.
+Per-leaf views:
 
-### Shared test
+- `.outcomes` — columns `outcome`, `group`, `loading`. With `outcome_groups`, one extra row per group holds the group's mean loading. Outcomes scored in opposite directions cancel in that mean.
+- `.stats` — `cov_share`, `score_corr`
+- `.words`, `.clusters`, `.snippets`
 
-`res.test(...)` runs one whole-model test — CV-R² is a model-level quantity, rotation is free for prediction. Same three backends as `PLSResult`:
+`res.words` / `res.clusters` / `res.snippets` fan out across leaves via `_ShimView`, same as `GroupResult`. Leaves have no p-value and no `.test`.
+
+### Test
+
+`res.test(...)` runs one whole-model test, split_exact PLS3 at LV1. The p-value does not depend on `rotate`.
 
 ```python
-res.test("split_nb",   n_splits=100)
-res.test("raw_perm",   n_perm=2000)
-res.test("split_perm", n_splits=50, n_perm=2000)
+res.test(n_splits=100, n_perm=2000, seed=42)
 ```
 
-### Rotation diagnostics
-
-`res.pls_info` exposes: `n_components`, `rotate`, `order`, `signs`, `kaiser_normalized`, `sweeps`, `V_converged`, `pvalue_source`, `random_state`.
-
-### Minimal report (v1)
+### Report
 
 ```python
 res.report(top_words={"n": 5}).save("multipls.md")
 ```
 
-Clusters / snippets / misdiagnosed sections are reserved for a later milestone — passing them here is a no-op.
+Clusters and snippets sections are not part of the report; they are not accepted and raise `TypeError`.
 
 ---
 
@@ -328,12 +330,17 @@ Unsupported extensions raise `ValueError` with the list of supported ones.
 
 **PLS:**
 ```python
-result.test("raw_perm",   n_perm=5000, seed=0)
-result.test("split_nb",   n_splits=100)
-result.test("split_perm", n_splits=50, n_perm=2000)
+result.test(n_splits=100, seed=0)   # split_exact at the fitted k
 
 result.test.pvalue         # current p-value
-result.test.name           # "raw_perm" | "split_nb" | "split_perm"
+result.test.name           # "split_exact"
+```
+
+A sparse fit (`fit_pls(k=..., keep=...)`) cannot be rerun: its p-value comes from a sequential chain computed at fit time, and `result.test(...)` raises `RuntimeError`. Refit to change `n_splits` or the seed.
+
+**Several outcomes:**
+```python
+res.test(n_splits=100, n_perm=2000, seed=42)   # LV1, split_exact
 ```
 
 **Groups:**
@@ -467,6 +474,7 @@ Doc          doc_id, y_true, y_hat, residual, alignment_score
 Pair         contrast, g1, g2, T, p_raw, p_corrected, cohens_d,
              n_g1, n_g2, contrast_norm
 Suggestion   token, freq, cov_all, cov_bal, corr, pvalue, direction, rank
+Outcome      outcome, group, loading
 ```
 
 - `side ∈ {"pos", "neg"}` — β-pole
@@ -506,14 +514,14 @@ Missing deps raise `ImportError` with an install hint.
 | Doc + raw text | `result.docs.id(42)` |
 | Recompute snippets | `result.snippets(top_per_side=200, min_cosine=0.4)` |
 | Snippets inside cluster 3 | `result.clusters.pos.snippets(cluster_id=3)` |
-| Rerun PLS test | `result.test("raw_perm", n_perm=5000)` |
+| Rerun PLS test | `result.test(n_splits=100)` |
 | Rerun group test | `gr.test(n_perm=10000, correction="fdr_bh")` |
 | Zoom to one pair | `gr[('g1','g2')]` |
 | Per-pair top words | `gr[('g1','g2')].words.pos(20)` |
 | Per-pair raw stats | `gr.pairs[('g1','g2')]` |
-| Zoom to one rotated dim | `res['dim-1']` |
+| Zoom to one dimension | `res['dim-1']` |
 | Per-dim top words | `res['dim-1'].words.pos(20)` |
-| Combined (unrotated) β words | `res['combined'].words` |
+| Per-dim outcome loadings | `res['dim-1'].outcomes` |
 | Drop cache | `result.clear_cache()` |
 | Re-wire after unpickle | `result.attach(corpus=c, embeddings=e)` |
 | Silence repr footers | `ssdiff.set_repr_hints(False)` |
@@ -526,4 +534,4 @@ Missing deps raise `ImportError` with an install hint.
 - [`results_tables.md`](results_tables.md) — every view's columns and defaults
 - [`architecture.md`](architecture.md) — backends, cache internals, how views compose
 - [`../examples/demo_api.py`](../examples/demo_api.py) — runnable end-to-end demo
-- [`../examples/demo_multipls.py`](../examples/demo_multipls.py) — rotated multi-component PLS (in development)
+- [`../examples/demo_multipls.py`](../examples/demo_multipls.py) — `fit_multipls` (several outcomes)

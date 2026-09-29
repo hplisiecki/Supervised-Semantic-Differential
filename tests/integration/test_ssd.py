@@ -110,43 +110,6 @@ def test_fit_ols_sweep(tiny_kv, large_docs, large_y, lexicon):
 
 
 # ---------------------------------------------------------------------------
-# 7. fit_multipls: beta_combined agrees with fit_pls beta up to sign/scale
-# ---------------------------------------------------------------------------
-
-def test_fit_multipls_beta_combined_agrees_with_fit_pls(ssd_instance):
-    """MultiPLSResult['combined'].beta aligns with fit_pls(k=2).beta.
-
-    Both derive from the same underlying pls1_fit coef vector, but live in
-    different spaces: fit_pls back-projects coef to embedding space (divides
-    by x_scale), while beta_combined is the raw standardized-space coef.
-    They are proportional iff x_scale is uniform. On tiny data (8 docs, 8 dims)
-    the scale vector is non-uniform, so we use abs(cos) > 0.95 rather than 0.99.
-
-    NOTE: the invariant in the spec says > 0.99 — this is attainable at larger
-    n. For the tiny fixture (8 x 8), 0.95 is the observed lower bound.
-    """
-    from ssdiff.results.multi_pls_result import MultiPLSResult
-
-    pls_result = ssd_instance.fit_pls(
-        k=2, n_splits=20, random_state=42
-    )
-    mpls_result = ssd_instance.fit_multipls(
-        k=2, n_splits=20, random_state=42
-    )
-
-    assert isinstance(mpls_result, MultiPLSResult)
-
-    # combined leaf's beta
-    combined_beta = mpls_result["combined"].beta
-    pls_beta = pls_result.beta  # beta is a direct ndarray attr on ContinuousResult
-
-    cos = _cos_sim(combined_beta, pls_beta)
-    assert abs(cos) > 0.95, (
-        f"beta_combined vs fit_pls beta: |cos|={abs(cos):.4f} < 0.95"
-    )
-
-
-# ---------------------------------------------------------------------------
 # 9. fit_pls on categorical y raises ValueError
 # ---------------------------------------------------------------------------
 
@@ -317,46 +280,6 @@ def test_progress_hook_nested_restores():
 
 
 # ---------------------------------------------------------------------------
-# 14. Sign-flip stability in multipls across random_states
-# ---------------------------------------------------------------------------
-
-def test_multipls_sign_flip_stability(ssd_instance):
-    """Re-fitting with different random_state gives same beta_combined up to sign.
-
-    abs(cos) > 0.99 (or nearly 1.0 since beta_combined comes from the
-    deterministic PLS path and is not affected by random seeds in mpls_fit).
-    """
-    res1 = ssd_instance.fit_multipls(
-        k=2, n_splits=20, random_state=1
-    )
-    res2 = ssd_instance.fit_multipls(
-        k=2, n_splits=20, random_state=9999
-    )
-
-    bc1 = res1["combined"].beta
-    bc2 = res2["combined"].beta
-    cos = _cos_sim(bc1, bc2)
-    assert abs(cos) > 0.99, (
-        f"beta_combined sign-flip stability: |cos|={abs(cos):.4f} < 0.99 "
-        f"across random_states"
-    )
-
-
-# ---------------------------------------------------------------------------
-# 15. fit_multipls result structure
-# ---------------------------------------------------------------------------
-
-def test_multipls_result_structure(ssd_instance):
-    """MultiPLSResult has the expected keys and valid r2."""
-    result = ssd_instance.fit_multipls(k=2, n_splits=20)
-    assert "dim-1" in result._leaves
-    assert "dim-2" in result._leaves
-    assert "combined" in result._leaves
-    assert 0.0 <= result.stats.r2 <= 1.0
-    assert result.n_components == 2
-
-
-# ---------------------------------------------------------------------------
 # 15b. k="auto" routes through plskit.pls1_find_k_optimal
 # ---------------------------------------------------------------------------
 
@@ -366,14 +289,6 @@ def test_fit_pls_k_auto(ssd_instance):
         k="auto", k_max=3, n_splits=5, random_state=0,
     )
     assert result.fit_info["n_components"] >= 1
-
-
-def test_fit_multipls_k_auto(ssd_instance):
-    """fit_multipls(k='auto') resolves to k>=1."""
-    result = ssd_instance.fit_multipls(
-        k="auto", k_max=3, n_splits=5, random_state=0,
-    )
-    assert result.n_components >= 1
 
 
 # ---------------------------------------------------------------------------
@@ -406,3 +321,59 @@ def test_construction_full_doc_no_lexicon_ok(tiny_kv, sample_docs, sample_y):
     assert ssd.n_kept >= 0
 
 
+
+
+# ---------------------------------------------------------------------------
+# 2-D y (several outcomes)
+# ---------------------------------------------------------------------------
+
+def _y2(n, q=3, seed=0):
+    return np.random.default_rng(seed).normal(size=(n, q))
+
+
+def test_y_2d_array_accepted(tiny_kv, sample_docs, lexicon):
+    y = _y2(len(sample_docs))
+    ssd = _make_ssd(tiny_kv, sample_docs, y, lexicon)
+    assert ssd.y.shape == (ssd.n_kept, 3)
+    assert ssd.outcome_names == ["y1", "y2", "y3"]
+
+
+def test_y_dataframe_names(tiny_kv, sample_docs, lexicon):
+    pd = pytest.importorskip("pandas")
+    df = pd.DataFrame(_y2(len(sample_docs)), columns=[10, "b", "c"])
+    ssd = _make_ssd(tiny_kv, sample_docs, df, lexicon)
+    assert ssd.outcome_names == ["10", "b", "c"]
+
+
+def test_y_1d_has_no_outcome_names(ssd_instance):
+    assert ssd_instance.outcome_names is None
+
+
+def test_y_2d_nan_row_and_empty_doc_stay_aligned(tiny_kv, sample_docs, lexicon):
+    docs = [list(d) for d in sample_docs] + [["zzz_not_in_vocab"]]
+    y = _y2(len(docs))
+    y[1, 2] = np.nan
+    ssd = _make_ssd(tiny_kv, docs, y, lexicon)
+    expected_rows = [i for i in range(len(docs)) if i != 1 and i != len(docs) - 1]
+    np.testing.assert_array_equal(ssd.y, y[expected_rows])
+    assert ssd.x.shape[0] == ssd.y.shape[0]
+
+
+def test_y_2d_non_numeric_raises(tiny_kv, sample_docs, lexicon):
+    y = np.array([["a", "b"]] * len(sample_docs), dtype=object)
+    with pytest.raises(ValueError, match="numeric"):
+        _make_ssd(tiny_kv, sample_docs, y, lexicon)
+
+
+@pytest.mark.parametrize("method", ["fit_pls", "fit_ols", "fit_groups"])
+def test_single_outcome_fits_reject_2d_y(tiny_kv, sample_docs, lexicon, method):
+    ssd = _make_ssd(tiny_kv, sample_docs, _y2(len(sample_docs)), lexicon)
+    with pytest.raises(ValueError, match="fit_multipls"):
+        getattr(ssd, method)()
+
+
+@pytest.mark.parametrize("method", ["fit_pls", "fit_ols", "fit_groups"])
+def test_single_column_2d_y_asks_for_1d(tiny_kv, sample_docs, lexicon, method):
+    ssd = _make_ssd(tiny_kv, sample_docs, _y2(len(sample_docs), q=1), lexicon)
+    with pytest.raises(ValueError, match="1-D y"):
+        getattr(ssd, method)()

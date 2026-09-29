@@ -58,3 +58,13 @@ for i in range(mp.n_components):
 print("\n══════ Markdown report ══════")
 print(mp.report(top_words={"n": 10}))
 # mp.report(top_words={"n": 10}).save("report_multipls.md")
+
+print("\n══════ Sparse MultiPLS (keep) ══════")
+# keep selects K via the sequential p-value chain at a fixed k; each component
+# keeps only `keep` non-zero weights. rotate="raw" keeps each axis exactly
+# sparse (varimax mixes them). keep="auto" cross-validates the keep-count.
+sp = ssd.fit_multipls(k=3, keep=30, rotate="raw", verbose=True)
+show("sp", sp)
+show("sp.pls_info", sp.pls_info)  # keep=30, pvalue_source="split_nb_seq"
+# sp.stats.pvalue is the path-max of the chain (FWER "all k real"), so the
+# chain is fixed at fit time and sp.test(...) raises — re-fit to change it.

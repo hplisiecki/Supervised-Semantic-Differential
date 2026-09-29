@@ -411,3 +411,43 @@ def test_lazy_normaliser_state_removed():
     assert not hasattr(Embeddings, "get_normed_vectors")
     fresh = Embeddings(["a"], np.ones((1, 2), dtype=np.float32))
     assert not hasattr(fresh, "_is_unit_normed")
+
+
+# ---------------------------------------------------------------------------
+# 12. Legacy numpy.core -> numpy._core remap (numpy 2.0 / frozen apps)
+# ---------------------------------------------------------------------------
+
+class TestLegacyNumpyCoreRemap:
+    """``.kv`` pickles written with numpy < 2.0 reference ``numpy.core.*``.
+
+    numpy 2.0 renamed that package to ``numpy._core`` and keeps a compat stub
+    only in source installs; PyInstaller/frozen builds omit it, so the
+    unpickler must redirect the legacy path to the real module itself.
+    """
+
+    def test_find_class_resolves_legacy_path_without_stub(self):
+        import io
+        import sys
+        import numpy._core.multiarray as real
+        from ssdiff.embeddings import _GensimUnpickler
+
+        u = _GensimUnpickler(io.BytesIO(b""))
+        sentinel = object()
+        saved = sys.modules.get("numpy.core.multiarray", sentinel)
+        sys.modules["numpy.core.multiarray"] = None  # simulate missing stub
+        try:
+            resolved = u.find_class("numpy.core.multiarray", "_reconstruct")
+        finally:
+            if saved is sentinel:
+                del sys.modules["numpy.core.multiarray"]
+            else:
+                sys.modules["numpy.core.multiarray"] = saved
+        assert resolved is real._reconstruct
+
+    def test_find_class_normal_numpy_global_unaffected(self):
+        import io
+        import numpy as np
+        from ssdiff.embeddings import _GensimUnpickler
+
+        u = _GensimUnpickler(io.BytesIO(b""))
+        assert u.find_class("numpy", "dtype") is np.dtype

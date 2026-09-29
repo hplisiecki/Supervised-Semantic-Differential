@@ -31,7 +31,7 @@ class Embeddings:
     :meth:`load` (uncompressed ``.ssdembed`` only). Constructing ``SSD``
     then loads the corpus words automatically, leaving ``emb`` reusable
     across corpora. RAM-mode embeddings are read-only — :meth:`normalize`,
-    :meth:`save`, and ``SSD.fit_multipls`` raise.
+    :meth:`save` raise.
 
     >>> emb = Embeddings.load("model.ssdembed", ram_efficient=True)
     >>> ssd = SSD(emb, corpus, y, lexicon).fit_pls()  # corpus words loaded automatically
@@ -909,7 +909,15 @@ class _GensimUnpickler(pickle.Unpickler):
                 return super().find_class(module, name)
             except (ModuleNotFoundError, ImportError):
                 return _GensimKVShim
-        return super().find_class(module, name)
+        try:
+            return super().find_class(module, name)
+        except (ModuleNotFoundError, ImportError):
+            # numpy 2.0 renamed ``numpy.core`` -> ``numpy._core``. Pickles
+            # written by numpy < 2.0 (and frozen/PyInstaller builds that omit
+            # the legacy compat stub) reference the old path; redirect it.
+            if module.startswith("numpy.core"):
+                return super().find_class("numpy._core" + module[len("numpy.core"):], name)
+            raise
 
 
 class _GensimKVShim:

@@ -24,7 +24,7 @@ ssd = SSD(emb, corpus, y=scores, lexicon=["happy", "sad", "joy", "anger"])
 result = ssd.fit_ols()         # PCA + OLS
 # result = ssd.fit_pls()       # PLS
 # result = ssd.fit_groups()    # categorical y
-# result = ssd.fit_multipls(k=2)  # rotated multi-component PLS (in development)
+# result = ssd.fit_multipls(k=2)  # several outcomes (y as a DataFrame), PLS3
 
 print(result.stats)
 print(result.words)
@@ -166,7 +166,7 @@ ssd = SSD(embeddings, corpus, y, lexicon, *,
 |---|---|---|---|
 | `embeddings` | `Embeddings` | — | Word-embedding model. |
 | `corpus` | `Corpus` | — | Tokenized corpus aligned with `y`. |
-| `y` | array-like | — | Outcome. Numeric for `fit_pls` / `fit_ols`; categorical labels accepted for `fit_groups`. NaN / invalid entries drop their documents silently. |
+| `y` | array-like | — | Outcome. 1-D numeric for `fit_pls` / `fit_ols`; 1-D categorical labels accepted for `fit_groups`. A DataFrame or 2-D array `(n, q)` of numeric outcomes is for `fit_multipls` only (`SSD.outcome_names` holds the column names). NaN / invalid entries drop their documents silently; with several outcomes a row is dropped if any outcome is missing. |
 | `lexicon` | `Sequence[str] \| set[str]` | — | Seed words for context-window extraction. |
 | `window` | `int` | `3` | Context window size (tokens) around each seed. |
 | `sif_a` | `float` | `1e-3` | SIF smoothing. Must be > 0. |
@@ -177,7 +177,8 @@ Attributes after construction:
 | Property | Type | Description |
 |---|---|---|
 | `ssd.x` | `ndarray (n_kept, D)` | Document vectors. |
-| `ssd.y` | `ndarray (n_kept,)` | Outcome aligned with retained documents. |
+| `ssd.y` | `ndarray (n_kept,)` or `(n_kept, q)` | Outcome aligned with retained documents; 2-D for several outcomes. |
+| `ssd.outcome_names` | `list[str] \| None` | Outcome column names for 2-D `y` (DataFrame columns, else `"y1"`, …); `None` for 1-D `y`. |
 | `ssd.n_raw`, `ssd.n_kept`, `ssd.n_dropped` | `int` | Document counts. |
 | `ssd.lexicon`, `ssd.window`, `ssd.sif_a`, `ssd.lang` | — | Echoes of constructor input. |
 
@@ -199,33 +200,30 @@ result = ssd.fit_ols(*,
 
 Returns a `PCAOLSResult`. Significance is reported as the OLS F-test. Sweep diagnostics and `result.plot_sweep(path=None, dpi=300)` are available when `fixed_k is None`.
 
-### `fit_pls()` — PLS1 NIPALS
+### `fit_pls()` — PLS1
 
 ```python
 result = ssd.fit_pls(*,
-    n_components=1,
-    cv_folds=10,
-    k_cap=5,
-    selection_kwargs=None,
-    p_method="auto",
-    n_perm=1000, n_splits=50,
+    k="auto",
+    k_max=5,
+    keep=None,
+    n_splits=50,
     random_state=2137, verbose=False,
 )
 ```
 
 | Argument | Type | Default | Description |
 |---|---|---|---|
-| `n_components` | `int \| "sequence" \| "postselection"` | `1` | Number of PLS components. Pass a string to delegate K-selection to `plskit.pls1_find_k`: `"sequence"` (sequential incremental tests) or `"postselection"` (split-based selection + calibrated certificate). |
-| `cv_folds` | `int` | `10` | CV folds for `selector="cv_q2"` under `n_components="postselection"`. Ignored otherwise. |
-| `k_cap` | `int` | `5` | Maximum K considered when `n_components` is a string (further capped at `n − 1` and `D`). |
-| `selection_kwargs` | `dict \| None` | `None` | Extra keyword arguments forwarded to `plskit.pls1_find_k` (e.g. `test_method`, `selector`, `alpha`). |
-| `p_method` | `str \| None` | `"auto"` | `"raw_perm"`, `"split_nb"`, `"split_perm"`, `"auto"` (= `"split_nb"` for 1 component, `"raw_perm"` otherwise), or `None` to skip. |
-| `n_perm` | `int` | `1000` | Permutations for `"raw_perm"` / `"split_perm"`. |
-| `n_splits` | `int` | `50` | Splits for `"split_nb"` / `"split_perm"`. |
+| `k` | `int \| "auto"` | `"auto"` | Number of PLS components. `int` fits at exactly that k. `"auto"` calls `plskit.pls1_find_k_optimal` (selector `r2_se`). The p-value is the `split_exact` test (permutation-calibrated split-half) at the fitted `k`; with `k="auto"` it is the k=1 `split_exact` test. `split_nb` is only the diagnostic chain used to pick `k`. |
+| `k_max` | `int` | `5` | Cap for `k="auto"`, clamped to `min(k_max, n-1, D)`. Ignored when `k` is an int. |
+| `keep` | `int \| "auto" \| None` | `None` | Sparse-PLS knob. `None` is dense PLS. An `int` in `[1, D]` gives each component exactly that many non-zero weights. `"auto"` cross-validates the keep-count at the fixed `k` (raises if none is found). Sparse mode needs an explicit integer `k`; `keep` with `k="auto"` raises `ValueError`. |
+| `n_splits` | `int` | `50` | Random splits for the split-half tests. |
 | `random_state` | `int` | `2137` | Seed. |
 | `verbose` | `bool` | `False` | Print progress. |
 
-Returns a `PLSResult`. Re-run the significance test on a result via `result.test(...)` — see [`results.md`](results.md).
+With `keep` set, the p-value is the largest p-value in the sequential chain of `k` tests (`result.test.name` is `"split_nb_seq"`). It is a different test from the dense p-value, so do not compare the two. The chain is computed at fit time, so `result.test()` raises `RuntimeError` on a sparse result. To change `n_splits` or the seed, refit. `result.fit_info.keep` holds the keep-count used (`None` for dense fits).
+
+Returns a `PLSResult`. Re-run the significance test on a dense result via `result.test(...)` — see [`results.md`](results.md).
 
 ### `fit_groups()` — categorical outcome
 
@@ -250,34 +248,47 @@ Groups with < 20 documents are dropped with a warning. Fewer than 2 surviving gr
 
 Returns a `GroupResult`.
 
-### `fit_multipls()` — rotated multi-component PLS *(in development)*
+### `fit_multipls()` — several outcomes (PLS3)
 
-> **Status**: API is stable for research use. Per-leaf feature parity with `PLSResult` (clusters, snippets, misdiagnosed docs, per-dim diagnostics) is still being rolled out. See [multi-PLS roadmap](../../docs/multiPLSRoadmap.md).
+Fits the document vectors against several numeric outcomes at once. `SSD` must be built with a DataFrame or 2-D array `y` with at least two columns; for one outcome use `fit_pls`. Needs attached `Embeddings`.
 
-Fits `n_components` PLS dimensions, rotates the W-subspace for interpretability, and returns a container of per-dim leaves plus a `"combined"` leaf for the (rotation-invariant) prediction direction. Numeric outcomes only; requires attached `Embeddings` (rotation is applied against the full vocabulary).
+PLS3 takes the SVD of the cross-covariance between document vectors and outcomes. Dimension `i` pairs one word-space direction with one vector of outcome loadings.
 
 ```python
 result = ssd.fit_multipls(*,
-    n_components,                    # required — no default
-    rotate="varimax",                # "varimax" | "raw"
-    p_method="auto",
-    n_perm=1000, n_splits=50,
+    k,
+    rotate=None,                     # None | "words" | "outcomes"
+    outcome_groups=None,             # {"group": ["outcome_a", "outcome_b"], ...}
+    n_splits=50, n_perm=1000,
     random_state=2137, verbose=False,
 )
 ```
 
 | Argument | Type | Default | Description |
 |---|---|---|---|
-| `n_components` | `int` | — | Number of PLS components to rotate. Required. Raises if NIPALS deflation produces fewer (no silent truncation). |
-| `rotate` | `str` | `"varimax"` | `"varimax"` (orthogonal) or `"raw"` (no rotation — still reorders dims by `|corr(t_i, y)|` and sign-flips). |
-| `p_method`, `n_perm`, `n_splits`, `random_state`, `verbose` | — | — | Same meaning and defaults as `fit_pls`. |
+| `k` | `int` | — | Number of dimensions. Required, `1 <= k <= min(q, n-1, D)`. At `k = q` every component is kept, so `cov_explained` is 1 by construction. Raises if plskit keeps fewer than `k` components. |
+| `rotate` | `None \| "words" \| "outcomes"` | `None` | `None` keeps the SVD dimensions. `"words"`: varimax against the projection of the leading vocabulary rows (up to 50,000) onto the word-space directions. `"outcomes"`: varimax against the outcome loadings, or the group rows when `outcome_groups` is set; needs `k < q`. |
+| `outcome_groups` | `dict[str, list[str]] \| None` | `None` | Only with `rotate="outcomes"`. Each group is one rotation target row, the mean of its outcomes' loadings. Outcomes in no group keep their own row. An unknown name, an outcome in two groups, or an empty group raises. `k` cannot exceed the number of target rows. |
+| `n_splits` | `int` | `50` | Random splits for the LV1 test. |
+| `n_perm` | `int` | `1000` | Permutations for the LV1 test. |
+| `random_state`, `verbose` | — | `2137`, `False` | Seed and progress output. |
 
-Returns a `MultiPLSResult` with:
+A group's rotation target row and its `.outcomes` group loading are plain means of the group's outcome loadings. Outcomes scored in opposite directions cancel within a group.
 
-- `result["dim-1"]`, `result["dim-2"]`, …, `result["dim-k"]` — per-rotated-axis leaves (each a `_PLSComponentResult` with its own `.words`)
-- `result["combined"]` — the unrotated PLS prediction direction β = W(P′W)⁻¹Q (rotation-invariant)
-- `result.stats`, `result.pls_info`, `result.test` — shared model-level views
-- `result.report(top_words=5)` — minimal v1 report (stats + rotation + per-leaf words tables)
+Varimax modes reorder the dimensions by their share of the cross-covariance. In every mode, each dimension's sign is set so its largest outcome loading is positive.
+
+Returns a `MultiPLSResult`:
+
+- `result["dim-1"]`, …, `result["dim-k"]` — one leaf per dimension
+- `result["dim-1"].outcomes` — outcome loadings (`outcome`, `group`, `loading`); with `outcome_groups`, one extra row per group
+- `result["dim-1"].words`, `.clusters`, `.snippets` — neighbours along the dimension
+- `result["dim-1"].stats` — `cov_share`, `score_corr`
+- `.stats` — `n`, `q`, `k`, `rotate`, `cov_explained`, `pvalue`
+- `.pls_info` — `k`, `rotate`, `order`, `signs`, `sweeps`, `V_converged`, `kaiser_normalized`, `random_state`
+- `.test` — split_exact PLS3 test at LV1, container level only; rerun with `.test(n_splits=..., n_perm=..., seed=...)`
+- `.report(top_words={"n": 5})` — stats, rotation, per-dimension outcome and words tables
+
+The p-value tests the first dimension (LV1) and does not depend on `rotate`. Leaves have no p-value.
 
 Runnable example: [`examples/demo_multipls.py`](../examples/demo_multipls.py).
 
