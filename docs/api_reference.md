@@ -2,10 +2,11 @@
 
 Public API of the `ssdiff` package: main classes, their methods, and arguments.
 
-**Install**: `pip install ssdiff` (core), `pip install ssdiff[results]` (pandas/Excel/docx/matplotlib export).
+**Install**: `pip install ssdiff` (core), `pip install ssdiff[spacy]` (spaCy tokenization with `Corpus(texts, lang=...)`), `pip install ssdiff[results]` (pandas/Excel/docx/matplotlib export).
 **Python**: 3.10 – 3.14.
 **Imports**: `from ssdiff import Embeddings, Corpus, SSD`.
 
+For choosing and loading embeddings see [`embeddings.md`](embeddings.md).
 For result objects (views, exports, reports) see [`results.md`](results.md).
 For per-view column listings and defaults see [`results_tables.md`](results_tables.md).
 For internals see [`architecture.md`](architecture.md).
@@ -17,8 +18,8 @@ For internals see [`architecture.md`](architecture.md).
 ```python
 from ssdiff import Embeddings, Corpus, SSD
 
-emb = Embeddings.load("glove_300d.ssdembed")
-corpus = Corpus(texts, lang="en")
+emb = Embeddings.load()                    # the default English wordpack, downloaded once
+corpus = Corpus(texts, embeddings=emb)     # the pack's tokenizer and stopwords; no spaCy
 ssd = SSD(emb, corpus, y=scores, lexicon=["happy", "sad", "joy", "anger"])
 
 result = ssd.fit_ols()         # PCA + OLS
@@ -35,48 +36,49 @@ result.report().save("report.md")
 
 ## `Embeddings`
 
-Stores word vectors, handles normalization, persists to disk.
+Stores word vectors, handles normalization, persists to disk. [`embeddings.md`](embeddings.md) is the guide to the available packs and to loading your own file.
 
 ### Load
 
 ```python
-emb = Embeddings.load(path, *, verbose=False, parallel=False)
+emb = Embeddings.load(path="en", *, verbose=False, parallel=False)
 ```
 
 | Argument | Type | Default | Description |
 |---|---|---|---|
-| `path` | `str` | — | Path to the embedding file. |
+| `path` | `str` | `"en"` | Path to the embedding file, or a wordpack's short tag (`"en"`) or full name (`"en-glove2024-dolma-1"`). A name is used when no file exists at that path; the pack is downloaded once into the cache directory (`WORDPACK_CACHE`, or the platform's cache directory under `wordpack`). |
 | `verbose` | `bool` | `False` | Show a tqdm progress bar when loading `.txt`/`.vec`/`.bin`. |
 | `parallel` | `bool` | `False` | Multiprocess loading for `.txt`/`.vec`. |
 
-Supported formats: `.ssdembed` (native pickle+npy, fastest), `.kv` (gensim pickle; no gensim required on load), `.bin` (fastText binary), `.txt`/`.vec` (text), all with optional `.gz` compression.
+Supported formats: `.wordpack` (tokenizer, stopwords and ABTT included; needs no spaCy), `.kv` (gensim pickle; no gensim required on load), `.bin` (fastText binary), `.txt`/`.vec` (text), all with optional `.gz` compression. The deprecated `.ssdembed` format no longer loads.
 
 ### Normalize
 
 ```python
-emb.normalize(*, l2=True, abtt=1, re_normalize=True)
+emb.normalize(*, l2=True, abtt=1)
 ```
 
 | Argument | Type | Default | Description |
 |---|---|---|---|
 | `l2` | `bool` | `True` | L2-normalize each row. Skipped if already applied. |
-| `abtt` | `int` | `1` | Absolute target number of top principal components to remove (ABTT). `0` skips. Requesting a smaller value than currently applied raises `ValueError` (ABTT is irreversible). |
-| `re_normalize` | `bool` | `True` | L2-normalize again after ABTT removal. |
+| `abtt` | `int` | `1` | Absolute target number of top principal components to remove (ABTT). `0` skips. Requesting a smaller value than currently applied raises `ValueError` (ABTT is irreversible). On a wordpack, any value 0 to 10, up or down; `l2=False` raises. |
 
-Mutates in place and returns `self` for chaining. State is tracked on the instance (`emb.l2_normalized`, `emb.abtt`) and persisted by the `.ssdembed` format.
+Rows are L2-normalized again after ABTT removal.
+
+Mutates in place (a wordpack gets a new `vectors` array) and returns `self` for chaining. State is tracked on the instance (`emb.l2_normalized`, `emb.abtt`).
 
 ### Save
 
 ```python
-emb.save(filename=None, fmt="ssdembed")
+emb.save(filename=None, fmt="bin")
 ```
 
 | Argument | Type | Default | Description |
 |---|---|---|---|
 | `filename` | `str \| None` | `None` | Output path **without** extension. Defaults to the stem of the source path. |
-| `fmt` | `str` | `"ssdembed"` | One of `"ssdembed"`, `"kv"`, `"bin"`, `"txt"`. |
+| `fmt` | `str` | `"bin"` | One of `"bin"`, `"kv"`, `"txt"`. |
 
-Non-`ssdembed` formats emit a warning — normalization and ABTT metadata are lost.
+Saving normalized embeddings emits a warning — normalization and ABTT metadata are lost.
 
 ### Lookup
 
@@ -96,13 +98,13 @@ emb.similar_by_vector(vec, topn=10, restrict_vocab=None)
 
 ## `Corpus`
 
-Tokenizes and lemmatizes text via spaCy; exposes lexicon helpers.
+Tokenizes text via spaCy (lemmas; `pip install ssdiff[spacy]`) or a wordpack's tokenizer (the pack's keys); exposes lexicon helpers.
 
 ### Constructor
 
 ```python
 corpus = Corpus(texts, *, lang=None, model=None, nlp=None,
-                stopwords=None, pretokenized=False)
+                stopwords=None, pretokenized=False, embeddings=None)
 ```
 
 | Argument | Type | Default | Description |
@@ -113,14 +115,16 @@ corpus = Corpus(texts, *, lang=None, model=None, nlp=None,
 | `nlp` | `spacy.Language \| None` | `None` | Pre-loaded spaCy pipeline. Overrides `lang` / `model`. |
 | `stopwords` | `Sequence[str] \| None` | `None` | Custom stopword list. Falls back to bundled defaults for the resolved language. |
 | `pretokenized` | `bool` | `False` | Skip spaCy — `texts` are already token lists. |
+| `embeddings` | `Embeddings \| None` | `None` | Embeddings loaded from a `.wordpack`: tokenize with the pack's tokenizer and stopwords; no spaCy. Cannot be combined with `lang`, `model`, `nlp` or `pretokenized`. |
 
 Attributes:
 
 | Property | Type | Description |
 |---|---|---|
-| `corpus.docs` | `list[list[str]]` | Lemmatized tokens per document (stopwords removed). |
+| `corpus.docs` | `list[list[str]]` | Tokens per document (stopwords removed): lemmas for spaCy, the pack's keys for a wordpack. |
 | `corpus.pre_docs` | `list[PreprocessedDoc] \| None` | Sentence-level structure for snippet extraction. |
 | `corpus.lang` | `str \| None` | Resolved language code. |
+| `corpus.tokenizer` | `str \| None` | `"spacy:<model>"`, `"wordpack:<name>-<version>"`, or `None` for `pretokenized=True`. |
 | `corpus.n_texts`, `len(corpus)` | `int` | Document count. |
 
 Supported languages out of the box: ca, da, de, el, en, es, fr, hr, it, lt, mk, nb, nl, pl, pt, ro, ru, sl, sv, uk.
@@ -169,7 +173,7 @@ ssd = SSD(embeddings, corpus, y, lexicon, *,
 | `y` | array-like | — | Outcome. 1-D numeric for `fit_pls` / `fit_ols`; 1-D categorical labels accepted for `fit_groups`. A DataFrame or 2-D array `(n, q)` of numeric outcomes is for `fit_multipls` only (`SSD.outcome_names` holds the column names). NaN / invalid entries drop their documents silently; with several outcomes a row is dropped if any outcome is missing. |
 | `lexicon` | `Sequence[str] \| set[str]` | — | Seed words for context-window extraction. |
 | `window` | `int` | `3` | Context window size (tokens) around each seed. |
-| `sif_a` | `float` | `1e-3` | SIF smoothing. Must be > 0. |
+| `sif_a` | `float` or `None` | `1e-3` | SIF smoothing. Must be > 0; `None` turns SIF off (plain mean of word vectors). |
 | `use_full_doc` | `bool` | `False` | Use full-document vectors instead of seed-windowed contexts. |
 
 Attributes after construction:
@@ -179,7 +183,7 @@ Attributes after construction:
 | `ssd.x` | `ndarray (n_kept, D)` | Document vectors. |
 | `ssd.y` | `ndarray (n_kept,)` or `(n_kept, q)` | Outcome aligned with retained documents; 2-D for several outcomes. |
 | `ssd.outcome_names` | `list[str] \| None` | Outcome column names for 2-D `y` (DataFrame columns, else `"y1"`, …); `None` for 1-D `y`. |
-| `ssd.n_raw`, `ssd.n_kept`, `ssd.n_dropped` | `int` | Document counts. |
+| `ssd.n_raw`, `ssd.n_kept`, `ssd.n_dropped` | `int` | Corpus documents, documents retained, and documents dropped (invalid outcome or no document vector). |
 | `ssd.lexicon`, `ssd.window`, `ssd.sif_a`, `ssd.lang` | — | Echoes of constructor input. |
 
 ### `fit_ols()` — PCA + OLS
@@ -365,7 +369,7 @@ texts  = [...]                     # list[str]
 scores = np.array([...])           # continuous outcome
 groups = [...]                     # categorical labels
 
-emb = Embeddings.load("glove_300d.ssdembed").normalize(l2=True, abtt=1)
+emb = Embeddings.load("glove_300d.bin").normalize(l2=True, abtt=1)
 corpus = Corpus(texts, lang="en")
 
 # Lexicon selection

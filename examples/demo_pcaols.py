@@ -31,7 +31,7 @@ def show(expr, value):
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-EMB = os.path.join(HERE, "data", "glove_300_en_top20k_ratings.ssdembed")
+EMB = os.path.join(HERE, "data", "glove_300_en_top20k_ratings.bin")
 RATINGS = os.path.join(HERE, "data", "Ratings_EN.csv")
 
 emb = Embeddings.load(EMB)

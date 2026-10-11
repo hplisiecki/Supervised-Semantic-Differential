@@ -3,7 +3,7 @@
 Covers:
   - compute_global_sif: SIF weight ordering, empty input
   - build_doc_vectors: seed mode, full mode, profile mode, keep_mask
-  - build_and_normalize_doc_vectors: unit norm, use_full_doc path
+  - build_and_normalize_doc_vectors: unit norm, use_full_doc path, sif_a=None
 """
 
 from __future__ import annotations
@@ -280,3 +280,23 @@ def test_build_and_normalize_l2_false_no_unit_norm(tiny_kv, lexicon, sample_docs
     assert not np.allclose(norms, np.ones(len(norms))), (
         "without l2_normalize, rows should not be unit-normed"
     )
+
+
+@pytest.mark.parametrize("use_full_doc, words", [
+    (True, ["kraj", "piekny", "dom", "dom", "silny"]),
+    (False, ["piekny", "dom"]),  # window=2 around 'kraj' at index 0
+], ids=["full", "seed"])
+def test_build_and_normalize_sif_none_is_plain_mean(tiny_kv, lexicon, use_full_doc, words):
+    """sif_a=None: every word weighs 1, so the vector is the plain mean of its words.
+
+    'dom' occurs twice, so SIF weights would differ between the words and
+    move the vector off the plain mean.
+    """
+    doc = ["kraj", "piekny", "dom", "dom", "silny"]
+    X, keep_mask = build_and_normalize_doc_vectors(
+        [doc], tiny_kv, lexicon, window=2, sif_a=None,
+        use_full_doc=use_full_doc, l2_normalize=False,
+    )
+    assert keep_mask.tolist() == [True]
+    expected = np.mean([tiny_kv[w] for w in words], axis=0, dtype=np.float64)
+    np.testing.assert_allclose(X[0], expected, atol=1e-12)

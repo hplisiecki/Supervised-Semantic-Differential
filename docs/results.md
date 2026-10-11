@@ -533,5 +533,5 @@ Missing deps raise `ImportError` with an install hint.
 - [`api_reference.md`](api_reference.md) — `Embeddings`, `Corpus`, `SSD`, fit methods
 - [`results_tables.md`](results_tables.md) — every view's columns and defaults
 - [`architecture.md`](architecture.md) — backends, cache internals, how views compose
-- [`../examples/demo_api.py`](../examples/demo_api.py) — runnable end-to-end demo
-- [`../examples/demo_multipls.py`](../examples/demo_multipls.py) — `fit_multipls` (several outcomes)
+- [`../examples/demo_pls.py`](../examples/demo_pls.py) — runnable end-to-end demo
+- [`../examples/demo_multipls.py`](../examples/demo_multipls.py) — `fit_multipls` (three dimensions of one outcome)

@@ -159,7 +159,7 @@ class TestNormalizeABTT:
 
 
 # ---------------------------------------------------------------------------
-# 5. Round-trips through .ssdembed, .bin, .txt, .vec
+# 5. Round-trips through .bin, .txt, .vec
 # ---------------------------------------------------------------------------
 
 class TestRoundTrips:
@@ -170,13 +170,6 @@ class TestRoundTrips:
         rng = np.random.default_rng(123)
         mat = rng.normal(size=(4, 5)).astype(np.float32) * 2.0  # non-unit
         return Embeddings(words, mat)
-
-    def test_round_trip_ssdembed(self, source_emb, tmp_path):
-        stem = str(tmp_path / "model")
-        source_emb.save(stem, fmt="ssdembed")
-        loaded = Embeddings.load(stem + ".ssdembed")
-        assert loaded.index_to_key == source_emb.index_to_key
-        np.testing.assert_allclose(loaded.vectors, source_emb.vectors, atol=1e-6)
 
     def test_round_trip_bin(self, source_emb, tmp_path):
         stem = str(tmp_path / "model")
@@ -307,13 +300,13 @@ class TestSaveNoSourcePath:
         emb = _make_emb(n=3, dim=3)
         assert emb._source_path is None
         with pytest.raises(ValueError, match="filename is required"):
-            emb.save(filename=None, fmt="ssdembed")
+            emb.save(filename=None, fmt="bin")
 
     def test_save_with_explicit_filename_works(self, tmp_path):
         emb = _make_emb(n=3, dim=3)
         stem = str(tmp_path / "explicit")
-        emb.save(filename=stem, fmt="ssdembed")  # should not raise
-        loaded = Embeddings.load(stem + ".ssdembed")
+        emb.save(filename=stem, fmt="bin")  # should not raise
+        loaded = Embeddings.load(stem + ".bin")
         assert len(loaded) == 3
 
 
@@ -322,9 +315,10 @@ class TestSaveNoSourcePath:
 # ---------------------------------------------------------------------------
 
 class TestLoadErrors:
-    def test_nonexistent_ssdembed_raises_file_not_found(self):
-        with pytest.raises(FileNotFoundError):
-            Embeddings.load("/tmp/nonexistent_ssdiff_test_xyz_12345.ssdembed")
+    @pytest.mark.parametrize("name", ["model.ssdembed", "model.ssdembed.gz"])
+    def test_ssdembed_raises_naming_the_format_deprecated(self, name):
+        with pytest.raises(ValueError, match=r"\.ssdembed format is deprecated"):
+            Embeddings.load(name)
 
     def test_nonexistent_txt_raises_file_not_found(self):
         with pytest.raises(FileNotFoundError):
@@ -451,3 +445,10 @@ class TestLegacyNumpyCoreRemap:
 
         u = _GensimUnpickler(io.BytesIO(b""))
         assert u.find_class("numpy", "dtype") is np.dtype
+
+
+def test_abtt_without_l2_still_gives_unit_rows_and_says_so():
+    emb = _make_emb(n=8, dim=4)
+    emb.normalize(l2=False, abtt=1)
+    np.testing.assert_allclose(np.linalg.norm(emb.vectors, axis=1), 1.0, atol=1e-5)
+    assert emb.l2_normalized is True

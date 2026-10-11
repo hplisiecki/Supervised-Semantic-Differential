@@ -42,8 +42,9 @@ from ssdiff.lang_config import get_config as _get_lang_config
 from ssdiff.utils import _diagnostic
 from ssdiff.utils.math import kmeans_auto_k, unit_vector
 
-# Restrict neighbor search to the top-N most-frequent vocab rows; matches the
-# cluster_top_neighbors default used on the public path.
+# Restrict neighbor search to the top-N most-frequent vocab rows. Equals
+# embeddings._RAM_TOP_N and the cluster_top_neighbors default; change the
+# three together (see embeddings._RAM_TOP_N).
 _RESTRICT_VOCAB = 50_000
 # Candidate pool size before regex filtering — must be >= cluster_topn.
 _NEIGHBOR_CAND = 2000
@@ -251,7 +252,7 @@ def pca_sweep(
     restrict = min(_RESTRICT_VOCAB, emb_n_full.shape[0])
     emb_n = emb_n_full[:restrict]
     keys = embeddings.index_to_key
-    bad_re = _get_lang_config(lang).bad_token_re
+    bad_re = embeddings.neighbor_filter or _get_lang_config(lang).bad_token_re
 
     valid_records = [r for r in records if r[0]]
     if valid_records:

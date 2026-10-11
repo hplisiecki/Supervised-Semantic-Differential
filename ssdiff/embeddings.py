@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import copy
 import gzip
 import os
 import pickle
+import re
 import warnings
 
 import numpy as np
 
 from ssdiff.utils.math import l2_normalize_rows_inplace
 
-# Hard cap on rows materialised in RAM mode; matches
-# pca_sweep._RESTRICT_VOCAB so all "top-vocab" knobs share one number.
+# Rows of a wordpack kept in RAM: the most frequent rows, and the only ones neighbour search sees. It equals
+# pca_sweep._RESTRICT_VOCAB and cluster_top_neighbors' restrict_vocab
+# default, so clusters and the sweep's choice of K match a full load; a
+# smaller prefix would change them. Change the three together.
 _RAM_TOP_N: int = 50_000
 
 
@@ -22,19 +26,9 @@ class Embeddings:
     L2-normalised rows are a precondition for ``SSD``; use
     ``.normalize(l2=True, abtt=N)`` after loading a raw embedding, or
     rely on ``Embeddings.load``'s autodetect when reloading an already-
-    normalised file.
+    normalised file. A ``.wordpack`` loads normalised.
 
-    >>> emb = Embeddings.load("model.ssdembed").normalize(l2=True, abtt=1)
-    >>> emb.save("model_norm")          # saves model_norm.ssdembed
-
-    For low-RAM environments, pass ``ram_efficient=True`` to
-    :meth:`load` (uncompressed ``.ssdembed`` only). Constructing ``SSD``
-    then loads the corpus words automatically, leaving ``emb`` reusable
-    across corpora. RAM-mode embeddings are read-only — :meth:`normalize`,
-    :meth:`save` raise.
-
-    >>> emb = Embeddings.load("model.ssdembed", ram_efficient=True)
-    >>> ssd = SSD(emb, corpus, y, lexicon).fit_pls()  # corpus words loaded automatically
+    >>> emb = Embeddings.load("model.txt").normalize(l2=True, abtt=1)
     """
 
     def __init__(self, keys: list[str] | tuple[str, ...], vectors: np.ndarray) -> None:
@@ -59,31 +53,47 @@ class Embeddings:
         self.l2_normalized: bool = False
         self.abtt: int = 0
         self._source_path: str | None = None
-        # Phase B placeholders (set by ram_efficient load path); always
-        # present so downstream code can read them unconditionally.
+        # Partial-load state, set by _load_wordpack for a pack over
+        # _RAM_TOP_N rows; always present so downstream code can read it
+        # unconditionally.
         self._partial: bool = False
-        self._corpus_attached: bool = False
         self._local_row: dict[int, int] | None = None
         self._extras: np.ndarray | None = None
-        self._mmap = None
-        self._full_vocab_size: int | None = None
         self._prefix_size: int | None = None
+        # Wordpack state, set by _load_wordpack; None for every other format.
+        self._pack = None
+        self.name: str | None = None
+        self.version: str | None = None
+        self.lang: str | None = None
+        self.stopwords: list[str] | None = None
+        self.neighbor_filter: re.Pattern | None = None
 
     def __getstate__(self) -> dict:
         """Return pickle state, omitting large recomputable attributes.
 
-        Drops ``key_to_index`` (rebuilt from ``index_to_key`` on load),
-        ``_norms``, and any RAM-mode handles to keep the pickle small
-        and allow memory-mapped loading of the vector matrix from a
-        sidecar ``.vectors.npy`` file.
+        Drops ``key_to_index`` (rebuilt from ``index_to_key`` on load)
+        and ``_norms`` to keep the pickle small.
         """
+        if self._pack is not None:
+            raise RuntimeError(
+                "A wordpack embedding cannot be pickled; load the .wordpack file again instead. "
+                "A result fit on it is pickled without it; use result.attach(embeddings=path) after loading."
+            )
         state = self.__dict__.copy()
         state.pop("key_to_index", None)
         state.pop("_norms", None)
-        # RAM-mode handles are transient; partial embeddings are not
-        # picklable (see save() guard from Task B5).
-        state.pop("_mmap", None)
         return state
+
+    def __deepcopy__(self, memo: dict) -> Embeddings:
+        new = object.__new__(type(self))
+        memo[id(self)] = new
+        if self._pack is not None:
+            # Shares rows and the open pack: rows are never written in place
+            # (normalize() swaps in a new array), so the copy stays independent.
+            new.__dict__.update(self.__dict__)
+        else:
+            new.__setstate__(copy.deepcopy(self.__getstate__(), memo))
+        return new
 
     def __setstate__(self, state: dict) -> None:
         """Restore from pickle state, migrating legacy attribute names.
@@ -109,12 +119,15 @@ class Embeddings:
             self._norms = None
         for attr, default in (
             ("_partial", False),
-            ("_corpus_attached", False),
             ("_local_row", None),
             ("_extras", None),
-            ("_mmap", None),
-            ("_full_vocab_size", None),
             ("_prefix_size", None),
+            ("_pack", None),
+            ("name", None),
+            ("version", None),
+            ("lang", None),
+            ("stopwords", None),
+            ("neighbor_filter", None),
         ):
             if not hasattr(self, attr):
                 setattr(self, attr, default)
@@ -124,38 +137,69 @@ class Embeddings:
     @classmethod
     def load(
         cls,
-        path: str,
+        path: str | os.PathLike = "en",
         *,
         verbose: bool = False,
         parallel: bool = False,
-        ram_efficient: bool = False,
     ) -> Embeddings:
-        """Load embeddings from file. Auto-detects format by extension.
+        """Load embeddings from a file, or a wordpack by short tag or full name.
 
-        Supports: .ssdembed, .kv, .bin, .txt, .vec (and .gz variants).
+        Supports: .wordpack, .kv, .bin, .txt, .vec (and .gz variants of the
+        last four). The deprecated .ssdembed format no longer loads.
 
-        After loading, rows are checked once: if every row has
-        L2 norm ≈ 1 (tolerance 1e-5), ``l2_normalized`` is set to True.
+        When no file exists at ``path`` and it is made of lowercase letters,
+        digits and hyphens, it names a wordpack: a short tag (``"en"``) or a
+        full name (``"en-glove2024-dolma-1"``). The pack is downloaded once
+        into a cache directory (``WORDPACK_CACHE``, or the platform's cache
+        directory under ``wordpack``) and loaded from there. A full name
+        always means the same file and loads offline once it is cached. A
+        short tag is looked up on every load and follows the published
+        default. With no argument, the short tag ``"en"`` is loaded.
+
+        A ``.wordpack`` passes its self-test, loads at ABTT
+        ``m = 1`` with L2-normalised rows, keeps its 50,000 most frequent
+        rows in RAM and reads any other row from the file when needed, so
+        the file must stay in place while the embedding is in use.
+
+        After loading another format, rows are checked once: if every row
+        has L2 norm ≈ 1 (tolerance 1e-5), ``l2_normalized`` is set to True.
 
         Parameters
         ----------
-        path : str
+        path : str or os.PathLike, default "en"
+            A file path, or a wordpack's short tag or full name.
         verbose : bool, default False
         parallel : bool, default False
-        ram_efficient : bool, default False
-            Low-RAM fallback. Requires uncompressed ``.ssdembed``.
-            Materialises only the first ``_RAM_TOP_N`` rows (rank-aligned
-            prefix) at load time; constructing ``SSD`` then loads the
-            corpus words automatically. RAM-mode embeddings are read-only.
 
         Returns
         -------
         Embeddings
         """
-        if ram_efficient:
-            return cls._load_ram_efficient(path)
+        path = os.fspath(path)
+        if not os.path.isfile(path):
+            from ssdiff import _wordpack_fetch
+
+            if _wordpack_fetch.is_pack_request(path):
+                return cls._load_wordpack(_wordpack_fetch.resolve(path))
+        low = path.lower()
+        if low.endswith(".wordpack"):
+            return cls._load_wordpack(path)
+        if low.removesuffix(".gz").endswith(".ssdembed"):
+            raise ValueError(
+                f"'{path}': the .ssdembed format is deprecated and no longer loads. "
+                "Use a .wordpack, or a raw embedding (.kv, .bin, .txt, .vec)."
+            )
 
         emb = _load_embeddings(path, verbose=verbose, parallel=parallel)
+        fmt = os.path.splitext(low.removesuffix(".gz"))[1] or "non-wordpack"
+        warnings.warn(
+            f"Loading a {fmt} embedding: build the Corpus with spaCy "
+            "(`Corpus(texts, lang=...)`, needs `pip install ssdiff[spacy]`) or from "
+            "pretokenized texts (`Corpus(tokens, pretokenized=True)`). "
+            "A .wordpack embedding tokenizes texts itself, without spaCy.",
+            UserWarning,
+            stacklevel=2,
+        )
         emb._source_path = path
         if not emb.l2_normalized and emb.vectors.shape[0] > 0:
             norms = np.sqrt(np.einsum("ij,ij->i", emb.vectors, emb.vectors))
@@ -164,81 +208,47 @@ class Embeddings:
         return emb
 
     @classmethod
-    def _load_ram_efficient(cls, path: str) -> Embeddings:
-        """RAM-efficient .ssdembed loader. See ``load(ram_efficient=True)``."""
-        low = path.lower()
-        if not low.endswith(".ssdembed") or low.endswith(".ssdembed.gz"):
-            raise ValueError(
-                "RAM-efficient mode requires uncompressed .ssdembed. "
-                "Convert once with `Embeddings.load(path).save('out')`."
-            )
+    def _load_wordpack(cls, path: str) -> Embeddings:
+        """Open a .wordpack. See ``load``."""
+        from ssdiff._wordpack_reader import WordPack
 
-        npy_path = path + ".vectors.npy"
-        if not os.path.exists(npy_path):
-            raise FileNotFoundError(
-                f"Missing sidecar '{npy_path}'. RAM-efficient mode requires "
-                "the .vectors.npy sidecar produced by Embeddings.save(fmt='ssdembed')."
-            )
-
-        # Load the small pickle (no vector data — sidecar holds the matrix).
-        with open(path, "rb") as f:
-            shim = _GensimUnpickler(f).load()
-
-        if isinstance(shim, _GensimKVShim):
-            shim = shim.to_embeddings()
-        if not isinstance(shim, Embeddings):
-            if hasattr(shim, "index_to_key"):
-                shim = cls(list(shim.index_to_key), np.empty((0, 0), dtype=np.float32))
-            else:
-                raise ValueError(f"Cannot load pickle embeddings: unexpected type {type(shim)}")
-
-        mmap = np.load(npy_path, mmap_mode="r")
-        v_full, dim = mmap.shape
-
-        # Small-vocab no-op: fall through to a regular full load.
-        if v_full <= _RAM_TOP_N:
-            shim.vectors = np.array(mmap)
-            shim.vector_size = dim
-            shim._norms = None
-            shim._source_path = path
-            if not shim.l2_normalized:
-                norms = np.sqrt(np.einsum("ij,ij->i", shim.vectors, shim.vectors))
-                if np.all(np.abs(norms - 1.0) < 1e-5):
-                    shim.l2_normalized = True
-            return shim
-
-        # Phase 1: copy the first _RAM_TOP_N rows into RAM; keep mmap open
-        # so the corpus tail can be loaded later.
+        pack = WordPack(path)
         try:
-            slice_rows = np.array(mmap[:_RAM_TOP_N])
-            norms = np.sqrt(np.einsum("ij,ij->i", slice_rows, slice_rows))
-            if not np.all(np.abs(norms - 1.0) < 1e-5):
-                raise RuntimeError(
-                    "RAM-efficient mode requires pre-normalised embeddings. "
-                    "Run Embeddings.load(path).normalize(l2=True, abtt=N).save(path) "
-                    "once, then reload with ram_efficient=True."
-                )
-        except Exception:
-            del mmap
+            pack.selftest()
+            prefix = min(pack.n, _RAM_TOP_N)
+            vectors = pack.read_rows(np.arange(prefix), abtt=1)
+        except BaseException:
+            pack.close()
             raise
 
-        shim.vectors = slice_rows
-        shim.vector_size = dim
-        shim._norms = None
-        shim._source_path = path
-        shim._partial = True
-        shim._corpus_attached = False
-        shim._local_row = {i: i for i in range(_RAM_TOP_N)}
-        shim._mmap = mmap
-        shim._full_vocab_size = v_full
-        shim._prefix_size = _RAM_TOP_N
-        shim.l2_normalized = True
-        return shim
+        emb = cls([], np.empty((0, pack.dims), dtype=np.float32))
+        # The pack's sorted key table answers lookups; a dict over 1.2M keys
+        # would cost about 159 MB.
+        emb.index_to_key = pack.keys
+        emb.key_to_index = None
+        emb.vectors = vectors
+        emb.vector_size = pack.dims
+        emb.l2_normalized = True
+        emb.abtt = 1
+        emb._source_path = path
+        emb._pack = pack
+        emb._prefix_size = prefix
+        if pack.n > prefix:
+            emb._partial = True
+            emb._local_row = {i: i for i in range(prefix)}
+        meta = pack.meta
+        emb.name = meta.get("name")
+        emb.version = meta.get("version")
+        emb.lang = meta.get("language")
+        emb.stopwords = pack.stopwords
+        nf = meta.get("neighbor_filter")
+        emb.neighbor_filter = re.compile(nf) if nf else None
+        return emb
 
     # ---- normalization ----
 
-    def normalize(self, *, l2: bool = True, abtt: int = 1, re_normalize: bool = True) -> Embeddings:
-        """Normalize embeddings in-place. Returns self for chaining.
+    def normalize(self, *, l2: bool = True, abtt: int = 1) -> Embeddings:
+        """Normalize embeddings (in place; a wordpack gets a new array). Returns self for chaining.
 
         Parameters
         ----------
@@ -248,13 +258,29 @@ class Embeddings:
             the remaining components are removed.  Equal value is a no-op.
             Smaller value than already applied raises ValueError (ABTT is
             irreversible).
-        re_normalize : L2-normalize again after ABTT.
+            On a wordpack, any value from 0 to 10, up or down: the pack
+            stores its rows before ABTT with the mean and top 10 components,
+            so the rows are rebuilt for the new value.
+
+        Rows are always L2-normalized again after ABTT, and l2_normalized
+        is then true.
         """
-        if self._partial:
-            raise RuntimeError(
-                "RAM-efficient embeddings are read-only. Pre-normalise on "
-                "the full embeddings, save as .ssdembed, then reload."
-            )
+        if self._pack is not None:
+            if not l2:
+                raise ValueError(
+                    "A wordpack stores unit-length rows and SSD needs them; "
+                    "l2=False is not available."
+                )
+            if abtt != self.abtt:
+                # A new array, never a write into the old one: views made by
+                # with_corpus share the old array and keep the old ABTT.
+                self.vectors = self._pack.read_rows(np.arange(self._prefix_size), abtt=abtt)
+                self.abtt = abtt
+                self._norms = None
+                self._extras = None
+                if self._partial:
+                    self._local_row = {i: i for i in range(self._prefix_size)}
+            return self
         V = self.vectors
         if not V.flags.writeable:
             V = np.array(V)
@@ -299,8 +325,9 @@ class Embeddings:
                 did_abtt = True
 
         # --- Re-normalize after ABTT ---
-        if re_normalize and did_abtt:
+        if did_abtt:
             l2_normalize_rows_inplace(V)
+            self.l2_normalized = True
 
         # --- Update state ---
         if did_l2 or did_abtt:
@@ -313,94 +340,75 @@ class Embeddings:
         """Find corpus tokens above the rank-aligned prefix and read their rows.
 
         Returns ``(extra_indices, rows)`` where ``rows[k]`` is the vector for
-        original vocab index ``extra_indices[k]`` (read from the open mmap).
-        Returns ``([], None)`` when the corpus needs nothing beyond what is
-        already materialised. Raises ``RuntimeError`` if new rows are needed
-        but the mmap has already been closed.
+        original vocab index ``extra_indices[k]``, read from the row source
+        (see :meth:`_read_rows`). Returns ``([], None)`` when the corpus needs
+        nothing beyond what is already materialised.
         """
         from ssdiff.utils.lexicon import _texts_to_token_lists
 
         flat_docs = _texts_to_token_lists(corpus.docs)
         cap = self.vectors.shape[0]  # rows already in the base matrix
         extras: list[int] = []
-        seen: set[int] = set()
-        for doc in flat_docs:
-            for token in doc:
-                oi = self.key_to_index.get(token)
-                if oi is None or oi < cap or oi in self._local_row or oi in seen:
-                    continue
-                seen.add(oi)
-                extras.append(oi)
+        for token in dict.fromkeys(t for doc in flat_docs for t in doc):
+            oi = self._row(token)
+            if oi < 0 or oi < cap or oi in self._local_row:
+                continue
+            extras.append(oi)
         if not extras:
             return [], None
-        if self._mmap is None:
-            raise RuntimeError(
-                "Cannot materialise new corpus tokens: the memory-map is "
-                "already closed. Reload with Embeddings.load(ram_efficient=True) "
-                "for this corpus."
-            )
-        rows = np.asarray(self._mmap[extras])
-        return extras, rows
+        return extras, self._read_rows(extras)
+
+    def _read_rows(self, idx) -> np.ndarray:
+        """Rows *idx* (full-vocabulary indices) from the wordpack, at this embedding's ABTT.
+
+        The wordpack reader serialises reads under its own lock, because all
+        threads share one file position. ``os.pread`` would avoid the lock but
+        does not exist on Windows.
+        """
+        return self._pack.read_rows(idx, abtt=self.abtt)
 
     def _local_vector(self, local: int) -> np.ndarray:
         """Resolve a local row index across the base matrix and the side buffer.
 
         Rows ``< self.vectors.shape[0]`` live in the (possibly shared) base
         matrix; rows above it live in ``self._extras`` (filled by
-        :meth:`with_corpus`). In-place :meth:`attach_corpus` keeps every row in
-        ``self.vectors``, so ``_extras`` is simply never consulted there.
+        :meth:`with_corpus`).
         """
         base_n = self.vectors.shape[0]
         if local < base_n:
             return self.vectors[local]
         return self._extras[local - base_n]
 
-    def _attach_corpus(self, corpus) -> Embeddings:
-        """Materialise corpus-token rows **in place** (mutates ``self``).
-
-        No-op when ``_partial`` is False. Appends the corpus tail to
-        ``self.vectors`` and closes the mmap. For a non-mutating alternative
-        that leaves ``self`` reusable, see :meth:`with_corpus`.
-        """
-        if not self._partial:
-            return self
-        extras, rows = self._read_extras(corpus)
-        if extras:
-            cap = self.vectors.shape[0]
-            self.vectors = np.vstack([self.vectors, rows])
-            for k, oi in enumerate(extras):
-                self._local_row[oi] = cap + k
-        self._mmap = None
-        self._corpus_attached = True
-        return self
-
     def with_corpus(self, corpus) -> Embeddings:
         """Return a corpus-extended *view* without mutating ``self``.
 
-        Full-mode embeddings return ``self`` unchanged. In RAM-efficient mode,
-        the returned view shares the base prefix matrix and vocabulary *by
-        reference* (no copy) and carries its own materialised corpus rows in a
-        private ``_extras`` buffer. ``self`` keeps its mmap open, so it can
-        produce further views for other corpora.
+        Embeddings from any format other than a wordpack return ``self``
+        unchanged. A wordpack returns a shallow view: its :meth:`normalize`
+        swaps in a new array, and the view keeps the one a fit was made on.
+        For a wordpack over ``_RAM_TOP_N`` rows, the view shares the base
+        prefix matrix and vocabulary *by reference* (no copy) and carries its
+        own materialised corpus rows in a private ``_extras`` buffer. The view
+        shares the open pack, so ``self`` and any view can produce further
+        views for other corpora; a view of a view keeps the rows its parent
+        already loaded.
         """
-        if not self._partial:
+        if self._pack is None:
             return self
+        view = object.__new__(type(self))
+        view.__dict__.update(self.__dict__)  # shares vectors/vocab/pack by ref, no rebuild
+        if not self._partial:
+            return view
         extras, rows = self._read_extras(corpus)
 
-        view = object.__new__(type(self))
-        view.__dict__.update(self.__dict__)  # shares vectors/vocab by ref, no rebuild
         # Override view-owned state (everything else is shared read-only).
         view._norms = None
-        view._mmap = None  # the original keeps the live handle
-        view._corpus_attached = True
         view._local_row = dict(self._local_row)
         if extras:
-            view._extras = rows
             base_n = self.vectors.shape[0]
+            n_prev = 0 if self._extras is None else len(self._extras)
+            view._extras = rows if self._extras is None else np.vstack([self._extras, rows])
             for k, oi in enumerate(extras):
-                view._local_row[oi] = base_n + k
-        else:
-            view._extras = None
+                view._local_row[oi] = base_n + n_prev + k
         return view
 
     # ---- internal helpers ----
@@ -434,22 +442,29 @@ class Embeddings:
 
     # ---- lookup ----
 
+    def _row(self, word) -> int:
+        """Vocabulary row of *word*, or -1 when absent."""
+        if self._pack is not None:
+            return self._pack.keys.row(word) if isinstance(word, str) else -1
+        return self.key_to_index.get(word, -1)
+
     def __contains__(self, word: str) -> bool:
-        return word in self.key_to_index
+        return self._row(word) >= 0
 
     def __len__(self) -> int:
         return len(self.index_to_key)
 
     def __getitem__(self, word: str) -> np.ndarray:
-        oi = self.key_to_index[word]
+        oi = self._row(word)
+        if oi < 0:
+            raise KeyError(word)
         if self._partial:
             local = self._local_row.get(oi)
-            if local is None:
-                raise KeyError(
-                    f"{word!r} is in the vocabulary but not loaded in "
-                    "RAM-efficient mode (SSD loads corpus words automatically)."
-                )
-            return self._local_vector(local)
+            if local is not None:
+                return self._local_vector(local)
+            # Read on request and not cached, so the embedding stays read-only
+            # and threads can share it.
+            return self._read_rows([oi])[0]
         return self.vectors[oi]
 
     def __repr__(self) -> str:
@@ -488,8 +503,7 @@ class Embeddings:
         Raises
         ------
         KeyError
-            If *word* is not in the vocabulary, or in RAM-efficient mode if
-            it is in vocab but has not been loaded.
+            If *word* is not in the vocabulary.
         RuntimeError
             If ``norm=True`` and ``self.l2_normalized`` is False.
         """
@@ -498,16 +512,7 @@ class Embeddings:
                 "get_vector(norm=True) requires L2-normalised embeddings. "
                 "Call .normalize(l2=True) first."
             )
-        idx = self.key_to_index[word]
-        if self._partial:
-            local = self._local_row.get(idx)
-            if local is None:
-                raise KeyError(
-                    f"{word!r} is in the vocabulary but not loaded in "
-                    "RAM-efficient mode (SSD loads corpus words automatically)."
-                )
-            return self._local_vector(local)
-        return self.vectors[idx]
+        return self[word]
 
     # ---- persistence ----
 
@@ -520,50 +525,50 @@ class Embeddings:
             base = base[:dot]
         return os.path.join(os.path.dirname(path), base)
 
-    _FORMATS = {"ssdembed", "kv", "bin", "txt"}
+    _FORMATS = {"kv", "bin", "txt"}
 
-    def save(self, filename: str | None = None, fmt: str = "ssdembed") -> None:
+    def save(self, filename: str | None = None, fmt: str = "bin") -> None:
         """Save embeddings.
 
         Parameters
         ----------
         filename : Output path **without** extension.  Defaults to the stem
-                   of the file this instance was loaded from.
-        fmt : ``"ssdembed"`` (default), ``"kv"`` (needs gensim), ``"bin"``,
-              or ``"txt"``.
+                   of the file this instance was loaded from; raises when
+                   that would overwrite the source file.
+        fmt : ``"bin"`` (default), ``"kv"`` (needs gensim), or ``"txt"``.
 
         Examples
         --------
-        >>> emb.save("out/model_norm")              # → out/model_norm.ssdembed
+        >>> emb.save("out/model_norm")              # → out/model_norm.bin
         >>> emb.save("out/model_norm", fmt="kv")     # → out/model_norm.kv
         >>> emb.save(fmt="txt")                      # → <source_stem>.txt
         """
-        if self._partial:
+        if self._pack is not None:
             raise RuntimeError(
-                "Cannot save a RAM-efficient (partial) embedding. "
-                "Save the full embedding once before enabling RAM mode."
+                "A wordpack embedding cannot be saved; load the .wordpack file again instead."
             )
         if fmt not in self._FORMATS:
             raise ValueError(f"Unknown format {fmt!r}; choose from {sorted(self._FORMATS)}")
-        if fmt != "ssdembed" and (self.l2_normalized or self.abtt > 0):
-            warnings.warn(
-                f"Saving as .{fmt} — normalization and ABTT metadata will be lost. "
-                "Use .ssdembed format to preserve processing history.",
-                stacklevel=2,
-            )
         if filename is None:
             if self._source_path is None:
                 raise ValueError("filename is required (no source path to derive from)")
             filename = self._stem(self._source_path)
+            if os.path.abspath(f"{filename}.{fmt}") == os.path.abspath(self._source_path):
+                raise ValueError(
+                    f"filename is required: the default would overwrite the source file {self._source_path!r}"
+                )
+        if self.l2_normalized or self.abtt > 0:
+            warnings.warn(
+                f"Saving as .{fmt} — normalization and ABTT metadata will be lost.",
+                stacklevel=2,
+            )
         path = f"{filename}.{fmt}"
         if fmt == "txt":
             self._save_text(path)
         elif fmt == "bin":
             self._save_binary(path)
-        elif fmt == "kv":
-            self._save_kv(path)
         else:
-            self._save_pickle(path)
+            self._save_kv(path)
 
     def _save_kv(self, path: str) -> None:
         """Write embeddings to gensim ``KeyedVectors`` pickle format."""
@@ -577,30 +582,6 @@ class Embeddings:
         kv = KeyedVectors(vector_size=self.vector_size)
         kv.add_vectors(self.index_to_key, self.vectors)
         kv.save(path)
-
-    def _save_pickle(self, path: str) -> None:
-        """Write embeddings to ``.ssdembed`` pickle + ``.vectors.npy`` sidecar.
-
-        The sidecar keeps the pickle small and allows memory-mapped loading.
-        """
-        # Vectors live in a sidecar .vectors.npy so the pickle stays small
-        # and loads mmap-friendly.  We temporarily swap self.vectors for an
-        # empty placeholder, pickle, then restore — avoids copying a multi-GB
-        # array just to exclude it from the dump.
-        npy_path = path + ".vectors.npy"
-        np.save(npy_path, self.vectors)
-        saved_vectors = self.vectors
-        saved_source = self._source_path
-        self.vectors = np.zeros((0, self.vector_size), dtype=np.float32)
-        self._norms = None
-        self._source_path = None
-        try:
-            with open(path, "wb") as f:
-                pickle.dump(self, f, protocol=pickle.HIGHEST_PROTOCOL)
-        finally:
-            self.vectors = saved_vectors
-            self._source_path = saved_source
-            self._norms = None
 
     def _save_binary(self, path: str) -> None:
         """Write embeddings to word2vec binary format (.bin)."""
@@ -639,9 +620,9 @@ class Embeddings:
             Number of nearest neighbors to return.
         restrict_vocab : int or None, default None
             If set, only search the first *restrict_vocab* words in the
-            vocabulary. In RAM-efficient mode, clamped to the
-            rank-aligned prefix; values above the prefix size emit a
-            ``UserWarning`` and are clamped down.
+            vocabulary. On a wordpack over ``_RAM_TOP_N`` rows, clamped to
+            the rows held in RAM; values above that emit a ``UserWarning``
+            and are clamped down.
 
         Returns
         -------
@@ -669,8 +650,8 @@ class Embeddings:
                 restrict_vocab = cap
             elif restrict_vocab > cap:
                 warnings.warn(
-                    f"restrict_vocab={restrict_vocab} clamped to {cap} in "
-                    "RAM-efficient mode (only the rank-aligned prefix is searchable).",
+                    f"restrict_vocab={restrict_vocab} clamped to {cap}: only the "
+                    f"{cap} most frequent wordpack rows are held in RAM and searchable.",
                     stacklevel=2,
                 )
                 restrict_vocab = cap
@@ -957,7 +938,7 @@ def _needs_sidecar(vecs) -> bool:
 
 
 def _load_pickle(path: str) -> Embeddings:
-    """Load pickle-based embeddings: .ssdembed or .kv format."""
+    """Load pickle-based embeddings (.kv format)."""
     base = path[:-len(".gz")] if path.lower().endswith(".gz") else path
     vectors_npy = base + ".vectors.npy"
     has_sidecar = os.path.exists(vectors_npy)
@@ -991,7 +972,7 @@ def _load_pickle(path: str) -> Embeddings:
 def _load_embeddings(path: str, *, verbose: bool = False, parallel: bool = False) -> Embeddings:
     """Load pre-trained word embeddings from file, auto-detecting format by extension.
 
-    Dispatches to :func:`_load_pickle` for ``.ssdembed``/``.kv`` files,
+    Dispatches to :func:`_load_pickle` for ``.kv`` files,
     :func:`_load_text` for ``.bin`` (binary word2vec) and ``.txt``/``.vec``
     (text word2vec), applying gzip decompression transparently for ``.gz``
     variants.
@@ -999,8 +980,6 @@ def _load_embeddings(path: str, *, verbose: bool = False, parallel: bool = False
     low = path.lower()
     ext = os.path.splitext(low)[1]
 
-    if ext == ".ssdembed" or low.endswith(".ssdembed.gz"):
-        return _load_pickle(path)
     if ext == ".kv" or low.endswith(".kv.gz"):
         return _load_pickle(path)
     if ext == ".bin" or low.endswith(".bin.gz"):
@@ -1010,6 +989,6 @@ def _load_embeddings(path: str, *, verbose: bool = False, parallel: bool = False
     if ext == ".gz":
         raise ValueError(
             f"Cannot determine embedding format for '{path}'. "
-            "Rename to .txt.gz, .vec.gz, .bin.gz, or .ssdembed.gz."
+            "Rename to .txt.gz, .vec.gz, .bin.gz, or .kv.gz."
         )
     return _load_pickle(path)

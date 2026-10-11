@@ -11,6 +11,7 @@ A ``Report`` is a multi-section builder. Public surface:
 from __future__ import annotations
 
 import html as _html
+import os
 import warnings
 from dataclasses import dataclass, field
 from typing import ClassVar, Literal
@@ -31,6 +32,18 @@ def _md_cell(value) -> str:
     """Stringify and escape a value for use inside a Markdown table cell."""
     text = str(value).replace("|", r"\|")
     return text.replace("\n", "<br>")
+
+
+def _embeddings_row(embeddings) -> tuple[str, str] | None:
+    """Report row naming the embedding: a wordpack's full name, else the file loaded."""
+    if embeddings is None:
+        return None
+    if getattr(embeddings, "name", None) is not None:
+        return ("embeddings", f"{embeddings.name}-{embeddings.version}")
+    path = getattr(embeddings, "_source_path", None)
+    if path is not None:
+        return ("embeddings", os.path.basename(path))
+    return None
 
 
 def _build_cluster_section(

@@ -7,10 +7,10 @@ from typing import Literal
 
 import numpy as np
 
-from ssdiff.corpus import Corpus
+from ssdiff.corpus import Corpus, _check_tokenizer
 from ssdiff.embeddings import Embeddings
 from ssdiff.utils.math import _categorical_mask, f_sf, pca_fit_transform, standardize
-from ssdiff.utils.vectors import build_and_normalize_doc_vectors
+from ssdiff.utils.vectors import build_and_normalize_doc_vectors, compute_global_sif
 
 
 class SSD:
@@ -32,7 +32,7 @@ class SSD:
 
     Builds document vectors from corpus + lexicon, then fit with a backend:
 
-    >>> emb = Embeddings.load("model.ssdembed")
+    >>> emb = Embeddings.load("model.bin")
     >>> corpus = Corpus(texts, lang="pl")
     >>> ssd = SSD(emb, corpus, y, lexicon)
     >>> pls = ssd.fit_pls()
@@ -54,7 +54,7 @@ class SSD:
         lexicon: Sequence[str] | set[str] | None = None,
         *,
         window: int = 3,
-        sif_a: float = 1e-3,
+        sif_a: float | None = 1e-3,
         use_full_doc: bool = False,
     ) -> None:
         """Build a **personal concept vector (PCV)** for each document via
@@ -77,8 +77,10 @@ class SSD:
             default seed-context mode; ignored when ``use_full_doc=True``.
         window : int, default 3
             Context window size (tokens) around each seed word.
-        sif_a : float, default 1e-3
-            SIF smoothing parameter for document-vector weighting.
+        sif_a : float or None, default 1e-3
+            SIF smoothing parameter for document-vector weighting. ``None``
+            turns SIF off: every word weighs 1 (plain mean) and no word
+            counts are computed.
         use_full_doc : bool, default False
             If True, use full-document vectors instead of seed-windowed
             contexts.
@@ -91,7 +93,7 @@ class SSD:
         """
         if window < 1:
             raise ValueError(f"window must be >= 1, got {window}")
-        if sif_a <= 0:
+        if sif_a is not None and sif_a <= 0:
             raise ValueError(f"sif_a must be > 0, got {sif_a}")
 
         if not embeddings.l2_normalized:
@@ -100,9 +102,15 @@ class SSD:
                 "emb.normalize(l2=True, abtt=N) before constructing SSD."
             )
 
-        if getattr(embeddings, "_partial", False) and not getattr(embeddings, "_corpus_attached", False):
-            # Materialise the corpus tail into a private view; never mutate the
-            # caller's embedding, so one partial emb stays reusable across corpora.
+        _check_tokenizer(embeddings, corpus)
+
+        if getattr(embeddings, "_pack", None) is not None:
+            # A wordpack always gets a view, so a later emb.normalize() leaves
+            # this fit on the rows it was made with. A partial pack also loads
+            # the corpus tail into the view, never into the caller's embedding,
+            # so one pack stays reusable across corpora. A view already
+            # attached to another corpus gets one more view, so rows of this
+            # corpus are read in one batch, not on every lookup.
             embeddings = embeddings.with_corpus(corpus)
 
         self.embeddings = embeddings
@@ -145,11 +153,13 @@ class SSD:
                 "y and corpus must have the same length."
             )
 
-        # Filter invalid y entries
+        # Filter invalid y entries; `valid` has one entry per corpus document.
+        n_corpus = len(docs)
         if is_numeric:
             finite = np.isfinite(y_num)
             if finite.ndim == 2:
                 finite = finite.all(axis=1)
+            valid = finite
             if not finite.all():
                 docs = [d for d, m in zip(docs, finite) if m]
                 y_num = y_num[finite]
@@ -162,13 +172,20 @@ class SSD:
                 y_raw = y_raw[valid]
             y_clean = y_raw
 
+        # Kept for predict(): new documents are weighted with these counts.
+        self._sif_counts = compute_global_sif(docs) if sif_a is not None else None
+        self.use_full_doc = use_full_doc
         X, keep = build_and_normalize_doc_vectors(
             docs, embeddings, self.lexicon,
             window=window, sif_a=sif_a, use_full_doc=use_full_doc,
+            sif_counts=self._sif_counts,
         )
 
-        self._keep_mask = keep
-        self.n_raw = len(keep)
+        # One entry per corpus document: False for an invalid y or no vector.
+        keep_full = np.zeros(n_corpus, dtype=bool)
+        keep_full[np.flatnonzero(valid)[keep]] = True
+        self._keep_mask = keep_full
+        self.n_raw = n_corpus
         self.n_kept = int(keep.sum())
         self.n_dropped = self.n_raw - self.n_kept
 
@@ -254,6 +271,8 @@ class SSD:
             "n_kept": self.n_kept,
             "n_dropped": self.n_dropped,
             "y": self.y,
+            "sif_counts": self._sif_counts,
+            "use_full_doc": self.use_full_doc,
         }
 
     # ── PLS backend ────────────────────────────────────────────
@@ -266,6 +285,7 @@ class SSD:
         keep: int | Literal["auto"] | None = None,
         n_splits: int = 50,
         random_state: int = 2137,
+        test: bool = True,
         verbose: bool = False,
     ):
         """Fit PLS1 NIPALS and return PLSResult.
@@ -305,6 +325,14 @@ class SSD:
             Random splits for the split-half tests.
         random_state : int, default 2137
             Random seed.
+        test : bool, default True
+            ``False`` skips the significance test (the confirmatory test in
+            dense mode, the sequential chain in sparse mode): ``pvalue`` is
+            ``NaN`` and ``result.test`` is left not run. Choosing k for
+            ``k="auto"`` and tuning ``keep="auto"`` still run. In dense mode
+            ``result.test(n_splits=..., seed=...)`` runs the skipped test
+            later; with no arguments it uses 50 splits and no seed, not
+            this fit's ``n_splits`` and ``random_state``.
         verbose : bool
 
         Returns
@@ -345,6 +373,7 @@ class SSD:
         seq = None
         keep_star = None
         test_name = "split_exact"
+        pvalue = float("nan")
         if k == "auto":
             eff_k_max = max(min(int(k_max), n_kept - 1, D), 1)
             if verbose:
@@ -382,21 +411,23 @@ class SSD:
                         f"        path-max: {path_max:.3g}  "
                         f"[same-sample]"
                     )
-                print(
-                    f"[fit_pls] running k=1 confirmatory test "
-                    f"(split_exact, n_splits={n_splits})"
+            if test:
+                if verbose:
+                    print(
+                        f"[fit_pls] running k=1 confirmatory test "
+                        f"(split_exact, n_splits={n_splits})"
+                    )
+                r = plskit.pls1_confirmatory_test(
+                    Xs, ys, 1,
+                    method="split_exact",
+                    args={"n_splits": int(n_splits)},
+                    pre_standardized=True,
+                    seed=random_state,
+                    verbose=verbose,
                 )
-            r = plskit.pls1_confirmatory_test(
-                Xs, ys, 1,
-                method="split_exact",
-                args={"n_splits": int(n_splits)},
-                pre_standardized=True,
-                seed=random_state,
-                verbose=verbose,
-            )
-            pvalue = float(r.pvalue)
-            if verbose:
-                print(f"[fit_pls] p-value (k=1) = {pvalue:.6g}")
+                pvalue = float(r.pvalue)
+                if verbose:
+                    print(f"[fit_pls] p-value (k=1) = {pvalue:.6g}")
             n_comp = k_star
             p_at_k = 1
         elif isinstance(k, int):
@@ -409,15 +440,16 @@ class SSD:
                     f"got n={n_kept}, features={D}, requested k={k}"
                 )
             if keep is None:
-                r = plskit.pls1_confirmatory_test(
-                    Xs, ys, n_comp,
-                    method="split_exact",
-                    args={"n_splits": int(n_splits)},
-                    pre_standardized=True,
-                    seed=random_state,
-                    verbose=verbose,
-                )
-                pvalue = float(r.pvalue)
+                if test:
+                    r = plskit.pls1_confirmatory_test(
+                        Xs, ys, n_comp,
+                        method="split_exact",
+                        args={"n_splits": int(n_splits)},
+                        pre_standardized=True,
+                        seed=random_state,
+                        verbose=verbose,
+                    )
+                    pvalue = float(r.pvalue)
                 p_at_k = n_comp
             else:
                 if keep == "auto":
@@ -436,16 +468,17 @@ class SSD:
                         raise ValueError(
                             f"keep must be in [1, {D}] (n_features), got {keep_star}"
                         )
-                seq = plskit.spls1_find_k_sequence(
-                    Xs, ys, n_comp, keep_star,
-                    test_method="split_nb", args={"n_splits": int(n_splits)},
-                    pre_standardized=True, seed=random_state, verbose=verbose,
-                )
-                chain_pvalues = np.asarray(seq.pvalues[:n_comp], dtype=float)
-                pvalue = (
-                    float(np.nanmax(chain_pvalues))
-                    if np.isfinite(chain_pvalues).any() else float("nan")
-                )
+                if test:
+                    seq = plskit.spls1_find_k_sequence(
+                        Xs, ys, n_comp, keep_star,
+                        test_method="split_nb", args={"n_splits": int(n_splits)},
+                        pre_standardized=True, seed=random_state, verbose=verbose,
+                    )
+                    chain_pvalues = np.asarray(seq.pvalues[:n_comp], dtype=float)
+                    pvalue = (
+                        float(np.nanmax(chain_pvalues))
+                        if np.isfinite(chain_pvalues).any() else float("nan")
+                    )
                 p_at_k = n_comp
                 test_name = "split_nb_seq"
         else:
@@ -486,12 +519,16 @@ class SSD:
         kwargs = self._base_result_kwargs()
         kwargs["_y_mean"] = _y_mean
         kwargs["_y_scale"] = _y_scale
+        kwargs["_x_mean"] = X_mean
 
-        test_info = {
-            "pvalue": pvalue,
-            "n_splits": int(n_splits),
-            "random_state": random_state,
-        }
+        if test:
+            test_info = {
+                "pvalue": pvalue,
+                "n_splits": int(n_splits),
+                "random_state": random_state,
+            }
+        else:
+            test_name, test_info = None, None
 
         return PLSResult(
             beta=beta,
@@ -853,6 +890,7 @@ class SSD:
         kwargs = self._base_result_kwargs()
         kwargs["_y_mean"] = _y_mean
         kwargs["_y_scale"] = _y_scale
+        kwargs["_x_mean"] = X_mean
 
         _sweep_rows = None
         if sweep_result is not None:

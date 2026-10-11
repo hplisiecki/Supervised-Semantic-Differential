@@ -377,3 +377,71 @@ def test_single_column_2d_y_asks_for_1d(tiny_kv, sample_docs, lexicon, method):
     ssd = _make_ssd(tiny_kv, sample_docs, _y2(len(sample_docs), q=1), lexicon)
     with pytest.raises(ValueError, match="1-D y"):
         getattr(ssd, method)()
+
+
+# ---------------------------------------------------------------------------
+# predict() and fitted values
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("fit", [
+    lambda s: s.fit_pls(k=2, n_splits=20, random_state=42),
+    lambda s: s.fit_ols(fixed_k=3),
+], ids=["pls", "ols"])
+def test_predict_training_corpus_reproduces_fit(ssd_instance, fit):
+    """predict() on the training corpus gives docs.y_hat, and its R² is stats.r2."""
+    res = fit(ssd_instance)
+    pred = res.predict(ssd_instance.corpus)
+    assert pred.shape == (len(ssd_instance.corpus.docs),)
+
+    y_hat = np.array([d.y_hat for d in res.docs])
+    np.testing.assert_allclose(pred[ssd_instance._keep_mask], y_hat, rtol=1e-10)
+    # Fitted values of a centered least-squares-type fit average to mean(y).
+    assert y_hat.mean() == pytest.approx(res.y.mean())
+
+    sse = np.sum((res.y - y_hat) ** 2)
+    sst = np.sum((res.y - res.y.mean()) ** 2)
+    assert 1.0 - sse / sst == pytest.approx(res.stats.r2)
+
+
+def test_predict_nan_for_documents_without_vector(pls_result):
+    """No known word, or no seed in seed-context mode, gives NaN."""
+    corpus = Corpus(
+        [["kraj", "piekny", "dom"], ["zzz_not_in_vocab"], ["piekny", "dom"], []],
+        pretokenized=True, lang="pl",
+    )
+    pred = pls_result.predict(corpus)
+    assert np.isfinite(pred[0])
+    assert np.isnan(pred[1:]).all()
+
+
+def test_predict_full_doc_mode(tiny_kv, sample_docs, sample_y):
+    """Full-document fits predict on documents without any seed word."""
+    corpus = Corpus(sample_docs, pretokenized=True, lang="pl")
+    res = SSD(tiny_kv, corpus, sample_y, use_full_doc=True).fit_pls(k=1, n_splits=20)
+    pred = res.predict(Corpus([["piekny", "dom"]], pretokenized=True, lang="pl"))
+    assert np.isfinite(pred).all()
+
+
+def test_predict_without_sif(tiny_kv, sample_docs, sample_y, lexicon):
+    """sif_a=None: predict() on the training corpus rebuilds the fit's vectors."""
+    corpus = Corpus(sample_docs, pretokenized=True, lang="pl")
+    res = SSD(tiny_kv, corpus, sample_y, lexicon, sif_a=None).fit_pls(k=1, n_splits=20)
+    pred = res.predict(corpus)
+    np.testing.assert_allclose(pred, [d.y_hat for d in res.docs], rtol=1e-10)
+
+
+@pytest.mark.parametrize("k", [2, "auto"])
+def test_fit_pls_test_false_skips_test(ssd_instance, k):
+    """test=False: NaN p-value, test left not run, same beta as test=True."""
+    kw = dict(k=k, k_max=3, n_splits=5, random_state=0)
+    tested = ssd_instance.fit_pls(**kw)
+    untested = ssd_instance.fit_pls(test=False, **kw)
+
+    np.testing.assert_array_equal(untested.beta, tested.beta)
+    assert np.isnan(untested.stats.pvalue)
+    assert untested.test.pvalue is None
+    assert untested.fit_info.p_at_k == tested.fit_info.p_at_k
+
+    untested.test(n_splits=5, seed=0)
+    assert 0.0 <= untested.test.pvalue <= 1.0
+    assert untested.stats.pvalue == untested.test.pvalue

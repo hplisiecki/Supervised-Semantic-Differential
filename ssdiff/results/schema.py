@@ -281,11 +281,11 @@ class Stats:
     pvalue : float
         P-value from the active statistical test.
     n_raw : int
-        Total documents before preprocessing.
+        Documents in the corpus.
     n_kept : int
-        Documents retained after filtering (missing embeddings, short texts).
+        Documents retained after filtering (missing outcome, missing embeddings, short texts).
     n_dropped : int
-        Documents dropped during preprocessing.
+        Documents dropped: ``n_raw - n_kept``.
     y_mean, y_std : float
         Mean and standard deviation of the outcome on its original scale.
     beta_norm : float

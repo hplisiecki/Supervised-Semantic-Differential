@@ -6,6 +6,7 @@ network access, or spaCy downloads needed.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 import matplotlib
@@ -336,3 +337,16 @@ def group_result_3g(tiny_kv, large_docs_3x20, large_groups_3x20, lexicon):
     corpus = Corpus(large_docs_3x20, pretokenized=True, lang="pl")
     ssd = SSD(tiny_kv, corpus, large_groups_3x20, lexicon)
     return ssd.fit_groups(n_perm=50, random_state=42)
+
+
+# ---------------------------------------------------------------------------
+# Wordpack fixture
+# ---------------------------------------------------------------------------
+
+WORDPACK_FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "wordpack", "fixture.wordpack")
+
+
+@pytest.fixture(scope="session")
+def wordpack_path() -> str:
+    """Synthetic wordpack: 48 keys, D = 16, name ``en-fixture`` version ``1``."""
+    return WORDPACK_FIXTURE

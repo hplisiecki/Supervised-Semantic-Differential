@@ -48,14 +48,16 @@ https://doi.org/10.31234/osf.io/gvrsb_v3
 ## Installation
 
 ```bash
-pip install ssdiff
+pip install ssdiff            # wordpacks: Corpus(texts, embeddings=emb)
+pip install ssdiff[spacy]     # spaCy: Corpus(texts, lang=...)
 ```
 
 **Python**: 3.10 – 3.14.
 
-Core dependencies (installed automatically): `numpy`, `spacy`.
+Core dependencies (installed automatically): `numpy`, `plskit`.
 
 Optional extras:
+- `ssdiff[spacy]` — spaCy, needed to tokenize with `Corpus(texts, lang=...)`. Wordpacks need no spaCy (see [Wordpacks](#wordpacks)).
 - `ssdiff[results]` — pandas / openpyxl / python-docx / matplotlib for `to_df()`, `.xlsx`/`.docx` export, and `plot_sweep()`.
 - `ssdiff[gensim]` — only needed to *save* embeddings in `.kv` format.
 
@@ -65,24 +67,23 @@ Optional extras:
 
 ## Quickstart
 
-Below is an end-to-end minimal example. Adjust paths and column names to your data.
+Below is an end-to-end minimal example for English text. For another language, or your own embedding file, see [Word Embeddings](#word-embeddings).
 
 ```python
 from ssdiff import Embeddings, Corpus, SSD
 import numpy as np
 
-# 1) Load and normalize embeddings
-emb = Embeddings.load("path/to/embeddings.txt", verbose=True)
-emb.normalize(l2=True, abtt=1)
+# 1) Load embeddings: the default English wordpack, downloaded once (380 MB)
+emb = Embeddings.load()
 
 # 2) Load your data
 texts = [...]                          # list of raw text strings
 scores = np.array([...])               # numeric outcome
 
 # 3) Tokenize texts
-corpus = Corpus(texts, lang="en")      # spaCy tokenization + lemmatization
+corpus = Corpus(texts, embeddings=emb) # the pack's tokenizer and stopwords; no spaCy
 
-# 4) Define a lexicon (tokens must match lemmatized forms)
+# 4) Define a lexicon (the forms as they occur in the texts)
 lexicon = ["happy", "sad", "joy", "anger"]
 
 # 5) Build SSD and fit
@@ -115,11 +116,46 @@ to one side with `.pos` / `.neg`, or export with `.to_df()` / `.save(...)`.
 
 ## Word Embeddings
 
-The method requires pre-trained word embeddings in one of the supported formats:
+For English, `Embeddings.load()` downloads a ready wordpack. For another language, load your own embedding file. The full guide is [`docs/embeddings.md`](docs/embeddings.md).
+
+### Wordpacks
+
+A wordpack carries its own tokenizer and stopword list, so it needs no spaCy. Load one by short tag or by full name; it is downloaded once into a cache directory and loaded from there. With no argument, `Embeddings.load()` loads `en`:
+
+```python
+from ssdiff import Embeddings, Corpus, SSD
+
+emb = Embeddings.load()                                # the default: same as Embeddings.load("en")
+# emb = Embeddings.load("en-wiki")                     # short tag: the current default for that tag
+# emb = Embeddings.load("en-glove2024-dolma-1")        # full name: always this file
+# emb = Embeddings.load("path/to/file.wordpack")       # a file you built yourself
+corpus = Corpus(texts, embeddings=emb)                 # the pack's tokenizer and stopwords
+res = SSD(emb, corpus, y, use_full_doc=True).fit_pls()
+pred = res.predict(new_texts)
+```
+
+| short tag | full name | use it for |
+|---|---|---|
+| `en` | `en-glove2024-dolma-1` | informal or recent text: comments, social media, open survey answers, forums |
+| `en-wiki` | `en-glove2024-wikigiga-1` | formal text: news, essays, reports, older press |
+
+A full name always means the same file, and it is what `report()` and `corpus.tokenizer` record, so use it in scripts whose results must be reproducible. A short tag follows the published default and can move to a newer pack.
+
+Packs are kept in `~/.cache/wordpack` on Linux (`$XDG_CACHE_HOME/wordpack` when that variable is set), `~/Library/Caches/wordpack` on macOS and `%LOCALAPPDATA%\wordpack` on Windows; set `WORDPACK_CACHE` to use another directory. Nothing removes them: delete files there to free space.
+
+A pack loads with ABTT (m = 1) already applied and keeps its 50,000 most frequent words in RAM; other words are read from the file when needed, so keep the file in place while you use `emb`.
+
+`emb.normalize(abtt=m)` sets any m from 0 to 10, up or down.
+
+English packs are keyed by surface form, not by lemma. A seed lexicon lists the forms that occur in the texts: `dog` and `dogs`, not the lemma alone. ssdiff does no lemma expansion.
+
+### Your own embedding file
+
+For another language, or your own model, load an embedding file in one of these formats:
 
 | Format | Extension | Notes |
 |--------|-----------|-------|
-| SSD native | `.ssdembed` | Fastest to load (pickle + `.vectors.npy` sidecar) |
+| Wordpack | `.wordpack` | Tokenizer, stopwords and ABTT included; needs no spaCy |
 | gensim KeyedVectors | `.kv` | Loads without gensim via internal shim |
 | word2vec binary | `.bin` | Standard binary format |
 | Text | `.txt`, `.vec` | One word per line + floats |
@@ -138,9 +174,6 @@ emb.normalize(l2=True, abtt=1)   # L2 + ABTT (remove top-1 PC)
 Calling `normalize()` with no arguments applies both L2 and ABTT (m=1) by default.
 Processing state is tracked — calling it again safely skips already-applied steps.
 
-> **Tip:** Save normalized embeddings as `.ssdembed` to preserve both vectors and processing metadata (L2, ABTT state). Other formats (`.kv`, `.bin`, `.txt`) only store raw vectors.
-
-The model is not included in the package and will differ depending on your language and domain.
 Look for pre-trained static word embeddings in your language with good vocabulary coverage for your domain. GloVe and word2vec trained on large general corpora are a reliable starting point.
 
 For Polish, the `nkjp+wiki-lemmas-all-300-cbow-hs.txt.gz` (no. 25) from the [Polish Word2Vec model list](https://dsmodels.nlp.ipipan.waw.pl) was found to work well.
@@ -149,13 +182,13 @@ For Polish, the `nkjp+wiki-lemmas-all-300-cbow-hs.txt.gz` (no. 25) from the [Pol
 
 ## Preprocessing (Corpus)
 
-The `Corpus` class encapsulates the full spaCy preprocessing pipeline — tokenization, lemmatization, and stopword removal.
+With a wordpack, `Corpus(texts, embeddings=emb)` uses the pack's own tokenizer and stopwords. With any other embedding, the `Corpus` class runs the full spaCy preprocessing pipeline — tokenization, lemmatization, and stopword removal. That needs `pip install ssdiff[spacy]`.
 
 ```python
 from ssdiff import Corpus
 
 corpus = Corpus(texts, lang="en")      # auto-downloads spaCy model if needed
-corpus.docs       # list[list[str]] — lemmatized tokens per document
+corpus.docs       # list[list[str]] — tokens per document (lemmas for spaCy, the pack's keys for a wordpack)
 corpus.pre_docs   # list[PreprocessedDoc] — for snippet extraction
 corpus.n_texts    # number of documents
 ```
@@ -244,7 +277,7 @@ The constructor builds document vectors but does **not** fit a model — call `f
 ```python
 from ssdiff import Embeddings, Corpus, SSD
 
-emb = Embeddings.load("model.ssdembed")
+emb = Embeddings.load("model.bin")
 emb.normalize(l2=True, abtt=1)
 corpus = Corpus(texts, lang="en")
 
@@ -252,7 +285,7 @@ ssd = SSD(
     emb, corpus, y=scores,
     lexicon=["word1", "word2", "word3"],
     window=3,           # context window +/-3 tokens around lexicon hits
-    sif_a=1e-3,         # SIF weighting parameter
+    sif_a=1e-3,         # SIF weighting parameter; None turns SIF off
     use_full_doc=False,  # False = seed context windows (default)
 )
 ```
@@ -595,9 +628,9 @@ from ssdiff.results.multi_pls_result import MultiPLSResult
 
 ### `Embeddings`
 
-- `Embeddings.load(path, *, verbose=False, parallel=False, ram_efficient=False)` — load `.ssdembed`, `.kv`, `.bin`, `.txt`, `.vec` (and `.gz` variants)
-- `.normalize(l2=True, abtt=1, re_normalize=True)` — in-place L2 + ABTT; tracks state, safe to call repeatedly
-- `.save(filename=None, fmt="ssdembed")` — save to native, text, binary, or gensim format
+- `Embeddings.load(path="en", *, verbose=False, parallel=False)` — load `.wordpack`, `.kv`, `.bin`, `.txt`, `.vec` (and `.gz` variants), or a wordpack by short tag or full name
+- `.normalize(l2=True, abtt=1)` — in-place L2 + ABTT (rows L2-normalized again after ABTT); tracks state, safe to call repeatedly
+- `.save(filename=None, fmt="bin")` — save to binary, text, or gensim format
 - `emb["word"]` / `emb.get_vector("word", norm=False)` — vector lookup
 - `"word" in emb` — membership check
 - `len(emb)` / `.vocab_size` — vocabulary size
@@ -606,7 +639,7 @@ from ssdiff.results.multi_pls_result import MultiPLSResult
 
 ### `Corpus`
 
-- `Corpus(texts, *, lang=None, model=None, nlp=None, stopwords=None, pretokenized=False, auto_download=None)`
+- `Corpus(texts, *, lang=None, model=None, nlp=None, stopwords=None, pretokenized=False, auto_download=None, embeddings=None)`
 - `.docs` — lemmatized tokens per document
 - `.pre_docs` — sentence-level structure for snippet extraction
 - `.n_texts` — number of documents
@@ -672,7 +705,7 @@ lex = corpus.evaluate_lexicon(y, lexicon=["happy", "sad"])  # → LexiconResult
 - If you use SSD in published work, please cite the associated paper.
 - A suggested citation:
 
-Plisiecki, H., Lenartowicz, P., Pokropek, A., Malyska, K., & Flakus, M. (2025). Measuring Individual Differences in Meaning: The Supervised Semantic Differential. PsyArXiv. https://doi.org/10.31234/osf.io/gvrsb_v1
+Plisiecki, H., Lenartowicz, P., Pokropek, A., Małyska, K., & Flakus, M. (2025). Measuring Individual Differences in Meaning: The Supervised Semantic Differential. PsyArXiv. https://doi.org/10.31234/osf.io/gvrsb_v1
 
 ---
 

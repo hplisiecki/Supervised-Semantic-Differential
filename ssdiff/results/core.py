@@ -7,10 +7,12 @@ fix the stale-cache bug documented in the spec (issue #2).
 
 from __future__ import annotations
 
+import copy
 import csv as _csv
 import html as _html
 import io
 import json
+import os
 import warnings
 from abc import ABC
 from collections.abc import Callable, Iterator, Sequence
@@ -791,13 +793,69 @@ class Result(ABC):  # noqa: B024 — marker base class; subclasses share infra, 
             return
         self._cache = {k: v for k, v in self._cache.items() if k[0] != view}
 
-    # -------- attach -----------------------------------------------------
+    # -------- pickling / attach ------------------------------------------
+    def __getstate__(self) -> dict:
+        state = self.__dict__.copy()
+        emb = state.get("embeddings")
+        if getattr(emb, "_pack", None) is not None:
+            # A wordpack is read from its file and cannot be pickled; attach()
+            # takes it back and checks it against this record.
+            state["embeddings"] = None
+            state["_wordpack"] = {"name": emb.name, "version": emb.version, "abtt": emb.abtt}
+        return state
+
+    def __deepcopy__(self, memo: dict) -> Result:
+        # Bypasses __getstate__, so a copy keeps a wordpack embedding.
+        new = object.__new__(type(self))
+        memo[id(self)] = new
+        new.__dict__.update(copy.deepcopy(self.__dict__, memo))
+        return new
+
     def attach(self, corpus=None, embeddings=None) -> Result:
-        """Re-wire corpus / embeddings references after un-pickling (D14)."""
+        """Re-wire corpus / embeddings references after un-pickling.
+
+        ``embeddings`` is an ``Embeddings`` or a path to load. A result fit on
+        a wordpack is pickled without it: attach the same pack (name and
+        version) at the fit's ABTT; a path is loaded at that ABTT. A result
+        fit on another format does not record the fit's ABTT: attach an
+        ``Embeddings`` normalized as for the fit.
+        """
+        pack = getattr(self, "_wordpack", None)
+        if isinstance(embeddings, (str, os.PathLike)):
+            from ssdiff.embeddings import Embeddings
+
+            embeddings = Embeddings.load(embeddings)
+            if pack is not None and embeddings._pack is not None:
+                embeddings.normalize(abtt=pack["abtt"])
+        if pack is not None and embeddings is not None:
+            got = {"name": embeddings.name, "version": embeddings.version, "abtt": embeddings.abtt}
+            if got != pack:
+                raise ValueError(
+                    f"This result was fit on wordpack {pack['name']}-{pack['version']} at "
+                    f"abtt={pack['abtt']}; got {got['name']}-{got['version']} at abtt={got['abtt']}."
+                )
+        if embeddings is not None and not embeddings.l2_normalized:
+            raise RuntimeError(
+                "This result was fit on L2-normalised embeddings. Normalize them as "
+                "for the fit, e.g. Embeddings.load(path).normalize(l2=True, abtt=N), "
+                "and attach the Embeddings."
+            )
+        new_corpus = corpus if corpus is not None else getattr(self, "corpus", None)
+        new_embeddings = embeddings if embeddings is not None else getattr(self, "embeddings", None)
+        if new_corpus is not None and new_embeddings is not None:
+            from ssdiff.corpus import _check_tokenizer
+
+            _check_tokenizer(new_embeddings, new_corpus)
         if corpus is not None:
             self.corpus = corpus
         if embeddings is not None:
             self.embeddings = embeddings
+        if (corpus is not None or embeddings is not None) and (
+            getattr(self, "corpus", None) is not None and getattr(self, "embeddings", None) is not None
+        ):
+            # Snippets look up every token; a partial embedding would read each
+            # row outside its RAM prefix from the file on every lookup.
+            self.embeddings = self.embeddings.with_corpus(self.corpus)
         return self
 
     def _require_resource(self, resource: str, view_name: str) -> None:

@@ -2,7 +2,7 @@
 
 `ssdiff` is the reference Python implementation of the **Supervised Semantic Differential** (Plisiecki et al., 2025) — a method for finding interpretable semantic dimensions in text data that link to numeric outcomes or categorical groups.
 
-This folder holds four tiers of documentation plus a runnable demo. Start wherever fits your need.
+This folder holds four tiers of documentation; runnable demos are in [`../examples/`](../examples/). Start wherever fits your need.
 
 ---
 
@@ -12,8 +12,11 @@ This folder holds four tiers of documentation plus a runnable demo. Start wherev
 
 | Read this | When you want to… |
 |---|---|
+| [`embeddings.md`](embeddings.md) | Get embeddings. The ready English packs (`Embeddings.load()`), short tags and full names, where packs are stored, and loading your own embedding file for another language. |
 | [`api_reference.md`](api_reference.md) | Fit a model. Covers `Embeddings`, `Corpus`, `SSD`, and the fit methods (`fit_ols`, `fit_pls`, `fit_groups`, `fit_multipls`) with argument tables and a full workflow example. Results are only sketched here. |
-| [`../examples/demo_api.py`](../examples/demo_api.py) | See the whole pipeline in ~50 lines — load embeddings, build a corpus, fit PLS / PCA+OLS / groups, print stats, export a report. |
+| [`../examples/demo_pls.py`](../examples/demo_pls.py) | Runnable example for `fit_pls`. |
+| [`../examples/demo_pcaols.py`](../examples/demo_pcaols.py) | Runnable example for `fit_ols`. |
+| [`../examples/demo_groups.py`](../examples/demo_groups.py) | Runnable example for `fit_groups`. |
 | [`../examples/demo_multipls.py`](../examples/demo_multipls.py) | Runnable example for `fit_multipls`. |
 
 
@@ -34,7 +37,6 @@ This folder holds four tiers of documentation plus a runnable demo. Start wherev
 
 ## Also in this folder
 
-- [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md) — current rough edges and open items.
 - [`sweep_plot.png`](sweep_plot.png) — example PCA+OLS sweep chart.
 
 ---
@@ -44,8 +46,8 @@ This folder holds four tiers of documentation plus a runnable demo. Start wherev
 ```python
 from ssdiff import Embeddings, Corpus, SSD
 
-emb    = Embeddings.load("glove.ssdembed")
-corpus = Corpus(texts, lang="en")
+emb    = Embeddings.load()                 # the default English wordpack, downloaded once
+corpus = Corpus(texts, embeddings=emb)     # the pack's tokenizer and stopwords; no spaCy
 ssd    = SSD(emb, corpus, y=scores, lexicon=["happy", "sad", "joy"])
 
 result = ssd.fit_ols()          # PCA + OLS, F-test p-value
@@ -58,31 +60,7 @@ print(result.words.pos)         # top 20 β-pos neighbors
 result.report().save("report.md")
 ```
 
-See [`../examples/demo_api.py`](../examples/demo_api.py) for a runnable end-to-end script, and [`../examples/demo_multipls.py`](../examples/demo_multipls.py) for `fit_multipls`.
-
----
-
-## Low-RAM mode
-
-For machines that cannot fit the full embedding matrix in RAM (Colab free
-tier, 8 GB laptops, etc.), pass `ram_efficient=True` to
-`Embeddings.load`. Only an uncompressed `.ssdembed` file works in this
-mode — convert other formats once with the snippet below.
-
-```python
-# One-time: convert any format to .ssdembed and pre-normalise.
-emb = Embeddings.load("model.bin").normalize(l2=True, abtt=1)
-emb.save("model_norm")  # → model_norm.ssdembed
-
-# Each subsequent run:
-emb = Embeddings.load("model_norm.ssdembed", ram_efficient=True)
-ssd = SSD(emb, corpus, y, lexicon).fit_pls()  # loads the words your corpus needs
-```
-
-`SSD(...)` pulls in any corpus words beyond the top-50k automatically, so the
-same `ram_efficient=True` load can be reused across several corpora.
-
-RAM mode is read-only: `normalize` and `save` raise. The fit methods all work.
+See [`../examples/demo_pls.py`](../examples/demo_pls.py) for a runnable end-to-end script, and [`../examples/demo_multipls.py`](../examples/demo_multipls.py) for `fit_multipls`.
 
 ---
 

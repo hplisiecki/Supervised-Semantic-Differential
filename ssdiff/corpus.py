@@ -1,4 +1,4 @@
-"""Corpus: tokenize and lemmatize texts via spaCy."""
+"""Corpus: tokenize texts with spaCy (lemmas) or with a wordpack (surface keys)."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from ssdiff.utils.text import (
     load_spacy,
     load_stopwords,
     preprocess_texts,
+    preprocess_texts_wordpack,
 )
 
 
@@ -47,13 +48,42 @@ def _resolve_spacy_model(model: str, auto_download: bool | None) -> "object":
         return load_spacy(model)
 
 
+def _check_tokenizer(embeddings, corpus) -> None:
+    """Raise when *corpus* was not tokenized for *embeddings*.
+
+    A wordpack is keyed by surface form and a spaCy corpus holds lemmas, so
+    a mismatched pair would fit silently on whatever words they happen to
+    share. A corpus without a recorded tokenizer (``pretokenized=True``) is
+    not checked.
+    """
+    tokenizer = getattr(corpus, "tokenizer", None)
+    if tokenizer is None:
+        return
+    if getattr(embeddings, "_pack", None) is None:
+        if tokenizer.startswith("wordpack:"):
+            raise ValueError(
+                f"The corpus was tokenized with the wordpack {tokenizer[len('wordpack:'):]}, "
+                "but these embeddings are not a wordpack. Load that wordpack with "
+                "Embeddings.load(...), or build the corpus with Corpus(texts, lang=...)."
+            )
+        return
+    expected = f"wordpack:{embeddings.name}-{embeddings.version}"
+    if tokenizer != expected:
+        raise ValueError(
+            f"The corpus was tokenized with {tokenizer}, but the embeddings are "
+            f"{expected}. Build the corpus with Corpus(texts, embeddings=emb)."
+        )
+
+
 class Corpus:
-    """Tokenize and lemmatize texts via spaCy.
+    """Tokenize texts via spaCy (lemmas) or a wordpack (the pack's keys).
 
     >>> corpus = Corpus(texts, lang="pl")
     >>> corpus = Corpus(texts, model="pl_core_news_lg")
-    >>> corpus.docs        # list[list[str]] — lemmatized tokens
+    >>> corpus = Corpus(texts, embeddings=emb)   # emb loaded from a .wordpack
+    >>> corpus.docs        # list[list[str]] — tokens per document
     >>> corpus.pre_docs    # list[PreprocessedDoc] — for snippets
+    >>> corpus.tokenizer   # "spacy:<model>", "wordpack:<name>-<version>" or None
     """
 
     def __init__(
@@ -66,8 +96,9 @@ class Corpus:
         stopwords: Sequence[str] | None = None,
         pretokenized: bool = False,
         auto_download: bool | None = None,
+        embeddings=None,
     ) -> None:
-        """Tokenize and lemmatize texts using spaCy.
+        """Tokenize texts with spaCy or with a wordpack.
 
         Parameters
         ----------
@@ -86,9 +117,9 @@ class Corpus:
             *model*.
         stopwords : sequence of str or None
             Custom stopword list. If ``None``, loads bundled / spaCy
-            defaults for the resolved language.
+            defaults for the resolved language, or the wordpack's list.
         pretokenized : bool, default False
-            If ``True``, skip spaCy processing -- *texts* are already
+            If ``True``, skip tokenization -- *texts* are already
             token lists.
         auto_download : bool or None, default None
             Behavior when the required spaCy model is not installed.
@@ -96,29 +127,63 @@ class Corpus:
             :class:`~ssdiff.utils.text.SpacyModelNotInstalledError`;
             ``None`` (default) prompts interactively when running in a
             TTY and raises otherwise.
+        embeddings : Embeddings or None
+            Embeddings loaded from a ``.wordpack``. Tokenizes with the
+            pack's own tokenizer and stopwords; needs no spaCy. Tokens are
+            the pack's keys (surface forms for English), not lemmas. Cannot
+            be combined with *lang*, *model*, *nlp* or *pretokenized*.
 
         Raises
         ------
+        TypeError
+            If *texts* is a single string rather than a sequence of texts.
         ValueError
-            If none of *lang*, *model*, or *nlp* is provided (and
-            ``pretokenized`` is ``False``).
+            If none of *lang*, *model*, *nlp* or *embeddings* is provided
+            (and ``pretokenized`` is ``False``); if *embeddings* is combined
+            with another tokenizer or is not a wordpack.
         SpacyModelNotInstalledError
             If the required spaCy model is not installed and
             auto-download was declined or unavailable.
         """
+        if isinstance(texts, str):
+            # Iterating a str would make one document per character.
+            raise TypeError("texts is a single string; pass a list of texts, e.g. [text].")
+        if embeddings is not None:
+            if lang is not None or model is not None or nlp is not None or pretokenized:
+                raise ValueError(
+                    "embeddings= tokenizes with the wordpack; do not combine it "
+                    "with lang=, model=, nlp= or pretokenized=True."
+                )
+            pack = getattr(embeddings, "_pack", None)
+            if pack is None:
+                raise ValueError(
+                    "Corpus(texts, embeddings=emb) needs embeddings loaded from a "
+                    ".wordpack file. For other formats use Corpus(texts, lang=...)."
+                )
+            self.lang = embeddings.lang
+            self.tokenizer: str | None = f"wordpack:{embeddings.name}-{embeddings.version}"
+            self.pre_docs = preprocess_texts_wordpack(
+                texts, pack, embeddings.stopwords if stopwords is None else stopwords
+            )
+            self.docs = build_docs_from_preprocessed(self.pre_docs)
+            return
+
         if pretokenized:
             self.docs: list = list(texts)  # type: ignore
             self.pre_docs: list | None = None
             self.lang = lang
+            self.tokenizer = None
             return
 
         if nlp is None:
-            if model is not None:
-                nlp = _resolve_spacy_model(model, auto_download)
-            elif lang is not None:
-                nlp = _resolve_spacy_model(lang_to_model(lang), auto_download)
-            else:
-                raise ValueError("Provide lang=, model=, or nlp=.")
+            if model is None and lang is None:
+                raise ValueError("Provide lang=, model=, nlp= or embeddings=.")
+            spacy_name = model if model is not None else lang_to_model(lang)
+            nlp = _resolve_spacy_model(spacy_name, auto_download)
+        else:
+            meta = getattr(nlp, "meta", None) or {}
+            spacy_name = f"{meta.get('lang')}_{meta.get('name')}"
+        self.tokenizer = f"spacy:{spacy_name}"
 
         # Resolve lang for stopwords
         resolved_lang = lang

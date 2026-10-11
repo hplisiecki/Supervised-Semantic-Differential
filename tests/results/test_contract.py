@@ -406,3 +406,49 @@ def test_lexicon_report_to_text_contains_token_names():
     text = lr.report().to_text()
     for token in ["tok_a", "tok_b", "tok_c"]:
         assert token in text, f"Token {token!r} not found in report text"
+
+
+# ---------------------------------------------------------------------------
+# docs view and counts when documents are dropped
+# ---------------------------------------------------------------------------
+
+def _ssd_from_texts(tiny_kv, lexicon, docs, y):
+    from ssdiff.corpus import Corpus
+    from ssdiff.ssd import SSD
+    from tests.conftest import FakeNlp
+
+    texts = [" ".join(d) for d in docs]
+    corpus = Corpus(texts, nlp=FakeNlp(), lang="pl", stopwords=[])
+    return SSD(tiny_kv, corpus, y, lexicon), corpus
+
+
+def test_docs_doc_id_and_text_match_corpus_row_with_nan_y(
+    tiny_kv, sample_docs, sample_y_with_nan, lexicon
+):
+    """A missing y and a document without a vector both leave later doc_ids on their corpus rows."""
+    docs = [list(d) for d in sample_docs] + [["zzz_not_in_vocab"]]
+    y = np.append(sample_y_with_nan, 1.0)
+    ssd, corpus = _ssd_from_texts(tiny_kv, lexicon, docs, y)
+    res = ssd.fit_pls(k=2, n_splits=20, random_state=42)
+
+    expected_rows = [i for i in range(len(docs)) if i not in (3, len(docs) - 1)]
+    assert [d.doc_id for d in res.docs] == expected_rows
+    for row in expected_rows:
+        assert res.docs.id(row)._raw_text == corpus.pre_docs[row].raw
+    assert (res.stats.n_raw, res.stats.n_kept, res.stats.n_dropped) == (9, 7, 2)
+    assert ssd.n_raw == len(docs)
+    assert ssd._keep_mask.shape == (len(docs),)
+
+
+def test_keep_mask_spans_corpus_with_missing_group_label(
+    tiny_kv, sample_docs, lexicon
+):
+    """Documents with a None label are dropped from the full-corpus mask and counts."""
+    groups = np.array(["A", "A", None, "A", "B", "B", "B", "B"], dtype=object)
+    ssd, _ = _ssd_from_texts(tiny_kv, lexicon, sample_docs, groups)
+
+    assert ssd._keep_mask.shape == (len(sample_docs),)
+    assert not ssd._keep_mask[2]
+    assert ssd._keep_mask.sum() == ssd.n_kept == 7
+    assert (ssd.n_raw, ssd.n_dropped) == (8, 1)
+    assert list(ssd.y) == ["A", "A", "A", "B", "B", "B", "B"]

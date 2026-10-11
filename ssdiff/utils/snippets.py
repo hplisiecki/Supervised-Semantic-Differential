@@ -151,12 +151,15 @@ def _precompute_doc_arrays(
     if N == 0:
         return dict(N=0)
 
-    # weights
-    w = np.fromiter(
-        (sif_a / (sif_a + global_wc.get(t, 0) / max(total_tokens, 1)) for t in toks),
-        dtype=np.float64,
-        count=N,
-    )
+    # weights (all 1 when SIF is off)
+    if sif_a is None:
+        w = np.ones(N, dtype=np.float64)
+    else:
+        w = np.fromiter(
+            (sif_a / (sif_a + global_wc.get(t, 0) / max(total_tokens, 1)) for t in toks),
+            dtype=np.float64,
+            count=N,
+        )
 
     # vectors (unit rows; zero if OOV)
     V = np.zeros((N, d), dtype=np.float64)
@@ -515,7 +518,7 @@ def cluster_snippets_by_centroids(
     neg_clusters: list[dict] | None,  # clusters from -beta
     token_window: int = 3,
     seeds: Iterable[str] | None = None,
-    sif_a: float = 1e-3,
+    sif_a: float | None = 1e-3,
     global_wc: dict[str, int] | None = None,
     total_tokens: int | None = None,
     top_per_cluster: int = 100,
@@ -546,8 +549,9 @@ def cluster_snippets_by_centroids(
         Token window size around seed words for occurrence context (default is 3).
     seeds : Iterable[str] | None, optional
         Iterable of seed words to look for in documents. If None, uses ssd.lexicon.
-    sif_a : float, optional
-        SIF weighting parameter (default is 1e-3).
+    sif_a : float or None, optional
+        SIF weighting parameter (default is 1e-3). ``None`` weighs every
+        word 1.
     global_wc : dict[str, int] | None, optional
         Global word counts. If None, will be computed from pre_docs.
     total_tokens : int | None, optional
@@ -565,7 +569,7 @@ def cluster_snippets_by_centroids(
         Dictionary with 'pos' and 'neg' lists of snippet dicts.
     """
 
-    if global_wc is None or total_tokens is None:
+    if sif_a is not None and (global_wc is None or total_tokens is None):
         global_wc, total_tokens = _build_global_sif(pre_docs)
 
     embeddings = ssd.embeddings
@@ -658,7 +662,7 @@ def snippets_along_beta(
     ssd,  # fitted SSD (must expose gradient and embeddings)
     token_window: int = 3,
     seeds: Iterable[str] | None = None,
-    sif_a: float = 1e-3,
+    sif_a: float | None = 1e-3,
     global_wc: dict[str, int] | None = None,
     total_tokens: int | None = None,
     top_per_side: int = 200,
@@ -686,8 +690,9 @@ def snippets_along_beta(
         Token window size around seed occurrences, by default 3.
     seeds : Iterable[str] | None, optional
         Iterable of seed lemmas to focus on. If None, uses ssd.lexicon.
-    sif_a : float, optional
-        SIF weighting parameter, by default 1e-3.
+    sif_a : float or None, optional
+        SIF weighting parameter, by default 1e-3. ``None`` weighs every
+        word 1.
     global_wc : dict[str, int] | None, optional
         Global word counts. If None, computed from pre_docs.
     total_tokens : int | None, optional
@@ -707,7 +712,7 @@ def snippets_along_beta(
         Dictionary with 'pos' and 'neg' lists of snippet dicts.
     """
 
-    if global_wc is None or total_tokens is None:
+    if sif_a is not None and (global_wc is None or total_tokens is None):
         global_wc, total_tokens = _build_global_sif(pre_docs)
 
     embeddings = ssd.embeddings

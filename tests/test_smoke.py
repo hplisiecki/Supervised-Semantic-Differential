@@ -50,3 +50,37 @@ def test_all_contains_core_names():
     all_names = ssdiff.__all__
     for name in ("SSD", "Corpus", "Embeddings"):
         assert name in all_names, f"{name!r} missing from ssdiff.__all__"
+
+
+def test_wordpack_and_pretokenized_routes_never_import_spacy(wordpack_path):
+    code = (
+        "import sys\n"
+        "from ssdiff import Corpus, Embeddings\n"
+        f"emb = Embeddings.load({wordpack_path!r})\n"
+        "Corpus(['I like the dog.'], embeddings=emb)\n"
+        "Corpus([['dog']], pretokenized=True)\n"
+        "print('spacy' in sys.modules)\n"
+    )
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
+    assert proc.stdout.strip() == "False"
+
+
+def test_without_spacy_the_wordpack_route_works_and_lang_gives_the_install_hint(wordpack_path):
+    # A None entry in sys.modules makes `import spacy` raise ImportError,
+    # as on a machine where spaCy is not installed.
+    code = (
+        "import sys\n"
+        "sys.modules['spacy'] = None\n"
+        "from ssdiff import Corpus, Embeddings\n"
+        f"emb = Embeddings.load({wordpack_path!r})\n"
+        "print(Corpus(['I like the dog.'], embeddings=emb).docs)\n"
+        "try:\n"
+        "    Corpus(['x'], lang='en')\n"
+        "except ImportError as e:\n"
+        "    print(e)\n"
+    )
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
+    assert proc.stdout.splitlines() == [
+        "[['like', 'dog']]",
+        "spacy is required for this method; install with: pip install ssdiff[spacy]",
+    ]

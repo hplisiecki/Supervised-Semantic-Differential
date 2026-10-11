@@ -41,7 +41,8 @@ def filtered_neighbors(
         Restrict the search to the top-N most frequent words in the vocabulary.
     lang : str, default ``"pl"``
         Language code — selects the token-filter regex from
-        :func:`lang_config.get_config`.
+        :func:`lang_config.get_config` when ``embeddings.neighbor_filter``
+        (a wordpack's own filter) is not set.
 
     Returns
     -------
@@ -49,7 +50,7 @@ def filtered_neighbors(
         Filtered neighbors as ``(word, cosine_similarity)`` pairs, sorted by
         descending similarity.
     """
-    bad_token = get_config(lang).bad_token_re
+    bad_token = embeddings.neighbor_filter or get_config(lang).bad_token_re
     nbrs = embeddings.similar_by_vector(vec, topn=cand, restrict_vocab=restrict)
     out = []
     for w, sim in nbrs:
@@ -68,7 +69,7 @@ def cluster_top_neighbors(
     k: int | None = None,
     k_min: int = 2,
     k_max: int = 10,
-    restrict_vocab: int = 50000,
+    restrict_vocab: int = 50000,  # equals embeddings._RAM_TOP_N; change together (see there)
     random_state: int = 2137,
     min_cluster_size: int = 2,
     side: Literal["pos", "neg"] = "pos",

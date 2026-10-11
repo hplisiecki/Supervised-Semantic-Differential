@@ -19,6 +19,7 @@ from ssdiff.results.report import (
     Report,
     Section,
     _build_cluster_section,
+    _embeddings_row,
     _resolve_section,
 )
 from ssdiff.results.schema import (
@@ -1245,10 +1246,12 @@ class ContinuousResult(_SingleResult):
         keep_mask: np.ndarray,
         n_raw: int, n_kept: int, n_dropped: int,
         y: np.ndarray,
-        _y_mean: np.ndarray, _y_scale: np.ndarray,
+        _y_mean: np.ndarray, _y_scale: np.ndarray, _x_mean: np.ndarray,
         r2: float, pvalue: float, r2_adj: float | None = None,
         embeddings=None, corpus=None,
-        lexicon: set | None = None, window: int = 3, sif_a: float = 1e-3, lang: str = "pl",
+        lexicon: set | None = None, window: int = 3, sif_a: float | None = 1e-3, lang: str = "pl",
+        sif_counts: tuple[dict[str, int], int] | None,
+        use_full_doc: bool = False,
         fit_info: FitInfo | dict | None = None,
         raw_diagnostics: dict | None = None,
     ):
@@ -1264,8 +1267,8 @@ class ContinuousResult(_SingleResult):
         beta : ndarray of shape (D,)
             Raw regression direction in embedding space.
         keep_mask : ndarray of shape (n_raw,) of bool
-            Boolean mask indicating which of the original ``n_raw`` documents
-            were retained.  Used to align ``doc_id`` with corpus row indices.
+            Boolean mask over all ``n_raw`` corpus documents; True for those
+            retained (valid outcome and a document vector).  Used to align ``doc_id`` with corpus row indices.
         n_raw, n_kept, n_dropped : int
             Document counts before and after filtering.
         y : ndarray of shape (n_kept,)
@@ -1274,6 +1277,8 @@ class ContinuousResult(_SingleResult):
             Mean used to standardize ``y`` at fit time (for back-transform).
         _y_scale : ndarray of shape (1,)
             Standard deviation used to standardize ``y`` at fit time.
+        _x_mean : ndarray of shape (D,)
+            Column means used to center ``x`` at fit time.
         r2 : float
             In-sample R² reported by the backend.
         pvalue : float
@@ -1289,10 +1294,17 @@ class ContinuousResult(_SingleResult):
             Optional seed tokens that constrain snippet extraction.
         window : int
             Token window size passed to the snippet extractor.
-        sif_a : float
-            SIF smoothing parameter for snippet vector computation.
+        sif_a : float or None
+            SIF smoothing parameter for snippet vector computation; ``None``
+            means no SIF weighting.
         lang : str
             Language code used for token filtering in neighbor search.
+        sif_counts : (word_counts, total_tokens) or None
+            SIF word counts of the training documents, reused by
+            :meth:`predict`. ``None`` when ``sif_a`` is None.
+        use_full_doc : bool
+            Whether the fit used full-document vectors (``True``) or seed
+            contexts (``False``); :meth:`predict` builds vectors the same way.
         fit_info : FitInfo, dict, or None
             Backend hyperparameters (n_components, pca_k, etc.).  A dict is
             converted to FitInfo automatically.
@@ -1309,6 +1321,9 @@ class ContinuousResult(_SingleResult):
         self.y = y
         self._y_mean = _y_mean
         self._y_scale = _y_scale
+        self._x_mean = _x_mean
+        self._sif_counts = sif_counts
+        self.use_full_doc = use_full_doc
 
         if fit_info is None:
             fit_info = FitInfo()
@@ -1323,7 +1338,7 @@ class ContinuousResult(_SingleResult):
         x_norms = np.maximum(x_norms, 1e-12)
         cos_align = ((x / x_norms) @ self.gradient).ravel()
         yhat_std = (x @ self.beta).ravel()
-        yhat_raw = y_mean + y_std * yhat_std
+        yhat_raw = self._predict_x(x)
 
         denom = float(np.std(y) * np.std(yhat_std))
         corr = float(np.corrcoef(y, yhat_std)[0, 1]) if denom > 0 else 0.0
@@ -1368,11 +1383,75 @@ class ContinuousResult(_SingleResult):
         if new_pvalue is None:
             return
         new_stats = _replace(self.stats._stats, pvalue=float(new_pvalue))
-        self.stats = StatsView(new_stats)
+        self.stats = self._stats_view_cls(new_stats)
+
+    def _predict_x(self, x: np.ndarray) -> np.ndarray:
+        """Outcome, in original units, for document vectors *x* of shape (n, D)."""
+        y_mean = float(self._y_mean[0])
+        y_std = float(self._y_scale[0])
+        return y_mean + y_std * ((x - self._x_mean) @ self.beta).ravel()
+
+    def predict(self, texts) -> np.ndarray:
+        """Predict the outcome for new documents.
+
+        Document vectors are built as in the fit: same embeddings, lexicon,
+        window, ``sif_a`` and full-document or seed-context mode, with SIF
+        weights from the training documents' word counts. For wordpack
+        embeddings, rows of words new to the fit are read from the file.
+
+        Parameters
+        ----------
+        texts : Corpus, list of str, or list of list of str
+            A ``Corpus`` tokenized for this result's embeddings. For a fit on
+            a wordpack, raw texts (``list[list[str]]`` for profiles) also
+            work; they are tokenized with that wordpack and its default
+            stopwords. For a training corpus built with ``stopwords=`` or
+            ``pretokenized=True``, pass a ``Corpus`` built the same way.
+
+        Returns
+        -------
+        ndarray of shape (len(texts),)
+            Predicted outcome in its original units. ``NaN`` for a document
+            that gets no vector: none of its words is in the embeddings, or,
+            in seed-context mode, it contains no lexicon word.
+
+        Raises
+        ------
+        TypeError
+            Raw texts for a fit whose embeddings are not a wordpack.
+        ValueError
+            A ``Corpus`` tokenized for other embeddings.
+        """
+        from ssdiff.corpus import Corpus, _check_tokenizer
+        from ssdiff.utils.vectors import build_and_normalize_doc_vectors
+
+        self._require_resource("embeddings", "predict()")
+        if isinstance(texts, Corpus):
+            corpus = texts
+        elif getattr(self.embeddings, "_pack", None) is not None:
+            corpus = Corpus(texts, embeddings=self.embeddings)
+        else:
+            # The result does not record the spaCy model, nlp object or
+            # stopwords of the training corpus, so it cannot rebuild one.
+            raise TypeError(
+                "predict() takes raw texts only for a fit on a wordpack. Pass a "
+                "Corpus built like the training corpus, e.g. Corpus(texts, lang=...)."
+            )
+        _check_tokenizer(self.embeddings, corpus)
+        embeddings = self.embeddings.with_corpus(corpus)
+        X, keep = build_and_normalize_doc_vectors(
+            corpus.docs, embeddings, self.lexicon,
+            window=self.window, sif_a=self.sif_a,
+            use_full_doc=self.use_full_doc, sif_counts=self._sif_counts,
+        )
+        out = np.full(len(corpus.docs), np.nan)
+        if X.shape[0]:
+            out[keep] = self._predict_x(X)
+        return out
 
     _access = (
         "stats", "fit_info", "words", "clusters", "snippets", "docs", "test",
-        "report()", "test(...)", "attach(...)",
+        "report()", "test(...)", "predict(...)", "attach(...)",
     )
     _arrays = ("x", "y", "beta", "gradient", "alignment_scores")
 
@@ -1455,6 +1534,9 @@ class ContinuousResult(_SingleResult):
             ("β norm", fmt_d(s.beta_norm)),
             ("Δ (Q4−Q1)", fmt_d(s.iqr_effect)),
         ])
+        provenance = _embeddings_row(self.embeddings)
+        if provenance is not None:
+            stat_rows.append(provenance)
         sections.append(Section(title="Stats", kind="kv", rows=stat_rows))
 
         fi = self.fit_info
@@ -1660,7 +1742,7 @@ class PCAOLSResult(ContinuousResult):
     _stats_view_cls = OLSStatsView
     _access = (
         "stats", "fit_info", "words", "clusters", "snippets", "docs", "sweep",
-        "test", "report()", "test(...)", "attach(...)",
+        "test", "report()", "test(...)", "predict(...)", "attach(...)",
     )
     _arrays = (
         "x", "y", "beta", "gradient", "alignment_scores",

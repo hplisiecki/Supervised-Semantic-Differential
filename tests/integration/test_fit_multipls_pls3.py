@@ -9,7 +9,6 @@ import pytest
 from ssdiff import SSD, Corpus
 from ssdiff.embeddings import Embeddings
 from tests.conftest import _make_large_docs
-from tests.io.test_embeddings_ram import _make_ssdembed
 
 MODES = (None, "words", "outcomes")
 
@@ -221,18 +220,19 @@ def test_test_rerun_updates_pvalue(planted):
     assert res.stats.pvalue == res.test.pvalue
 
 
-def test_ram_mode_words_rotation(tmp_path, monkeypatch):
+def test_words_rotation_on_a_partial_wordpack(wordpack_path, monkeypatch):
     import ssdiff.embeddings as em
-    monkeypatch.setattr(em, "_RAM_TOP_N", 5)
+    monkeypatch.setattr(em, "_RAM_TOP_N", 18)
 
-    emb = Embeddings.load(_make_ssdembed(tmp_path), ram_efficient=True)
+    emb = Embeddings.load(wordpack_path)
+    keys = list(emb.index_to_key)
     rng = np.random.default_rng(0)
-    seeds = [f"w{i}" for i in range(3)]
+    seeds = keys[15:18]
     docs = [
-        [seeds[j % 3]] + [f"w{i}" for i in rng.choice(np.arange(3, 60), 3, replace=False)]
+        [seeds[j % 3]] + [keys[i] for i in rng.choice(np.arange(18, 48), 3, replace=False)]
         for j in range(60)
     ]
     corpus = Corpus(docs, lang="en", pretokenized=True)
     ssd = SSD(emb, corpus, rng.normal(size=(60, 3)), lexicon=set(seeds))
     res = ssd.fit_multipls(k=2, rotate="words", n_perm=19, n_splits=5)
-    assert res.U_rot.shape == (8, 2)
+    assert res.U_rot.shape == (16, 2)

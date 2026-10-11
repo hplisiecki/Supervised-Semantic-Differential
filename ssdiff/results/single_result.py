@@ -40,7 +40,7 @@ class _SingleResult(Result):
         corpus: Any = None,
         lexicon: set | None = None,
         window: int = 3,
-        sif_a: float = 1e-3,
+        sif_a: float | None = 1e-3,
         lang: str | None = None,
     ):
         super().__init__()
@@ -48,7 +48,7 @@ class _SingleResult(Result):
         self.corpus = corpus
         self.lexicon = set(lexicon) if lexicon else set()
         self.window = int(window)
-        self.sif_a = float(sif_a)
+        self.sif_a = None if sif_a is None else float(sif_a)
         self.lang = lang
 
         # Keep raw x; derive gradient/beta_norm up front (cheap).

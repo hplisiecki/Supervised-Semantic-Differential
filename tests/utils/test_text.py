@@ -44,6 +44,7 @@ def test_load_stopwords_pl_known_words():
 
 def test_load_stopwords_en_known_word():
     """English stopwords (spaCy built-in) include 'the'."""
+    pytest.importorskip("spacy")
     sw = load_stopwords("en")
     assert isinstance(sw, list)
     assert "the" in sw, "'the' must be in English stopwords"
@@ -126,6 +127,7 @@ def test_lang_to_model_keys_subset_of_languages():
 
 def test_load_spacy_nonexistent_model_raises():
     """load_spacy raises SpacyModelNotInstalledError for unknown models."""
+    pytest.importorskip("spacy")
     with pytest.raises(SpacyModelNotInstalledError) as exc_info:
         load_spacy("nonexistent_model_xyz_abc")
     assert exc_info.value.model == "nonexistent_model_xyz_abc"

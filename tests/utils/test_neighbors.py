@@ -253,3 +253,38 @@ class TestClusterTopNeighbors:
 
         cos_betas = [c["centroid_cos_beta"] for c in clusters]
         assert cos_betas == sorted(cos_betas, reverse=False)
+
+
+def test_filtered_neighbors_prefers_the_embedding_filter():
+    from tests.conftest import make_kv
+
+    emb = make_kv(["Dog", "dog", "x1", "cat", "bird", "fish"], dim=8)
+    vec = emb["Dog"]
+    words = [w for w, _ in filtered_neighbors(emb, vec, topn=6, cand=6, restrict=6, lang="en")]
+    assert "Dog" not in words and "x1" not in words
+    emb.neighbor_filter = re.compile(r".*\d")
+    words = [w for w, _ in filtered_neighbors(emb, vec, topn=6, cand=6, restrict=6, lang="en")]
+    assert "Dog" in words and "x1" not in words
+
+
+def test_pca_sweep_prefers_the_embedding_filter(monkeypatch):
+    import ssdiff.backends.pca_sweep as ps
+    from tests.conftest import VOCAB_50, make_kv
+
+    emb = make_kv(VOCAB_50, dim=8)
+    emb.neighbor_filter = re.compile(r".*\d")
+    seen = []
+    real = ps._top_indices_filtered
+
+    def spy(sim_col, keys, bad_re, topn, cand):
+        seen.append(bad_re)
+        return real(sim_col, keys, bad_re, topn, cand)
+
+    monkeypatch.setattr(ps, "_top_indices_filtered", spy)
+    rng = np.random.default_rng(0)
+    Xs = rng.normal(size=(30, 8))
+    ps.pca_sweep(
+        Xs=Xs, X_scale=np.ones(8), x=Xs, ys=rng.normal(size=30), embeddings=emb,
+        pca_k_values=[2, 3, 4, 5, 6], cluster_topn=10, lang="en",
+    )
+    assert seen and all(r is emb.neighbor_filter for r in seen)

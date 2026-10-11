@@ -31,6 +31,7 @@ from ssdiff.results.report import (
     Report,
     Section,
     _build_cluster_section,
+    _embeddings_row,
     _resolve_section,
 )
 from ssdiff.results.schema import (
@@ -82,7 +83,7 @@ class PairResult(_SingleResult):
         corpus=None,
         lexicon=None,
         window: int = 3,
-        sif_a: float = 1e-3,
+        sif_a: float | None = 1e-3,
         lang: str | None = None,
     ):
         self._container = container
@@ -140,7 +141,7 @@ class PairResult(_SingleResult):
         return view
 
     def __getstate__(self):
-        state = self.__dict__.copy()
+        state = super().__getstate__()
         state["_container"] = None
         state["_x_cache"] = None
         return state
@@ -384,7 +385,7 @@ class GroupResult(_MultiContainer):
         lang: str | None = None,
         lexicon=None,
         window: int = 3,
-        sif_a: float = 1e-3,
+        sif_a: float | None = 1e-3,
     ):
         super().__init__()  # Result.__init__ sets self._cache
         self.embeddings = embeddings
@@ -406,7 +407,7 @@ class GroupResult(_MultiContainer):
         self.lang = lang if lang is not None else getattr(corpus, "lang", None)
         self.lexicon = set(lexicon) if lexicon is not None else set()
         self.window = int(window)
-        self.sif_a = float(sif_a)
+        self.sif_a = None if sif_a is None else float(sif_a)
 
         self.stats = GroupStatsView(
             G=G, n_kept=n_kept, n_perm=n_perm,
@@ -616,6 +617,9 @@ class GroupResult(_MultiContainer):
         ]
         if self.random_state is not None:
             omnibus_rows.append(("random_state", self.random_state))
+        provenance = _embeddings_row(self.embeddings)
+        if provenance is not None:
+            omnibus_rows.append(provenance)
         sections.append(Section(title="Omnibus", kind="kv", rows=omnibus_rows))
 
         if self.group_labels:

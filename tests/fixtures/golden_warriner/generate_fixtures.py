@@ -23,7 +23,7 @@ Crucial invariant: the golden is generated from the embedding **reloaded from
 test consumes — so there is zero generator-vs-test divergence.
 
 Inputs (in-repo, relative to the SSDLite root):
-  - examples/data/glove_300_en_top20k_ratings.ssdembed
+  - examples/data/glove_300_en_top20k_ratings.bin
   - examples/data/Ratings_EN.csv
 
 Run from the SSDLite project root:
@@ -54,7 +54,7 @@ N_WORDS = 20                             # top words per pole stored in golden
 HERE = os.path.dirname(os.path.abspath(__file__))
 SSDLITE_ROOT = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
 EMB_SRC = os.path.join(SSDLITE_ROOT, "examples", "data",
-                       "glove_300_en_top20k_ratings.ssdembed")
+                       "glove_300_en_top20k_ratings.bin")
 RATINGS = os.path.join(SSDLITE_ROOT, "examples", "data", "Ratings_EN.csv")
 
 EMB_STEM = os.path.join(HERE, "embedding")      # → embedding.bin

@@ -144,7 +144,7 @@ class _PLSComponentResult(_SingleResult):
         return view
 
     def __getstate__(self):
-        state = self.__dict__.copy()
+        state = super().__getstate__()
         state["_container"] = None
         return state
 
@@ -314,7 +314,7 @@ class MultiPLSResult(_MultiContainer):
         test_info: dict | None,
         # The following echo SSD state for reconstruction & re-running tests.
         embeddings=None, corpus=None, lexicon=None,
-        window: int = 3, sif_a: float = 1e-3, lang: str | None = None,
+        window: int = 3, sif_a: float | None = 1e-3, lang: str | None = None,
         random_state: int | None = None,
     ):
         super().__init__()
@@ -344,7 +344,7 @@ class MultiPLSResult(_MultiContainer):
         self.corpus = corpus
         self.lexicon = set(lexicon) if lexicon else set()
         self.window = int(window)
-        self.sif_a = float(sif_a)
+        self.sif_a = None if sif_a is None else float(sif_a)
         self.lang = lang if lang is not None else getattr(corpus, "lang", None)
 
         pvalue = (test_info or {}).get("pvalue", float("nan"))
@@ -400,22 +400,6 @@ class MultiPLSResult(_MultiContainer):
         for leaf in self._leaves.values():
             leaf._container = self
 
-    # ------ attach fan-out -----------------------------------------------
-    def attach(self, corpus=None, embeddings=None):
-        """Re-wire ``corpus`` / ``embeddings`` on the container AND every leaf.
-
-        The default ``Result.attach`` only updates ``self``; a
-        ``MultiPLSResult`` also needs its leaves updated so their
-        ``.words`` views pick up the new resources.
-        """
-        super().attach(corpus=corpus, embeddings=embeddings)
-        for leaf in self._leaves.values():
-            if corpus is not None:
-                leaf.corpus = corpus
-            if embeddings is not None:
-                leaf.embeddings = embeddings
-        return self
-
     # ------ p-value refresh (called from MultiPLSTestView._on_rerun) -----
     def _refresh_pvalue(self, new_pvalue: float | None) -> None:
         if new_pvalue is None:
@@ -460,25 +444,25 @@ class MultiPLSResult(_MultiContainer):
         ``clusters``, ``snippets`` and ``misdiagnosed`` are not accepted.
         """
         from ssdiff.results.format import fmt_count, fmt_p, fmt_r
-        from ssdiff.results.report import Report, Section, _resolve_section
+        from ssdiff.results.report import Report, Section, _embeddings_row, _resolve_section
 
         tw = _resolve_section(top_words, {"n": 5}, name="top_words")
 
         s = self.stats._row
         pi = next(iter(self.pls_info))
+        stats_rows = [
+            ("cov_explained", fmt_r(s["cov_explained"])),
+            ("p-value", fmt_p(s["pvalue"])),
+            ("n", fmt_count(s["n"])),
+            ("q", s["q"]),
+            ("k", s["k"]),
+            ("rotate", s["rotate"]),
+        ]
+        provenance = _embeddings_row(self.embeddings)
+        if provenance is not None:
+            stats_rows.append(provenance)
         sections = [
-            Section(
-                title="Stats",
-                kind="kv",
-                rows=[
-                    ("cov_explained", fmt_r(s["cov_explained"])),
-                    ("p-value", fmt_p(s["pvalue"])),
-                    ("n", fmt_count(s["n"])),
-                    ("q", s["q"]),
-                    ("k", s["k"]),
-                    ("rotate", s["rotate"]),
-                ],
-            ),
+            Section(title="Stats", kind="kv", rows=stats_rows),
             Section(
                 title="Rotation",
                 kind="kv",

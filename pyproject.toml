@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ssdiff"
-version = "3.1.0"
+version = "3.2.0"
 description = "Supervised Semantic Differential (SSD): interpretable, embedding-based analysis of concept meaning in text."
 readme = "README.md"
 requires-python = ">=3.10,<3.15"
@@ -31,12 +31,14 @@ classifiers = [
 
 dependencies = [
   "numpy>=1.26.4",
-  "spacy>=3.7.2",
-  "click>=8.1",  # spacy imports click directly but no longer gets it via typer>=0.26
   "plskit>=0.6.0,<0.7.0",
 ]
 
 [project.optional-dependencies]
+spacy = [
+  "spacy>=3.7.2",
+  "click>=8.1",  # spacy imports click directly but no longer gets it via typer>=0.26
+]
 gensim = [
   "gensim>=4.0",
 ]
@@ -65,6 +67,7 @@ Repository = "https://github.com/hplisiecki/Supervised-Semantic-Differential"
 testpaths = ["tests"]
 filterwarnings = [
   "ignore:Saving as .*normalization and ABTT metadata will be lost.*:UserWarning",
+  "ignore:Loading a .* embedding.*:UserWarning",
 ]
 
 [tool.ruff]
