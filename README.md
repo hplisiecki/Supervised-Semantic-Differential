@@ -120,13 +120,13 @@ For English, `Embeddings.load()` downloads a ready wordpack. For another languag
 
 ### Wordpacks
 
-A wordpack carries its own tokenizer and stopword list, so it needs no spaCy. Load one by short tag or by full name; it is downloaded once into a cache directory and loaded from there. With no argument, `Embeddings.load()` loads `en`:
+A wordpack carries its own tokenizer and stopword list, so it needs no spaCy. Load one by tag or by full name; it is downloaded once into a cache directory and loaded from there. With no argument, `Embeddings.load()` loads the tag `default`, which is the same pack as `en`:
 
 ```python
 from ssdiff import Embeddings, Corpus, SSD
 
-emb = Embeddings.load()                                # the default: same as Embeddings.load("en")
-# emb = Embeddings.load("en-wiki")                     # short tag: the current default for that tag
+emb = Embeddings.load()                                # the default: the same pack as Embeddings.load("en")
+# emb = Embeddings.load("en-wiki")                     # tag
 # emb = Embeddings.load("en-glove2024-dolma-1")        # full name: always this file
 # emb = Embeddings.load("path/to/file.wordpack")       # a file you built yourself
 corpus = Corpus(texts, embeddings=emb)                 # the pack's tokenizer and stopwords
@@ -134,12 +134,12 @@ res = SSD(emb, corpus, y, use_full_doc=True).fit_pls()
 pred = res.predict(new_texts)
 ```
 
-| short tag | full name | use it for |
+| tag | full name | use it for |
 |---|---|---|
-| `en` | `en-glove2024-dolma-1` | informal or recent text: comments, social media, open survey answers, forums |
+| `en`, `en-dolma`, `default` | `en-glove2024-dolma-1` | informal or recent text: comments, social media, open survey answers, forums |
 | `en-wiki` | `en-glove2024-wikigiga-1` | formal text: news, essays, reports, older press |
 
-A full name always means the same file, and it is what `report()` and `corpus.tokenizer` record, so use it in scripts whose results must be reproducible. A short tag follows the published default and can move to a newer pack.
+A full name always means the same file, and it is what `report()` and `corpus.tokenizer` record, so use it in scripts whose results must be reproducible. A tag means the same pack for a given ssdiff version, and a later version can move it to a newer pack. Loading by tag prints one line that names the pack.
 
 Packs are kept in `~/.cache/wordpack` on Linux (`$XDG_CACHE_HOME/wordpack` when that variable is set), `~/Library/Caches/wordpack` on macOS and `%LOCALAPPDATA%\wordpack` on Windows; set `WORDPACK_CACHE` to use another directory. Nothing removes them: delete files there to free space.
 
@@ -628,7 +628,7 @@ from ssdiff.results.multi_pls_result import MultiPLSResult
 
 ### `Embeddings`
 
-- `Embeddings.load(path="en", *, verbose=False, parallel=False)` — load `.wordpack`, `.kv`, `.bin`, `.txt`, `.vec` (and `.gz` variants), or a wordpack by short tag or full name
+- `Embeddings.load(path="default", *, verbose=False, parallel=False)` — load `.wordpack`, `.kv`, `.bin`, `.txt`, `.vec` (and `.gz` variants), or a wordpack by tag or full name
 - `.normalize(l2=True, abtt=1)` — in-place L2 + ABTT (rows L2-normalized again after ABTT); tracks state, safe to call repeatedly
 - `.save(filename=None, fmt="bin")` — save to binary, text, or gensim format
 - `emb["word"]` / `emb.get_vector("word", norm=False)` — vector lookup

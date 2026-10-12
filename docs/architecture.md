@@ -37,7 +37,7 @@ ssdiff/
 ├── ssd.py             — SSD class (doc-vector construction + fit dispatchers)
 ├── embeddings.py      — Embeddings class (load / normalize / save / lookup)
 ├── corpus.py          — Corpus class (spaCy pipeline + suggest/evaluate_lexicon)
-├── lang_config.py     — language → spaCy model mapping (23 languages)
+├── lang_config.py     — wordpack tags, and the language → spaCy model mapping (20 languages)
 ├── py.typed           — PEP 561 marker
 ├── backends/
 │   ├── pls.py         — pls3_rotate — PLS3 varimax rotation, dimension reordering, sign convention
@@ -58,14 +58,17 @@ ssdiff/
 │   ├── report.py             — Report / Section builders + text/md/html/tex/docx/json renderers
 │   ├── format.py             — APA-style numeric formatting primitives (fmt_p, fmt_r, fmt_table, …)
 │   └── display.py            — set_repr_hints, DEFAULT_COLS registry, DEFAULT_MAX_ROWS
-└── utils/
-    ├── math.py         — standardize, PCA, KMeans, f_sf / t_sf / chi2_sf (pure numpy)
-    ├── text.py         — spaCy wrappers, PreprocessedDoc dataclass
-    ├── vectors.py      — SIF-weighted doc-vector construction
-    ├── neighbors.py    — filtered nearest-neighbor lookup + cluster_top_neighbors
-    ├── snippets.py     — snippets_along_beta (context-window extraction)
-    ├── lexicon.py      — suggest_lexicon, coverage_by_lexicon
-    └── diagnostics.py  — progress_hook, runtime counters
+├── utils/
+│   ├── math.py         — standardize, PCA, KMeans, f_sf / t_sf / chi2_sf (pure numpy)
+│   ├── text.py         — spaCy wrappers, PreprocessedDoc dataclass
+│   ├── vectors.py      — SIF-weighted doc-vector construction
+│   ├── neighbors.py    — filtered nearest-neighbor lookup + cluster_top_neighbors
+│   ├── snippets.py     — snippets_along_beta (context-window extraction)
+│   ├── lexicon.py      — suggest_lexicon, coverage_by_lexicon
+│   └── diagnostics.py  — progress_hook, runtime counters
+└── wordpack/
+    ├── reader.py       — WordPack: opens a .wordpack file, tokenizes, reads rows
+    └── fetch.py        — downloads a pack by full name into the cache
 ```
 
 Core runtime deps: **numpy + spaCy**. Gensim is optional (only to write `.kv`; loading `.kv` works via an internal unpickler shim). Matplotlib / pandas / openpyxl / python-docx are behind the `[results]` extra and gated at call sites.

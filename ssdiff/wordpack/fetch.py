@@ -1,4 +1,4 @@
-"""Find a wordpack by short tag or full name: download it once into a cache and return its path."""
+"""Find a wordpack by full name: download it once into a cache and return its path."""
 
 from __future__ import annotations
 
@@ -12,23 +12,23 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
-from ssdiff._wordpack_reader import FORMAT_VERSION
+from ssdiff.lang_config import WORDPACK_TAGS
+from ssdiff.wordpack.reader import FORMAT_VERSION
 
 # Base URLs, tried in order. Every host holds the same files under the same names.
-HOSTS = ["https://opensoftwarelab.s-on.pl/wordpacks"]
+HOSTS = ["https://resources.s-on.pl/wordpacks"]
 
 # A request that fails is sent to the same host this many more times before the next host is tried.
 RETRIES = 2
 
-# A full name is `<name>-<version>` with a whole-number version. Pack names and
-# short tags never end in a hyphen followed only by digits, so that ending
-# tells a full name from a short tag.
+# A full name is `<name>-<version>` with a whole-number version. Pack names
+# never end in a hyphen followed only by digits.
 _FULL_NAME = re.compile(r"([a-z0-9-]+)-([0-9]+)")
 
 
-def is_pack_request(text: str) -> bool:
-    """Whether `text` reads as a pack's full name or short tag rather than as a file path."""
-    return re.fullmatch(r"[a-z0-9-]+", text) is not None
+def is_full_name(text: str) -> bool:
+    """Whether `text` has the shape of a pack's full name."""
+    return _FULL_NAME.fullmatch(text) is not None
 
 
 def cache_dir() -> Path:
@@ -55,73 +55,32 @@ def _open(url: str):
     return urllib.request.urlopen(request, timeout=60)
 
 
-def _failed(request: str, host: str, error: Exception, attempt: int, failures: list[str]) -> None:
+def _failed(full: str, host: str, error: Exception, attempt: int, failures: list[str]) -> None:
     """Say on stderr that `host` is asked again; after its last try, add the failure to `failures` instead."""
     if attempt <= RETRIES:
-        print(f"wordpack {request}: {host} failed ({error}); trying again ({attempt} of {RETRIES})", file=sys.stderr)
+        print(f"wordpack {full}: {host} failed ({error}); trying again ({attempt} of {RETRIES})", file=sys.stderr)
     else:
         failures.append(f"  {host}: {error}")
 
 
-def _check(name: str, data) -> None:
-    """ValueError when `data` does not have the shape of `tags.json` or of `index.json`."""
-    if name == "tags.json":
-        ok = isinstance(data, dict) and all(isinstance(v, str) and _FULL_NAME.fullmatch(v) for v in data.values())
-    else:
-        ok = isinstance(data, dict) and isinstance(data.get("packs"), dict)
-    if not ok:
-        raise ValueError(f"{name} does not have the expected contents")
-
-
-def _fetch_json(name: str, request: str) -> dict:
-    """`name` from the first host whose answer is JSON of the right shape. OSError naming every host when none does."""
+def _index(full: str) -> dict:
+    """`index.json` from the first host that gives it in the right shape. OSError naming every host when none does."""
     failures = []
     for host in HOSTS:
         for attempt in range(1, RETRIES + 2):
             try:
-                with _open(f"{host}/{name}") as response:
-                    data = json.loads(response.read())
-                _check(name, data)
-                return data
+                with _open(f"{host}/index.json") as response:
+                    index = json.loads(response.read())
+                if not isinstance(index, dict) or not isinstance(index.get("packs"), dict):
+                    raise ValueError("index.json does not have the expected contents")
+                return index
             # A connection cut in the middle of an answer raises http.client.IncompleteRead, which is not an OSError.
             except (OSError, http.client.HTTPException, ValueError) as e:
-                _failed(request, host, e, attempt, failures)
+                _failed(full, host, e, attempt, failures)
     raise OSError(
-        f"No file named {request!r}, and it cannot be looked up as a wordpack: "
-        f"no host answered for {name} in {RETRIES + 1} tries each:\n" + "\n".join(failures)
+        f"Wordpack {full!r} is not in the cache ({cache_dir()}) and cannot be downloaded: "
+        f"no host answered for index.json in {RETRIES + 1} tries each:\n" + "\n".join(failures)
     )
-
-
-def _tags(request: str) -> dict:
-    """`tags.json` from a host, with a copy saved in the cache; the cached copy when no host answers."""
-    cached = cache_dir() / "tags.json"
-    try:
-        tags = _fetch_json("tags.json", request)
-    except OSError as e:
-        # A cached copy that cannot be used is the same as none: the error names the hosts.
-        try:
-            tags = json.loads(cached.read_text("utf-8"))
-            _check("tags.json", tags)
-        except (OSError, ValueError):
-            raise e from None
-        return tags
-    # The cached copy only serves a later load when no host answers, so a
-    # cache that cannot be written does not fail this one.
-    try:
-        cached.parent.mkdir(parents=True, exist_ok=True)
-        # A temporary name of its own: several processes may save their copy at once.
-        fd, part = tempfile.mkstemp(dir=cached.parent, suffix=".part")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(tags, f)
-            os.chmod(part, 0o644)  # as in _download
-            os.replace(part, cached)
-        finally:
-            if os.path.exists(part):
-                os.remove(part)
-    except OSError:
-        pass
-    return tags
 
 
 def _download(full: str, entry: dict, dest: Path) -> None:
@@ -166,31 +125,19 @@ def _download(full: str, entry: dict, dest: Path) -> None:
     )
 
 
-def resolve(request: str) -> str:
-    """The path of the cached pack file for a full name or a short tag, downloading the file when it is missing.
+def resolve(full: str) -> str:
+    """The path of the cached pack file for a full name, downloading the file when it is missing.
 
-    A full name that is in the cache makes no network request. A short tag is
-    looked up on a host every time, so a moved tag is followed at the next load.
+    A full name that is in the cache makes no network request.
     """
-    full = request
-    if _FULL_NAME.fullmatch(request) is None:
-        tags = _tags(request)
-        if request not in tags:
-            raise ValueError(f"No file or wordpack named {request!r}. Short tags: {', '.join(sorted(tags))}.")
-        full = tags[request]
-        print(f"wordpack {request}: {full}", file=sys.stderr)
     path = cache_dir() / f"{full}.wordpack"
     if path.exists():
         return str(path)
-    index = _fetch_json("index.json", request)
+    index = _index(full)
     name, version = _FULL_NAME.fullmatch(full).groups()
     pack = index["packs"].get(name)
     if pack is None:
-        try:
-            known = f" Short tags: {', '.join(sorted(_tags(request)))}."
-        except OSError:
-            known = ""
-        raise ValueError(f"No wordpack named {full!r}.{known}")
+        raise ValueError(f"No wordpack named {full!r}. Tags: {', '.join(WORDPACK_TAGS)}.")
     entry = pack["versions"].get(version)
     if entry is None:
         versions = ", ".join(sorted(pack["versions"], key=int))

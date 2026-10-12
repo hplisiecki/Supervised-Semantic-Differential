@@ -445,7 +445,7 @@ def preprocess_texts_wordpack(
     texts : sequence of str or sequence of sequence of str
         Flat texts or profiles, as for :func:`preprocess_texts`.
     pack : WordPack
-        Open pack (``ssdiff._wordpack_reader.WordPack``).
+        Open pack (``ssdiff.wordpack.reader.WordPack``).
     stopwords : sequence of str, optional
         Lowercase stopwords; a token is dropped when its key, lowercased by
         the pack's rule, is in this list.

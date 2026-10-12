@@ -1,11 +1,11 @@
-"""Per-language configuration — single source of truth for the package.
+"""Per-language defaults for the package. Two separate configs live here.
 
-Stores spaCy model defaults, bundled stopword file names, and token-filter
-patterns for each supported language.  Every language-dependent decision in
-ssdiff should read from this module.
+1. Wordpack tags: what ``Embeddings.load("en")`` loads.
+2. spaCy languages: the spaCy model, stopword file and token filter that
+   ``Corpus(texts, lang="pl")`` uses.
 
-# Future: allow users to load custom config (e.g. from a YAML/JSON file)
-# to override defaults without touching library code.
+The two lists are not connected. A wordpack tag is not a spaCy language
+code, and a language listed for spaCy has no wordpack unless a tag names one.
 """
 
 from __future__ import annotations
@@ -14,7 +14,36 @@ import re
 from dataclasses import dataclass, field
 
 # ---------------------------------------------------------------------------
-# Language config dataclass
+# 1. Wordpack tags
+# ---------------------------------------------------------------------------
+
+# tag -> (pack file name on the host, message printed to stderr when the tag is loaded)
+WORDPACK_TAGS: dict[str, tuple[str, str]] = {
+    "default": (
+        "en-glove2024-dolma-1.wordpack",
+        "No embedding named: loading the default English wordpack, en-glove2024-dolma-1 "
+        "(web pages, Reddit, books). For formal text such as news, essays and reports, "
+        'use Embeddings.load("en-wiki").',
+    ),
+    "en": (
+        "en-glove2024-dolma-1.wordpack",
+        "wordpack en: en-glove2024-dolma-1 (web pages, Reddit, books). "
+        'For formal text such as news, essays and reports, use Embeddings.load("en-wiki").',
+    ),
+    "en-dolma": (
+        "en-glove2024-dolma-1.wordpack",
+        "wordpack en-dolma: en-glove2024-dolma-1 (web pages, Reddit, books).",
+    ),
+    "en-wiki": (
+        "en-glove2024-wikigiga-1.wordpack",
+        "wordpack en-wiki: en-glove2024-wikigiga-1 (Wikipedia 2024 and newswire 1994-2010). "
+        'For informal or recent text, use Embeddings.load("en").',
+    ),
+}
+
+
+# ---------------------------------------------------------------------------
+# 2. spaCy languages
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)

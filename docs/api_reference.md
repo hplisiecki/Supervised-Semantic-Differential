@@ -41,12 +41,12 @@ Stores word vectors, handles normalization, persists to disk. [`embeddings.md`](
 ### Load
 
 ```python
-emb = Embeddings.load(path="en", *, verbose=False, parallel=False)
+emb = Embeddings.load(path="default", *, verbose=False, parallel=False)
 ```
 
 | Argument | Type | Default | Description |
 |---|---|---|---|
-| `path` | `str` | `"en"` | Path to the embedding file, or a wordpack's short tag (`"en"`) or full name (`"en-glove2024-dolma-1"`). A name is used when no file exists at that path; the pack is downloaded once into the cache directory (`WORDPACK_CACHE`, or the platform's cache directory under `wordpack`). |
+| `path` | `str` | `"default"` | A wordpack's tag (`"en"`), a path to an embedding file, or a wordpack's full name (`"en-glove2024-dolma-1"`), tried in that order. The tags are listed in `ssdiff.lang_config.WORDPACK_TAGS`. A pack is downloaded once into the cache directory (`WORDPACK_CACHE`, or the platform's cache directory under `wordpack`). A name that matches none of the three raises `FileNotFoundError` listing the tags. |
 | `verbose` | `bool` | `False` | Show a tqdm progress bar when loading `.txt`/`.vec`/`.bin`. |
 | `parallel` | `bool` | `False` | Multiprocess loading for `.txt`/`.vec`. |
 

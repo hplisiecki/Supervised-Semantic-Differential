@@ -7,10 +7,12 @@ import gzip
 import os
 import pickle
 import re
+import sys
 import warnings
 
 import numpy as np
 
+from ssdiff.lang_config import WORDPACK_TAGS
 from ssdiff.utils.math import l2_normalize_rows_inplace
 
 # Rows of a wordpack kept in RAM: the most frequent rows, and the only ones neighbour search sees. It equals
@@ -137,24 +139,33 @@ class Embeddings:
     @classmethod
     def load(
         cls,
-        path: str | os.PathLike = "en",
+        path: str | os.PathLike = "default",
         *,
         verbose: bool = False,
         parallel: bool = False,
     ) -> Embeddings:
-        """Load embeddings from a file, or a wordpack by short tag or full name.
+        """Load embeddings from a file, or a wordpack by tag or full name.
 
         Supports: .wordpack, .kv, .bin, .txt, .vec (and .gz variants of the
         last four). The deprecated .ssdembed format no longer loads.
 
-        When no file exists at ``path`` and it is made of lowercase letters,
-        digits and hyphens, it names a wordpack: a short tag (``"en"``) or a
-        full name (``"en-glove2024-dolma-1"``). The pack is downloaded once
-        into a cache directory (``WORDPACK_CACHE``, or the platform's cache
-        directory under ``wordpack``) and loaded from there. A full name
-        always means the same file and loads offline once it is cached. A
-        short tag is looked up on every load and follows the published
-        default. With no argument, the short tag ``"en"`` is loaded.
+        ``path`` is read in this order:
+
+        1. A string with no dot that is a wordpack tag (``"en"``): the tag's
+           message is printed to stderr and its pack is loaded. The tags are
+           listed in ``ssdiff.lang_config.WORDPACK_TAGS``.
+        2. A path where a file exists: the file is loaded by its extension.
+        3. A string shaped like a wordpack's full name
+           (``"en-glove2024-dolma-1"``): that pack is loaded.
+        4. Anything else raises ``FileNotFoundError`` listing the tags.
+
+        A pack is downloaded once into a cache directory (``WORDPACK_CACHE``,
+        or the platform's cache directory under ``wordpack``) and loaded from
+        there, offline once it is cached. A tag means the same pack for a
+        given ssdiff version; a full name always means the same file. With no
+        argument, the tag ``"default"`` is loaded. A ``pathlib.Path`` is never
+        read as a tag or a full name, and neither is a string with a dot, so
+        ``"./en"`` loads a local file named ``en``.
 
         A ``.wordpack`` passes its self-test, loads at ABTT
         ``m = 1`` with L2-normalised rows, keeps its 50,000 most frequent
@@ -166,8 +177,8 @@ class Embeddings:
 
         Parameters
         ----------
-        path : str or os.PathLike, default "en"
-            A file path, or a wordpack's short tag or full name.
+        path : str or os.PathLike, default "default"
+            A wordpack tag, a file path, or a wordpack's full name.
         verbose : bool, default False
         parallel : bool, default False
 
@@ -175,20 +186,26 @@ class Embeddings:
         -------
         Embeddings
         """
-        path = os.fspath(path)
-        if not os.path.isfile(path):
-            from ssdiff import _wordpack_fetch
+        from ssdiff.wordpack import fetch
 
-            if _wordpack_fetch.is_pack_request(path):
-                return cls._load_wordpack(_wordpack_fetch.resolve(path))
+        is_name = isinstance(path, str) and "." not in path
+        if is_name and path in WORDPACK_TAGS:
+            file, message = WORDPACK_TAGS[path]
+            print(message, file=sys.stderr)
+            return cls._load_wordpack(fetch.resolve(file.removesuffix(".wordpack")))
+        path = os.fspath(path)
         low = path.lower()
-        if low.endswith(".wordpack"):
-            return cls._load_wordpack(path)
         if low.removesuffix(".gz").endswith(".ssdembed"):
             raise ValueError(
                 f"'{path}': the .ssdembed format is deprecated and no longer loads. "
                 "Use a .wordpack, or a raw embedding (.kv, .bin, .txt, .vec)."
             )
+        if not os.path.isfile(path):
+            if is_name and fetch.is_full_name(path):
+                return cls._load_wordpack(fetch.resolve(path))
+            raise FileNotFoundError(f"No wordpack tag or file named {path!r}. Tags: {', '.join(WORDPACK_TAGS)}.")
+        if low.endswith(".wordpack"):
+            return cls._load_wordpack(path)
 
         emb = _load_embeddings(path, verbose=verbose, parallel=parallel)
         fmt = os.path.splitext(low.removesuffix(".gz"))[1] or "non-wordpack"
@@ -210,7 +227,7 @@ class Embeddings:
     @classmethod
     def _load_wordpack(cls, path: str) -> Embeddings:
         """Open a .wordpack. See ``load``."""
-        from ssdiff._wordpack_reader import WordPack
+        from ssdiff.wordpack.reader import WordPack
 
         pack = WordPack(path)
         try:

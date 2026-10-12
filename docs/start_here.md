@@ -12,7 +12,7 @@ This folder holds four tiers of documentation; runnable demos are in [`../exampl
 
 | Read this | When you want to… |
 |---|---|
-| [`embeddings.md`](embeddings.md) | Get embeddings. The ready English packs (`Embeddings.load()`), short tags and full names, where packs are stored, and loading your own embedding file for another language. |
+| [`embeddings.md`](embeddings.md) | Get embeddings. The ready English packs (`Embeddings.load()`), tags and full names, where packs are stored, and loading your own embedding file for another language. |
 | [`api_reference.md`](api_reference.md) | Fit a model. Covers `Embeddings`, `Corpus`, `SSD`, and the fit methods (`fit_ols`, `fit_pls`, `fit_groups`, `fit_multipls`) with argument tables and a full workflow example. Results are only sketched here. |
 | [`../examples/demo_pls.py`](../examples/demo_pls.py) | Runnable example for `fit_pls`. |
 | [`../examples/demo_pcaols.py`](../examples/demo_pcaols.py) | Runnable example for `fit_ols`. |

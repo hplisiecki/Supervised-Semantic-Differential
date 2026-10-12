@@ -17,8 +17,8 @@ import pytest
 
 import ssdiff.embeddings as em
 from ssdiff import SSD, Corpus, Embeddings
-from ssdiff._wordpack_reader import WordPack, WordPackError, read_header
 from ssdiff.utils.text import PreprocessedDoc, PreprocessedProfile
+from ssdiff.wordpack.reader import WordPack, WordPackError, read_header
 from tests.conftest import make_kv
 
 KEYS = [

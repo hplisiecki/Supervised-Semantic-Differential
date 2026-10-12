@@ -11,7 +11,7 @@ For the argument tables of `Embeddings` see [`api_reference.md`](api_reference.m
 ```python
 from ssdiff import Embeddings, Corpus
 
-emb = Embeddings.load()                  # same as Embeddings.load("en")
+emb = Embeddings.load()                  # the same pack as Embeddings.load("en")
 corpus = Corpus(texts, embeddings=emb)   # the pack's own tokenizer and stopwords; no spaCy
 ```
 
@@ -23,9 +23,9 @@ What you get is a **wordpack**: one file with the word vectors, the tokenizer an
 
 ## Choose a pack
 
-| short tag | full name | words | use it for |
+| tag | full name | words | use it for |
 |---|---|---|---|
-| `en` | `en-glove2024-dolma-1` | 1,200,000 | informal or recent text: comments, social media, open survey answers, forums |
+| `en`, `en-dolma`, `default` | `en-glove2024-dolma-1` | 1,200,000 | informal or recent text: comments, social media, open survey answers, forums |
 | `en-wiki` | `en-glove2024-wikigiga-1` | 1,291,146 | formal text: news, essays, reports, older press |
 
 ```python
@@ -36,15 +36,15 @@ Both are GloVe 2024 (Carlson, Bauer & Manning, 2025, arXiv:2507.18103): 300 dime
 
 ---
 
-## Short tag or full name
+## Tag or full name
 
 ```python
-emb = Embeddings.load("en")                     # short tag: the current default for English
+emb = Embeddings.load("en")                     # tag: the English default of this ssdiff version
 emb = Embeddings.load("en-glove2024-dolma-1")   # full name: always this file
 ```
 
 - A **full name** always means the same file. Once the file is in the cache it loads with no internet connection.
-- A **short tag** follows the published default and can move to a newer pack. It is looked up online on every load. With no connection, the last answer is used.
+- A **tag** is a short name that ssdiff ships with. It means the same pack for a given ssdiff version, and a later version can move it to a newer pack. Loading by tag prints one line that names the pack. Once the pack is in the cache it loads with no internet connection.
 
 Use the full name in scripts whose results must be reproducible. A fit records it for you:
 
@@ -54,7 +54,7 @@ corpus.tokenizer         # "wordpack:en-glove2024-dolma-1"
 result.report()          # the "embeddings" row reads en-glove2024-dolma-1
 ```
 
-A name is used only when no file exists at that path. A file called `en` in the working directory is loaded as a file.
+A tag is checked first: `Embeddings.load("en")` loads the pack even when a file called `en` is in the working directory. Write `"./en"` to load that file. A full name is used only when no file exists at that path. A name that is no tag, no file and no full name raises `FileNotFoundError`, and the message lists the tags.
 
 ---
 
