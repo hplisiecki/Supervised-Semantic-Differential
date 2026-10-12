@@ -52,12 +52,12 @@ pip install ssdiff            # wordpacks: Corpus(texts, embeddings=emb)
 pip install ssdiff[spacy]     # spaCy: Corpus(texts, lang=...)
 ```
 
-**Python**: 3.10 – 3.14.
+**Python**: 3.11 – 3.15. The `ssdiff[spacy]` extra installs on 3.11 – 3.14 only, because spaCy 3.8 requires Python < 3.15.
 
 Core dependencies (installed automatically): `numpy`, `plskit`.
 
 Optional extras:
-- `ssdiff[spacy]` — spaCy, needed to tokenize with `Corpus(texts, lang=...)`. Wordpacks need no spaCy (see [Wordpacks](#wordpacks)).
+- `ssdiff[spacy]` — spaCy, needed to tokenize with `Corpus(texts, lang=...)`, `model=...` or `nlp=...`. Wordpacks need no spaCy (see [Wordpacks](#wordpacks)).
 - `ssdiff[results]` — pandas / openpyxl / python-docx / matplotlib for `to_df()`, `.xlsx`/`.docx` export, and `plot_sweep()`.
 - `ssdiff[gensim]` — only needed to *save* embeddings in `.kv` format.
 

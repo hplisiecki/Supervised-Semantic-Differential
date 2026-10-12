@@ -16,7 +16,7 @@ def _fit_and_compare(ssd_instance, *, k_max=3, n_splits=20, seed=0):
     ys = ys.ravel()
     direct = plskit.pls1_confirmatory_test(
         Xs, ys, 1,
-        method="split_exact",
+        test_method="split_exact",
         args={"n_splits": n_splits},
         pre_standardized=True,
         seed=seed,

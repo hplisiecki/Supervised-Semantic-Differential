@@ -1160,7 +1160,7 @@ class PLSTestView(TestView):
             parent.x.astype(float, copy=False),
             parent.y.astype(float, copy=False),
             int(n_comp),
-            method="split_exact",
+            test_method="split_exact",
             args={"n_splits": int(merged["n_splits"])},
             pre_standardized=False,
             seed=merged["seed"],

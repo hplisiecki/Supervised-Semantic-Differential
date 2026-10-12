@@ -14,7 +14,7 @@ def test_fit_pls_auto_kstar1_runs_one_confirmatory(ssd_instance):
     calls = []
 
     def counting_ct(*a, **kw):
-        calls.append(kw.get("method"))
+        calls.append(kw.get("test_method"))
         return real_ct(*a, **kw)
 
     def force_kstar1(*a, **kw):

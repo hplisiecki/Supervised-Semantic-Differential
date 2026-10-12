@@ -239,7 +239,7 @@ class MultiPLSTestView(TestView):
         parent = self._parent
         r = plskit.pls3_confirmatory_test(
             parent._x, parent._y_raw, 1,
-            method="split_exact",
+            test_method="split_exact",
             args={"n_perm": int(merged["n_perm"]),
                   "n_splits": int(merged["n_splits"])},
             pre_standardized_X=False,

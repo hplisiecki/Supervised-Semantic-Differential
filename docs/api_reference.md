@@ -2,8 +2,8 @@
 
 Public API of the `ssdiff` package: main classes, their methods, and arguments.
 
-**Install**: `pip install ssdiff` (core), `pip install ssdiff[spacy]` (spaCy tokenization with `Corpus(texts, lang=...)`), `pip install ssdiff[results]` (pandas/Excel/docx/matplotlib export).
-**Python**: 3.10 – 3.14.
+**Install**: `pip install ssdiff` (core), `pip install ssdiff[spacy]` (spaCy tokenization with `Corpus(texts, lang=...)`, `model=...` or `nlp=...`), `pip install ssdiff[results]` (pandas/Excel/docx/matplotlib export).
+**Python**: 3.11 – 3.15. The `ssdiff[spacy]` extra installs on 3.11 – 3.14 only, because spaCy 3.8 requires Python < 3.15.
 **Imports**: `from ssdiff import Embeddings, Corpus, SSD`.
 
 For choosing and loading embeddings see [`embeddings.md`](embeddings.md).

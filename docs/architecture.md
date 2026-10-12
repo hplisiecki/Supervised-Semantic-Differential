@@ -71,7 +71,7 @@ ssdiff/
     └── fetch.py        — downloads a pack by full name into the cache
 ```
 
-Core runtime deps: **numpy + spaCy**. Gensim is optional (only to write `.kv`; loading `.kv` works via an internal unpickler shim). Matplotlib / pandas / openpyxl / python-docx are behind the `[results]` extra and gated at call sites.
+Core runtime deps: **numpy + plskit**. spaCy is optional (the `[spacy]` extra; needed for `Corpus` tokenization with `lang=`, `model=` or `nlp=`). Gensim is optional (only to write `.kv`; loading `.kv` works via an internal unpickler shim). Matplotlib / pandas / openpyxl / python-docx are behind the `[results]` extra and gated at call sites.
 
 ---
 
@@ -395,7 +395,7 @@ Analytic F-test from OLS in PCA space. Tests the null that all PCA-space regress
 
 ### `fit_pls()` — split_exact
 
-`plskit.pls1_confirmatory_test` with `method="split_exact"`: repeated train/test splits, calibrated against a permutation null. It runs at the fitted `k` (at k=1 when `k="auto"`). `split_nb` is used only in the diagnostic chain that picks `k`.
+`plskit.pls1_confirmatory_test` with `test_method="split_exact"`: repeated train/test splits, calibrated against a permutation null. It runs at the fitted `k` (at k=1 when `k="auto"`). `split_nb` is used only in the diagnostic chain that picks `k`.
 
 `result.test(n_splits=..., seed=...)` reruns it; `PLSTestView` accepts only `split_exact` and raises `TypeError` for other names. `result.stats.pvalue` is propagated by the `_on_rerun` hook.
 
@@ -403,7 +403,7 @@ With `keep` set, `fit_pls()` instead reports the path-max of the `spls1_find_k_s
 
 ### `fit_multipls()` — split_exact at LV1
 
-`plskit.pls3_confirmatory_test` with `method="split_exact"` tests the first latent variable only, on the standardized data. The statistic is the held-out LV1 correlation. The p-value does not depend on `rotate`, so it lives on the container; leaves carry none. `result.test(n_splits=..., n_perm=..., seed=...)` reruns it on the raw `x` and `y`.
+`plskit.pls3_confirmatory_test` with `test_method="split_exact"` tests the first latent variable only, on the standardized data. The statistic is the held-out LV1 correlation. The p-value does not depend on `rotate`, so it lives on the container; leaves carry none. `result.test(n_splits=..., n_perm=..., seed=...)` reruns it on the raw `x` and `y`.
 
 ### `fit_groups()` — permutation omnibus + pairwise
 

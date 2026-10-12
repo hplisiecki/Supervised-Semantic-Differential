@@ -419,7 +419,7 @@ class SSD:
                     )
                 r = plskit.pls1_confirmatory_test(
                     Xs, ys, 1,
-                    method="split_exact",
+                    test_method="split_exact",
                     args={"n_splits": int(n_splits)},
                     pre_standardized=True,
                     seed=random_state,
@@ -443,7 +443,7 @@ class SSD:
                 if test:
                     r = plskit.pls1_confirmatory_test(
                         Xs, ys, n_comp,
-                        method="split_exact",
+                        test_method="split_exact",
                         args={"n_splits": int(n_splits)},
                         pre_standardized=True,
                         seed=random_state,
@@ -749,7 +749,7 @@ class SSD:
             )
         r = plskit.pls3_confirmatory_test(
             Xs, Ys, 1,
-            method="split_exact",
+            test_method="split_exact",
             args={"n_perm": int(n_perm), "n_splits": int(n_splits)},
             seed=random_state,
             verbose=verbose,
