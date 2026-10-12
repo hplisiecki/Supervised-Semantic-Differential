@@ -9,6 +9,7 @@ import pytest
 from scipy.stats import pointbiserialr
 
 from ssdiff.corpus import Corpus
+from ssdiff.embeddings import Embeddings
 from ssdiff.utils.lexicon import (
     _as_float_array,
     _chi2_pvalue,
@@ -240,6 +241,152 @@ def test_suggest_lexicon_tokens_list_not_empty(sample_docs, sample_y):
     assert all(isinstance(t, str) for t in result.tokens)
 
 
+def test_suggest_lexicon_without_seeds_returns_the_rank_table():
+    # y = 1..4 falls in two bins. "a" is in every document: corr 0, balanced
+    # coverage 1. "c" is in one document of each bin: corr 0, balanced
+    # coverage 0.5. "b" is in documents 0 and 2: corr -0.447, past corr_cap.
+    corpus = Corpus([["a", "b", "c"], ["a"], ["a", "b"], ["a", "c"]], pretokenized=True)
+    lex = corpus.suggest_lexicon([1.0, 2.0, 3.0, 4.0], min_docs=1, n_bins=2)
+    assert lex.suggestions.columns == (
+        "token", "freq", "cov_all", "cov_bal", "corr", "pvalue", "direction", "rank",
+    )
+    rows = lex.suggestions.to_records(cols=["token", "freq", "rank"])
+    assert [r[:2] for r in rows] == [("a", 4), ("c", 2), ("b", 2)]
+    assert [r[2] for r in rows] == pytest.approx([1.0, 0.5, 0.0])
+
+
+# ---------------------------------------------------------------------------
+# Corpus.suggest_lexicon with seeds
+# ---------------------------------------------------------------------------
+
+# "zebra" is not in the embedding, "cating" is in one document only, and
+# "cated" is in the embedding but in no document.
+SEED_DOCS = [
+    ["cat", "cats", "kitten", "feline", "pet", "dog", "zebra"],
+    ["cat", "cats", "kitten", "feline", "pet", "dog", "zebra"],
+    ["cating", "kitten"],
+    ["feline"],
+]
+SEED_Y = [1.0, 2.0, 3.0, 4.0]
+
+
+def _angle_embeddings() -> Embeddings:
+    """2-D vectors at known angles (degrees), all of length 3."""
+    angles = {
+        "cat": 0, "cated": 4, "cating": 5, "kitten": 10, "feline": 20,
+        "pet": 45, "cats": 60, "dog": 90,
+    }
+    rad = np.deg2rad(list(angles.values()))
+    mat = (3.0 * np.stack([np.cos(rad), np.sin(rad)], axis=1)).astype(np.float32)
+    return Embeddings(list(angles), mat)
+
+
+def _suggest_with_seeds(seeds, *, top_k, min_docs=2):
+    corpus = Corpus(SEED_DOCS, pretokenized=True)
+    return corpus.suggest_lexicon(
+        SEED_Y, seeds=seeds, embeddings=_angle_embeddings(), top_k=top_k, min_docs=min_docs,
+    )
+
+
+def test_seed_rows_are_in_cosine_order_with_the_seed_first():
+    rows = list(_suggest_with_seeds(["dog"], top_k=10).suggestions)
+    assert [r.token for r in rows] == ["dog", "cats", "pet", "feline", "kitten", "cat"]
+    assert [r.seed for r in rows] == ["dog"] * 6
+    np.testing.assert_allclose(
+        [r.cos for r in rows], np.cos(np.deg2rad([0, 30, 45, 70, 80, 90])), atol=1e-6,
+    )
+
+
+def test_seed_ending_outside_top_k_is_listed():
+    # "pet" is closer to "cat" than "cats" is, and is the third neighbour.
+    lex = _suggest_with_seeds(["cat"], top_k=2)
+    assert [r.token for r in lex.suggestions] == ["cat", "kitten", "feline", "cats"]
+
+
+def test_seed_ending_absent_from_corpus_or_below_min_docs_is_not_listed():
+    lex = _suggest_with_seeds(["cat"], top_k=10)
+    assert "cats" in lex.tokens
+    assert "cated" not in lex.tokens
+    assert "cating" not in lex.tokens
+
+
+def test_seeded_result_with_no_rows_keeps_the_seed_columns():
+    # No token is in 50 documents, so nothing is listed.
+    lex = _suggest_with_seeds(["cat"], top_k=10, min_docs=50)
+    assert len(lex.suggestions) == 0
+    assert lex.suggestions.columns[:3] == ("seed", "token", "cos")
+
+
+@pytest.mark.parametrize("seed, expected", [
+    ("bake", ["bake", "baked", "baking", "bakes"]),
+    ("try", ["try", "tried", "tries", "trying"]),
+    ("box", ["box", "boxed", "boxes"]),
+])
+def test_seed_endings_are_listed_in_cosine_order(seed, expected):
+    # Each list is in angle order from its seed; top_k=0 leaves only the
+    # seed and its endings.
+    angles = {
+        "bake": 0, "baked": 10, "baking": 20, "bakes": 30,
+        "try": 90, "tried": 100, "tries": 110, "trying": 120,
+        "box": 200, "boxed": 210, "boxes": 220,
+    }
+    rad = np.deg2rad(list(angles.values()))
+    emb = Embeddings(list(angles), np.stack([np.cos(rad), np.sin(rad)], axis=1).astype(np.float32))
+    corpus = Corpus([list(angles)] * 2, pretokenized=True)
+    lex = corpus.suggest_lexicon([1.0, 2.0], seeds=[seed], embeddings=emb, top_k=0, min_docs=2)
+    assert [r.token for r in lex.suggestions] == expected
+
+
+def test_token_listed_for_two_seeds_has_one_row_with_the_higher_cosine():
+    # "cats" is 60 degrees from "cat" and 30 degrees from "dog".
+    lex = _suggest_with_seeds(["cat", "dog"], top_k=10)
+    assert lex.tokens == ["cat", "dog", "kitten", "feline", "cats", "pet"]
+    assert len(lex.suggestions) == lex.stats.n_tokens == 6
+    by_token = {r.token: r for r in lex.suggestions}
+    assert by_token["cats"].seed == "dog"
+    assert by_token["cats"].cos == pytest.approx(np.cos(np.deg2rad(30)), abs=1e-6)
+    assert by_token["kitten"].seed == "cat"
+
+
+def test_seeds_with_the_same_vector_each_have_their_own_row():
+    emb = Embeddings(["colour", "color"], np.array([[1.0, 0.0], [1.0, 0.0]], dtype=np.float32))
+    corpus = Corpus([["colour", "color"]] * 2, pretokenized=True)
+    lex = corpus.suggest_lexicon(
+        [1.0, 2.0], seeds=["colour", "color"], embeddings=emb, top_k=5, min_docs=2,
+    )
+    assert lex.suggestions.to_records(cols=["seed", "token"]) == [
+        ("colour", "colour"), ("color", "color"),
+    ]
+
+
+def test_a_repeated_seed_gives_the_table_of_the_seed_given_once():
+    once = _suggest_with_seeds(["cat"], top_k=10)
+    twice = _suggest_with_seeds(["cat", "cat"], top_k=10)
+    assert twice.suggestions.to_records(cols=["seed", "token", "cos"]) == (
+        once.suggestions.to_records(cols=["seed", "token", "cos"])
+    )
+
+
+@pytest.mark.parametrize("kwargs, error, match", [
+    ({"seeds": "cat", "embeddings": _angle_embeddings()}, TypeError, "single string"),
+    ({"seeds": [], "embeddings": _angle_embeddings()}, ValueError, "seeds is empty"),
+    ({"seeds": ["cat"]}, ValueError, "needs embeddings"),
+    ({"embeddings": _angle_embeddings()}, ValueError, "only used with seeds"),
+    ({"seeds": ["cat", "nope", "nada"], "embeddings": _angle_embeddings()},
+     ValueError, "nope.*nada"),
+])
+def test_suggest_lexicon_seed_argument_errors(kwargs, error, match):
+    corpus = Corpus(SEED_DOCS, pretokenized=True)
+    with pytest.raises(error, match=match):
+        corpus.suggest_lexicon(SEED_Y, **kwargs)
+
+
+def test_suggest_lexicon_seeds_reject_a_corpus_tokenized_for_other_embeddings(wordpack_path):
+    corpus = Corpus(["I like the dog."] * 4, embeddings=Embeddings.load(wordpack_path))
+    with pytest.raises(ValueError, match="not a wordpack"):
+        corpus.suggest_lexicon(SEED_Y, seeds=["dog"], embeddings=_angle_embeddings())
+
+
 # ---------------------------------------------------------------------------
 # Corpus.token_stats
 # ---------------------------------------------------------------------------
@@ -327,6 +474,12 @@ def test_evaluate_lexicon_empty_lexicon_graceful(sample_docs, sample_y):
     # cov_all=0 since no tokens; docs_any=0
     assert result.summary.docs_any == 0
     assert result.summary.cov_all == 0.0
+
+
+def test_evaluate_lexicon_counts_a_repeated_token_once(sample_docs, sample_y):
+    corpus = Corpus(sample_docs, pretokenized=True, lang="pl")
+    result = corpus.evaluate_lexicon(sample_y, ["kraj", "kraj", "narod"])
+    assert result.stats.n_tokens == len(result.tokens) == len(result.suggestions) == 2
 
 
 def test_evaluate_lexicon_summary_matches_coverage_summary(sample_docs, sample_y):

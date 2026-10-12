@@ -253,13 +253,15 @@ Returned by `Corpus.suggest_lexicon(...)` or `.evaluate_lexicon(...)`.
 | View | Columns |
 |---|---|
 | `.stats` | `var_type`, `n_docs`, `n_tokens` |
-| `.suggestions` | `token`, `freq`, `cov_all`, `cov_bal`, `corr`, `pvalue`, `direction`, `rank` |
-| `.tokens` | `list[str]` — suggestion tokens in rank order |
+| `.suggestions` | `token`, `freq`, `cov_all`, `cov_bal`, `corr`, `pvalue`, `direction`, `rank`. From `suggest_lexicon(seeds=...)`: `seed` first and `cos` after `token` |
+| `.tokens` | `list[str]` — each suggestion token once, in table order |
 | `.summary` | Only from `evaluate_lexicon`: `docs_any`, `cov_all`, `q1`, `q4`, `corr_any`, `hits_mean/median`, `types_mean/median`, `group_cov` |
 
 ```python
 lex.report(top={"n": 20}).save("lexicon.md")
 ```
+
+With seeds, `.suggestions` is one table for all seeds, highest cosine first: `seed` is the seed the token is closest to and `cos` the cosine to it. Printing `lex.suggestions` shows the first 20 rows; `lex.suggestions[:]` prints all of them. A lexicon matches exact tokens, so plural forms must be listed.
 
 ---
 
@@ -473,7 +475,8 @@ Snippet      snippet_id, side, doc_id, cosine, seed,
 Doc          doc_id, y_true, y_hat, residual, alignment_score
 Pair         contrast, g1, g2, T, p_raw, p_corrected, cohens_d,
              n_g1, n_g2, contrast_norm
-Suggestion   token, freq, cov_all, cov_bal, corr, pvalue, direction, rank
+Suggestion   token, freq, cov_all, cov_bal, corr, pvalue, direction, rank,
+             seed, cos
 Outcome      outcome, group, loading
 ```
 

@@ -201,16 +201,23 @@ class Corpus:
         self,
         y,
         *,
+        seeds: Sequence[str] | None = None,
+        embeddings=None,
         top_k: int = 30,
         min_docs: int = 5,
         n_bins: int = 4,
         corr_cap: float = 0.30,
         var_type: str = "continuous",
     ):
-        """Suggest seed words ranked by balanced coverage.
+        """Suggest seed words: ranked by balanced coverage, or close to *seeds*.
 
         Uses the lemmatized tokens on this Corpus instance — no
         re-tokenization, consistent with what SSD will consume.
+
+        With *seeds*, lists the corpus tokens closest to the seeds by cosine
+        in *embeddings*, so that the forms and related words that occur in
+        the text can be picked for the lexicon. A lexicon matches exact
+        tokens, so a plural or other form counts only when it is listed.
 
         Parameters
         ----------
@@ -218,8 +225,14 @@ class Corpus:
             Outcome variable (numeric for continuous, labels for
             categorical).  Must have the same length as ``self.docs``;
             invalid entries (NaN / None) are filtered automatically.
+        seeds : sequence of str or None
+            Seed words; each must be a key of *embeddings*. A seed need not
+            occur in the corpus.
+        embeddings : Embeddings or None
+            Embeddings the cosines are taken in. Required with *seeds*.
         top_k : int, default 30
-            Maximum number of candidate tokens to return.
+            Maximum number of candidate tokens to return. With *seeds*, the
+            number of neighbours listed per seed.
         min_docs : int, default 5
             Minimum document frequency for a token to be considered.
         n_bins : int, default 4
@@ -232,32 +245,83 @@ class Corpus:
         Returns
         -------
         LexiconResult
-            Per-token rows sorted by descending rank.
+            Per-token rows sorted by descending rank. With *seeds*, the rows
+            are each seed, its *top_k* closest tokens, and the seed with an
+            English ending (``-s``, ``-ed``, ``-ing``, ...), in one table
+            sorted by descending cosine. A token listed for several seeds has
+            one row, with the seed it is closest to. Only tokens in at least
+            *min_docs* documents and in *embeddings* are listed.
+
+        Raises
+        ------
+        TypeError
+            If *seeds* is a single string rather than a sequence of seeds.
+        ValueError
+            If *seeds* is empty; if only one of *seeds* and *embeddings* is
+            given; if a seed is not a key of *embeddings*; if the corpus was
+            not tokenized for *embeddings*.
         """
         from ssdiff.results.lexicon_result import LexiconResult
         from ssdiff.results.schema import Suggestion
 
-        from .utils.lexicon import _filter_y, _rank_tokens, _token_sets
+        from .utils.lexicon import _filter_y, _rank_tokens, _seed_neighbours, _token_sets
+
+        if seeds is None:
+            if embeddings is not None:
+                raise ValueError("embeddings= is only used with seeds=.")
+        else:
+            if isinstance(seeds, str):
+                # Iterating a str would make one seed per character.
+                raise TypeError("seeds is a single string; pass a list of seeds, e.g. [seed].")
+            seeds = list(seeds)
+            if not seeds:
+                raise ValueError("seeds is empty; pass at least one seed word.")
+            if embeddings is None:
+                raise ValueError(
+                    "seeds= needs embeddings=: the tokens listed for a seed are "
+                    "its neighbours in the embedding."
+                )
+            _check_tokenizer(embeddings, self)
+            missing = [s for s in seeds if s not in embeddings]
+            if missing:
+                raise ValueError(f"These seeds are not in the embeddings: {missing}")
 
         docs, y_clean = _filter_y(self.docs, y, var_type=var_type)
         token_sets = _token_sets(docs)
-        raw_rows = _rank_tokens(
-            token_sets, y_clean,
-            top_k=top_k, min_docs=min_docs, n_bins=n_bins,
-            corr_cap=corr_cap, var_type=var_type,
-        )
-        suggestions = [
-            Suggestion(
-                rank=r["rank"], token=r["token"], freq=r["freq"],
-                cov_all=r["cov_all"], cov_bal=r["cov_bal"],
-                corr=r["corr"], pvalue=r["pvalue"], direction=r["direction"],
+        if seeds is None:
+            raw_rows = _rank_tokens(
+                token_sets, y_clean,
+                top_k=top_k, min_docs=min_docs, n_bins=n_bins,
+                corr_cap=corr_cap, var_type=var_type,
             )
-            for r in raw_rows
-        ]
+            suggestions = [
+                Suggestion(
+                    rank=r["rank"], token=r["token"], freq=r["freq"],
+                    cov_all=r["cov_all"], cov_bal=r["cov_bal"],
+                    corr=r["corr"], pvalue=r["pvalue"], direction=r["direction"],
+                )
+                for r in raw_rows
+            ]
+        else:
+            listed = _seed_neighbours(
+                token_sets, embeddings.with_corpus(self), seeds,
+                top_k=top_k, min_docs=min_docs,
+            )
+            stats = {
+                r["token"]: r
+                for r in self.token_stats(
+                    y, [token for _, token, _ in listed],
+                    n_bins=n_bins, corr_cap=corr_cap, var_type=var_type,
+                )
+            }
+            suggestions = [
+                Suggestion(**stats[token], seed=seed, cos=cos)
+                for seed, token, cos in listed
+            ]
         return LexiconResult(
             var_type=var_type, n_docs=len(docs),
             n_tokens=len(suggestions), suggestions=suggestions,
-            summary=None, corpus=self,
+            summary=None, seeded=seeds is not None, corpus=self,
         )
 
     def token_stats(
@@ -478,7 +542,7 @@ class Corpus:
         y : array-like
             Outcome variable (same length as ``self.docs``).
         lexicon : iterable of str
-            Tokens to evaluate.
+            Tokens to evaluate; a repeated token is evaluated once.
         n_bins, corr_cap, var_type :
             Passed to both ``token_stats`` and ``coverage_summary``.
 
@@ -492,6 +556,7 @@ class Corpus:
 
         from .utils.lexicon import _filter_y
 
+        lexicon = list(dict.fromkeys(lexicon))
         docs, _ = _filter_y(self.docs, y, var_type=var_type)
         raw_rows = self.token_stats(
             y, lexicon, n_bins=n_bins, corr_cap=corr_cap,

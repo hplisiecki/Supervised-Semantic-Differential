@@ -9,6 +9,25 @@ from __future__ import annotations
 from dataclasses import MISSING, dataclass, fields
 
 
+def _setstate_filling_defaults(self, state):
+    """``__setstate__`` for a row class that gained trailing fields with defaults.
+
+    A pickle written before those fields existed has fewer state entries than
+    the class has fields; the missing tail takes the field defaults.
+    """
+    for i, f in enumerate(fields(self)):
+        if i < len(state):
+            object.__setattr__(self, f.name, state[i])
+        elif f.default is not MISSING:
+            object.__setattr__(self, f.name, f.default)
+        elif f.default_factory is not MISSING:
+            object.__setattr__(self, f.name, f.default_factory())
+        else:
+            raise TypeError(
+                f"Cannot unpickle {type(self).__name__}: state missing required field {f.name!r}"
+            )
+
+
 @dataclass(frozen=True, slots=True)
 class Word:
     """Single nearest-neighbor word ranked by cosine similarity to β.
@@ -77,21 +96,7 @@ class Cluster:
     top_words: str = ""
     top_snippet: str = ""
 
-    def __setstate__(self, state):
-        # Old pickles (predating top_words/top_snippet) have fewer state
-        # entries than current fields; fill the tail with field defaults.
-        flds = fields(self)
-        for i, f in enumerate(flds):
-            if i < len(state):
-                object.__setattr__(self, f.name, state[i])
-            elif f.default is not MISSING:
-                object.__setattr__(self, f.name, f.default)
-            elif f.default_factory is not MISSING:
-                object.__setattr__(self, f.name, f.default_factory())
-            else:
-                raise TypeError(
-                    f"Cannot unpickle Cluster: state missing required field {f.name!r}"
-                )
+    __setstate__ = _setstate_filling_defaults
 
 
 @dataclass(frozen=True, slots=True)
@@ -253,6 +258,12 @@ class Suggestion:
     rank : float
         Combined ranking score: balanced coverage × (1 − |corr| / corr_cap).
         Lower is better.
+    seed : str or None
+        Of the seeds that list this token, the one it is closest to;
+        ``None`` without seeds.
+    cos : float or None
+        Cosine between the token's and that seed's embedding vectors;
+        ``None`` without seeds.
     """
     token: str
     freq: int
@@ -262,6 +273,10 @@ class Suggestion:
     pvalue: float
     direction: str          # "positive", "negative", "none"
     rank: float             # balanced coverage × (1 − |corr|/corr_cap)
+    seed: str | None = None
+    cos: float | None = None
+
+    __setstate__ = _setstate_filling_defaults
 
 
 @dataclass(frozen=True, slots=True)

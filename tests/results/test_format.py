@@ -317,6 +317,52 @@ def test_lexicon_result_repr():
 
 
 # ---------------------------------------------------------------------------
+# Suggestions of a LexiconResult with seeds
+# ---------------------------------------------------------------------------
+
+def _seeded_suggestions(n_rows: int):
+    from ssdiff.results.lexicon_result import LexiconResult
+    from ssdiff.results.schema import Suggestion
+
+    suggestions = [
+        Suggestion(
+            token=f"tok_{i}", freq=10, cov_all=0.8, cov_bal=0.7, corr=0.5,
+            pvalue=0.01, direction="positive", rank=0.9, seed="kraj", cos=1.0 - i / 100,
+        )
+        for i in range(n_rows)
+    ]
+    lr = LexiconResult(
+        var_type="continuous", n_docs=100, n_tokens=n_rows, suggestions=suggestions,
+        seeded=True,
+    )
+    return lr.suggestions
+
+
+def test_seeded_suggestions_print_seed_first_and_cos_after_token():
+    view = _seeded_suggestions(3)
+    assert view.columns == (
+        "seed", "token", "cos", "freq", "cov_all", "cov_bal", "corr", "pvalue",
+        "direction", "rank",
+    )
+    header = view.to_text().splitlines()[0].split()
+    assert header == ["seed", "rank", "token", "cos", "freq", "corr", "pvalue", "direction"]
+
+
+def test_seeded_suggestions_slice_prints_every_row_with_the_seed_column():
+    view = _seeded_suggestions(25)
+    assert "... 5 more rows" in view.to_text()
+    lines = view[:].to_text().splitlines()
+    assert lines[0].split()[0] == "seed"
+    assert "tok_24" in lines[-1]
+
+
+def test_seeded_suggestions_save_to_lexicon_suggestions_csv(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _seeded_suggestions(3).save()
+    assert (tmp_path / "lexicon_suggestions.csv").exists()
+
+
+# ---------------------------------------------------------------------------
 # View save-hint sanity: WordsView, DocsView, SnippetsView, ClustersView
 # ---------------------------------------------------------------------------
 

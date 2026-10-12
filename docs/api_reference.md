@@ -134,8 +134,8 @@ Supported languages out of the box: ca, da, de, el, en, es, fr, hr, it, lt, mk, 
 Both return a `LexiconResult` (see [`results.md`](results.md)).
 
 ```python
-corpus.suggest_lexicon(y, *, top_k=30, min_docs=5, n_bins=4,
-                       corr_cap=0.30, var_type="continuous")
+corpus.suggest_lexicon(y, *, seeds=None, embeddings=None, top_k=30, min_docs=5,
+                       n_bins=4, corr_cap=0.30, var_type="continuous")
 
 corpus.evaluate_lexicon(y, lexicon, *, n_bins=4, corr_cap=0.30,
                         var_type="continuous")
@@ -143,11 +143,20 @@ corpus.evaluate_lexicon(y, lexicon, *, n_bins=4, corr_cap=0.30,
 
 `suggest_lexicon` ranks corpus tokens for use as seeds; `evaluate_lexicon` scores an existing lexicon, returning per-token diagnostics (`.suggestions`) and aggregate coverage (`.summary`).
 
+With `seeds`, `suggest_lexicon` lists each seed, its `top_k` closest corpus tokens, and the seed with an English ending (`-s`, `-es`, `-d`, `-ed`, `-ing`, `-ies`, `-ied`), in one table sorted by cosine. A token listed for several seeds has one row, with the seed it is closest to and the cosine to that seed. Only tokens in at least `min_docs` documents and in `embeddings` are listed. A lexicon matches exact tokens, so plural forms must be listed.
+
+```python
+lex = corpus.suggest_lexicon(y, seeds=["immigrant", "muslim"], embeddings=emb)
+ssd = SSD(emb, corpus, y, lexicon=["immigrant", "immigrants", "muslim", "muslims"])
+```
+
 | Argument | Type | Default | Description |
 |---|---|---|---|
 | `y` | array-like | — | Outcome aligned with `corpus.docs`. NaN / `None` filtered. |
 | `lexicon` | iterable[str] | — | Tokens to score (`evaluate_lexicon`). |
-| `top_k` | `int` | `30` | Maximum candidates to return (`suggest_lexicon`). |
+| `seeds` | sequence[str] | `None` | Seed words, each a key of `embeddings` (`suggest_lexicon`). |
+| `embeddings` | `Embeddings` | `None` | Embeddings the cosines are taken in; required with `seeds`. |
+| `top_k` | `int` | `30` | Maximum candidates to return (`suggest_lexicon`). With `seeds`, neighbours listed per seed. |
 | `min_docs` | `int` | `5` | Minimum document frequency (`suggest_lexicon`). |
 | `n_bins` | `int` | `4` | Quantile bins for balanced coverage (continuous). |
 | `corr_cap` | `float` | `0.30` | Cap applied to `|corr|` in the rank penalty. |
@@ -347,7 +356,7 @@ r.save("report.md") # .md .txt .html .tex .docx .json
 
 ```python
 lex = corpus.suggest_lexicon(scores, top_k=30)
-lex.tokens           # list[str] — ranked tokens, ready to pass back to SSD
+lex.tokens           # list[str] — suggested tokens in table order, ready to pass back to SSD
 lex.suggestions      # per-token table
 lex.report().save("lexicon.md")
 

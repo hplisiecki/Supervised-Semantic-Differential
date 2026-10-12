@@ -71,8 +71,17 @@ class SuggestionsView(View[Suggestion]):
 
     def __getitem__(self, i):
         if isinstance(i, slice):
-            return SuggestionsView(self._rows[i], _no_trunc=True)
+            return type(self)(self._rows[i], _no_trunc=True)
         return self._rows[i]
+
+
+class SeedSuggestionsView(SuggestionsView):
+    """Suggestions found from seeds: each token with its closest seed, highest cosine first."""
+
+    _columns = (
+        "seed", "token", "cos", "freq", "cov_all", "cov_bal", "corr", "pvalue",
+        "direction", "rank",
+    )
 
 
 # ---------- LexiconResult ----------
@@ -85,11 +94,12 @@ class LexiconResult(Result):
     stats : LexiconStatsView
         ScalarView exposing var_type, n_docs, n_tokens.
     suggestions : SuggestionsView
-        View of Suggestion rows in rank order.
+        View of Suggestion rows. A SeedSuggestionsView, with the ``seed`` and
+        ``cos`` columns, when suggest_lexicon was given seeds.
     summary : SummaryView or None
         Aggregate coverage (present only after evaluate_lexicon).
     tokens : list[str]
-        Token strings in rank order.
+        Each suggested token once, in table order.
     """
 
     def __init__(
@@ -100,6 +110,7 @@ class LexiconResult(Result):
         n_tokens: int,
         suggestions: list[Suggestion],
         summary: Summary | None = None,
+        seeded: bool = False,
         corpus=None,
     ):
         super().__init__()
@@ -108,14 +119,14 @@ class LexiconResult(Result):
         self.stats = LexiconStatsView(
             var_type=var_type, n_docs=n_docs, n_tokens=n_tokens,
         )
-        self.suggestions = SuggestionsView(suggestions)
+        self.suggestions = (SeedSuggestionsView if seeded else SuggestionsView)(suggestions)
         self.summary = SummaryView(summary) if summary is not None else None
 
     # -------- convenience property ----------------------------------------
 
     @property
     def tokens(self) -> list[str]:
-        """Token strings in rank order."""
+        """Each suggested token once, in table order."""
         return [s.token for s in self.suggestions]
 
     _access = (
@@ -172,9 +183,10 @@ class LexiconResult(Result):
         # Suggestions table
         if top_cfg:
             n_top = top_cfg["n"]
+            seeded = isinstance(self.suggestions, SeedSuggestionsView)
             rows = []
             for sug in list(self.suggestions)[:n_top]:
-                rows.append([
+                row = [
                     sug.token,
                     fmt_count(sug.freq),
                     fmt_pct(sug.cov_all),
@@ -183,14 +195,25 @@ class LexiconResult(Result):
                     fmt_p(sug.pvalue),
                     sug.direction,
                     fmt_r(sug.rank),
-                ])
+                ]
+                if seeded:
+                    row[1:1] = [fmt_r(sug.cos)]
+                    row.insert(0, sug.seed)
+                rows.append(row)
+            headers = ["token", "freq", "cov_all", "cov_bal", "corr", "pvalue", "dir", "rank"]
+            numeric = [False, True, True, True, True, True, False, True]
+            if seeded:
+                headers[1:1] = ["cos"]
+                headers.insert(0, "seed")
+                numeric[1:1] = [True]
+                numeric.insert(0, False)
             if rows:
                 sections.append(Section(
                     title=f"Suggestions (top {min(n_top, len(rows))})",
                     kind="table",
-                    headers=["token", "freq", "cov_all", "cov_bal", "corr", "pvalue", "dir", "rank"],
+                    headers=headers,
                     rows=rows,
-                    numeric=[False, True, True, True, True, True, False, True],
+                    numeric=numeric,
                 ))
 
         # Summary section (only when evaluate_lexicon built the result)

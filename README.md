@@ -233,10 +233,28 @@ print(result)                      # tabular view
 ssd = SSD(emb, corpus, y, lexicon=result.tokens)
 ```
 
+With `seeds`, it lists the corpus tokens closest to the seeds in the embedding instead, so you can see which forms and related words occur in your texts and choose the ones that go into the lexicon:
+
+```python
+emb = Embeddings.load("en")
+corpus = Corpus(texts, embeddings=emb)
+
+lex = corpus.suggest_lexicon(y, seeds=["immigrant", "muslim"], embeddings=emb)
+lex.suggestions        # one table for all seeds, highest cosine first
+lex.suggestions[:]     # every row (printing shows the first 20)
+lex.tokens             # the listed tokens, in table order
+
+ssd = SSD(emb, corpus, y, lexicon=["immigrant", "immigrants", "muslim", "muslims"])
+```
+
+Each seed lists itself, its `top_k` closest corpus tokens by cosine, and the seed with an English ending (`-s`, `-es`, `-d`, `-ed`, `-ing`, `-ies`, `-ied`). A token listed for several seeds has one row, with the seed it is closest to and the cosine to that seed. Only tokens in at least `min_docs` documents and in the embedding are listed. A lexicon matches exact tokens: `immigrant` does not count `immigrants`, so plural forms must be listed.
+
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
 | `y` | `array-like` | — | Outcome variable (numeric or categorical) |
-| `top_k` | `int` | `30` | Maximum number of words to return |
+| `seeds` | `sequence[str]` | `None` | Seed words; each must be in `embeddings` |
+| `embeddings` | `Embeddings` | `None` | Embeddings the cosines are taken in; required with `seeds` |
+| `top_k` | `int` | `30` | Maximum number of words to return; with `seeds`, neighbours listed per seed |
 | `min_docs` | `int` | `5` | Minimum document frequency |
 | `n_bins` | `int` | `4` | Quantile bins for balanced coverage |
 | `corr_cap` | `float` | `0.30` | Penalty threshold for outcome association |
@@ -643,7 +661,7 @@ from ssdiff.results.multi_pls_result import MultiPLSResult
 - `.docs` — lemmatized tokens per document
 - `.pre_docs` — sentence-level structure for snippet extraction
 - `.n_texts` — number of documents
-- `.suggest_lexicon(y, *, top_k=30, ...)` -> `LexiconResult` — data-driven seed word selection
+- `.suggest_lexicon(y, *, seeds=None, embeddings=None, top_k=30, ...)` -> `LexiconResult` — data-driven seed word selection; with `seeds`, the corpus tokens closest to the seeds
 - `.evaluate_lexicon(y, lexicon, ...)` -> `LexiconResult` — score an existing lexicon (per-token + aggregate)
 
 ### `SSD`

@@ -409,6 +409,50 @@ def test_lexicon_report_to_text_contains_token_names():
 
 
 # ---------------------------------------------------------------------------
+# LexiconResult with seeds: report()
+# ---------------------------------------------------------------------------
+
+def _make_seeded_lexicon_result() -> LexiconResult:
+    """Six tokens of two seeds in one table, highest cosine first."""
+    rows = [
+        ("one", "one_a", 1.0), ("two", "two_a", 1.0), ("one", "one_b", 0.8),
+        ("two", "two_b", 0.7), ("one", "one_c", 0.6), ("two", "two_c", 0.5),
+    ]
+    suggestions = [
+        Suggestion(token=token, freq=5, cov_all=0.3, cov_bal=0.2, corr=0.1,
+                   pvalue=0.5, direction="none", rank=0.2, seed=seed, cos=cos)
+        for seed, token, cos in rows
+    ]
+    return LexiconResult(
+        var_type="continuous", n_docs=100, n_tokens=6, suggestions=suggestions,
+        seeded=True,
+    )
+
+
+def test_suggestion_pickled_before_the_seed_fields_prints():
+    """A Suggestion restored from a state without seed and cos has both as None."""
+    old = Suggestion.__new__(Suggestion)
+    old.__setstate__(["tok_a", 10, 0.5, 0.4, 0.8, 0.01, "positive", 0.1])
+    assert (old.seed, old.cos) == (None, None)
+    lr = LexiconResult(var_type="continuous", n_docs=100, n_tokens=1, suggestions=[old])
+    assert "tok_a" in lr.suggestions.to_text()
+
+
+def test_seeded_lexicon_report_lists_the_first_n_rows():
+    text = _make_seeded_lexicon_result().report(top={"n": 3}).to_text()
+    for token in ["one_a", "two_a", "one_b"]:
+        assert token in text, f"Token {token!r} not found in report text"
+    for token in ["two_b", "one_c", "two_c"]:
+        assert token not in text, f"Token {token!r} is past the first n rows"
+
+
+def test_seeded_lexicon_report_has_seed_and_cos_columns():
+    text = _make_seeded_lexicon_result().report().to_text()
+    header = next(line for line in text.splitlines() if "cov_all" in line).split()
+    assert header[:3] == ["seed", "token", "cos"]
+
+
+# ---------------------------------------------------------------------------
 # docs view and counts when documents are dropped
 # ---------------------------------------------------------------------------
 

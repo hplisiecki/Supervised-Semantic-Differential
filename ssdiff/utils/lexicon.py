@@ -7,7 +7,7 @@ from collections.abc import Iterable, Sequence
 
 import numpy as np
 
-from .math import _categorical_mask
+from .math import _categorical_mask, l2_normalize_rows_inplace, unit_vector
 
 __all__: list[str] = []
 
@@ -296,6 +296,14 @@ def _filter_y(
         return docs, y_arr
 
 
+def _frequent_tokens(token_sets: list[set[str]], min_docs: int) -> list[str]:
+    """Tokens that are in at least *min_docs* documents."""
+    df_counts: Counter = Counter()
+    for ts in token_sets:
+        df_counts.update(ts)
+    return [t for t, c in df_counts.items() if c >= min_docs]
+
+
 def _rank_tokens(
     token_sets: list[set[str]],
     y: np.ndarray,
@@ -326,10 +334,7 @@ def _rank_tokens(
     """
     is_categorical = var_type == "categorical"
 
-    df_counts: Counter = Counter()
-    for ts in token_sets:
-        df_counts.update(ts)
-    vocab = [t for t, c in df_counts.items() if c >= min_docs]
+    vocab = _frequent_tokens(token_sets, min_docs)
     if not vocab:
         return []
 
@@ -367,3 +372,57 @@ def _rank_tokens(
     rows.sort(key=lambda r: (-r["rank"], -r["cov_bal"], -r["freq"]))
     return rows[:top_k]
 
+
+def _seed_endings(seed: str) -> list[str]:
+    """Forms of *seed* with an English ending.
+
+    The endings are English and are tried for every corpus, whatever its
+    language. A form that doubles the last consonant is not built.
+    """
+    forms = [seed + ending for ending in ("s", "es", "d", "ed", "ing")]
+    if seed.endswith("y"):
+        forms += [seed[:-1] + "ies", seed[:-1] + "ied"]
+    if seed.endswith("e"):
+        forms.append(seed[:-1] + "ing")
+    return forms
+
+
+def _seed_neighbours(
+    token_sets: list[set[str]],
+    embeddings,
+    seeds: Sequence[str],
+    *,
+    top_k: int,
+    min_docs: int,
+) -> list[tuple[str, str, float]]:
+    """Corpus tokens to list for *seeds*, as ``(seed, token, cos)`` rows.
+
+    A candidate is a token that is in at least *min_docs* documents and is a
+    key of *embeddings*. Each seed lists itself with cosine 1 when it is a
+    candidate, the *top_k* other candidates closest to it, and those of its
+    :func:`_seed_endings` that are candidates, whatever their cosine. A token
+    has one row: of the seeds that list it, the one with the highest cosine;
+    a seed's row is its own. Rows are sorted by cosine, highest first; equal
+    cosines keep the order the seeds were given in.
+    """
+    # Sorted so that equal cosines come out in the same order on every run.
+    candidates = sorted(t for t in _frequent_tokens(token_sets, min_docs) if t in embeddings)
+    if not candidates:
+        return []
+    row_of = {t: i for i, t in enumerate(candidates)}
+    unit = np.stack([embeddings[t] for t in candidates])
+    l2_normalize_rows_inplace(unit)
+
+    best: dict[str, tuple[str, str, float]] = {}
+    for seed in seeds:
+        cos = unit @ unit_vector(embeddings[seed])
+        closest = [i for i in np.argsort(-cos, kind="stable") if candidates[i] != seed]
+        listed = closest[:top_k] + [row_of[t] for t in _seed_endings(seed) if t in row_of]
+        for row in [(seed, candidates[i], float(cos[i])) for i in listed]:
+            if row[1] not in best or row[2] > best[row[1]][2]:
+                best[row[1]] = row
+    # A seed's row is its own, even when another seed is as close to it.
+    for seed in seeds:
+        if seed in row_of:
+            best[seed] = (seed, seed, 1.0)
+    return sorted(best.values(), key=lambda row: (-row[2], seeds.index(row[0])))

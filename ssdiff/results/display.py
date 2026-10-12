@@ -57,6 +57,8 @@ DEFAULT_COLS: dict[str, tuple[str, ...]] = {
     "PairStatsView":       ("T", "p_corrected", "cohens_d", "n_g1", "n_g2"),
     # lexicon
     "SuggestionsView":     ("rank", "token", "freq", "corr", "pvalue", "direction"),
+    "SeedSuggestionsView": ("seed", "rank", "token", "cos", "freq", "corr", "pvalue",
+                            "direction"),
     "SummaryView":         ("docs_any", "cov_all", "corr_any", "hits_median"),
 }
 
@@ -129,6 +131,7 @@ DEFAULT_FILENAMES: dict[str, str] = {
     "PairsListView":       "pairs.csv",
     # tabular — lexicon
     "SuggestionsView":     "lexicon_suggestions.csv",
+    "SeedSuggestionsView": "lexicon_suggestions.csv",
 }
 
 
