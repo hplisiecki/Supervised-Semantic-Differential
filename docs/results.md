@@ -23,6 +23,7 @@ For per-view column lists and how to change defaults, see [`results_tables.md`](
 - [Pickle & `attach()`](#pickle--attach)
 - [Cache](#cache)
 - [Reports](#reports)
+- [Results page](#results-page)
 - [Repr footers](#repr-footers)
 - [Row dataclasses](#row-dataclasses)
 - [Optional dependencies](#optional-dependencies)
@@ -35,7 +36,7 @@ For per-view column lists and how to change defaults, see [`results_tables.md`](
 | From | Object |
 |---|---|
 | `SSD.fit_pls()` | `PLSResult` |
-| `SSD.fit_ols()` | `PCAOLSResult` |
+| `SSD.fit_regression()` | `PCAOLSResult` |
 | `SSD.fit_groups()` | `GroupResult` |
 | `SSD.fit_multipls()` | `MultiPLSResult` |
 | `Corpus.suggest_lexicon()` / `.evaluate_lexicon()` | `LexiconResult` |
@@ -125,7 +126,8 @@ result.docs.id(42)                           # full detail view; needs attached 
 Everything on `PLSResult`, plus:
 
 - `.stats` adds `r2_adj`
-- `.pca_k`, `.pca_components`, `.pca_weights` — PCA basis and OLS coefficients
+- `.pca_k`, `.pca_components`, `.pca_weights` — PCA basis and the components' regression coefficients
+- `.model` — the `glmm` fit of y on the formula and the K component scores (`_ssd_pca_1` … `_ssd_pca_K`; response `_ssd_y`): covariate coefficients, random effects, `.summary()`
 - `.sweep_result`, `.sweep` — full sweep diagnostics (`None` if `fixed_k` was set)
 - `.plot_sweep(path=None, dpi=300)` — dual-axis chart of interpretability vs β-change. Returns the matplotlib `Figure`; writes to `path` when given, otherwise calls `plt.show()`. Needs matplotlib.
 
@@ -443,6 +445,19 @@ r.save("report.md")      # .md .txt .html .tex .json .docx
 ```
 
 `.docx` needs `ssdiff[results]`. Every other format is zero-dep.
+
+---
+
+## Results page
+
+`result.save_page(path)` writes one HTML file with the result's stats, words, clusters, snippets and documents. It opens in a browser from disk, with no network. It works on `PLSResult`, `PCAOLSResult`, `GroupResult` and `MultiPLSResult`.
+
+```python
+result.save_page("ssd_results.html", title="Valence (PLS)")
+result.save_page("all_texts.html", doc_texts=None)   # keep every document's text
+```
+
+`doc_texts` (default 50) keeps the text of that many highest- and lowest-scoring documents, and for PLS and PCA regression also of the most over- and under-predicted ones; `None` keeps every text, `0` none. `snippets_per_side` (200) and `snippets_per_cluster` (50) cap the snippet tables. `dataset={"File": "data.csv"}` adds a "Dataset" block of those key–value pairs. Word and cluster tables need the embeddings, and snippets and document texts also need the corpus's raw text. A pickled result leaves them out until `result.attach(corpus=..., embeddings=...)`, and a `pretokenized=True` corpus has no snippets or texts. `result.page_data()` returns the same content as a dict of plain JSON values.
 
 ---
 

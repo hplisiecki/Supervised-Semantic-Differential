@@ -22,7 +22,7 @@ emb = Embeddings.load()                    # the default English wordpack, downl
 corpus = Corpus(texts, embeddings=emb)     # the pack's tokenizer and stopwords; no spaCy
 ssd = SSD(emb, corpus, y=scores, lexicon=["happy", "sad", "joy", "anger"])
 
-result = ssd.fit_ols()         # PCA + OLS
+result = ssd.fit_regression()  # PCA regression
 # result = ssd.fit_pls()       # PLS
 # result = ssd.fit_groups()    # categorical y
 # result = ssd.fit_multipls(k=2)  # several outcomes (y as a DataFrame), PLS3
@@ -46,7 +46,7 @@ emb = Embeddings.load(path="default", *, verbose=False, parallel=False)
 
 | Argument | Type | Default | Description |
 |---|---|---|---|
-| `path` | `str` | `"default"` | A wordpack's tag (`"en"`), a path to an embedding file, or a wordpack's full name (`"en-glove2024-dolma-1"`), tried in that order. The tags are listed in `ssdiff.lang_config.WORDPACK_TAGS`. A pack is downloaded once into the cache directory (`WORDPACK_CACHE`, or the platform's cache directory under `wordpack`). A name that matches none of the three raises `FileNotFoundError` listing the tags. |
+| `path` | `str` | `"default"` | A wordpack's tag (`"en"`), a path to an embedding file, or a wordpack's full name (`"en-glove2024-dolma-1"`), tried in that order. The tags are listed in `ssdiff.lang_config.WORDPACK_TAGS`. A pack is downloaded once into the cache directory (`WORDPACK_CACHE`, or `~/.wordpacks`). A name that matches none of the three raises `FileNotFoundError` listing the tags. |
 | `verbose` | `bool` | `False` | Show a tqdm progress bar when loading `.txt`/`.vec`/`.bin`. |
 | `parallel` | `bool` | `False` | Multiprocess loading for `.txt`/`.vec`. |
 
@@ -152,7 +152,7 @@ ssd = SSD(emb, corpus, y, lexicon=["immigrant", "immigrants", "muslim", "muslims
 
 | Argument | Type | Default | Description |
 |---|---|---|---|
-| `y` | array-like | — | Outcome aligned with `corpus.docs`. NaN / `None` filtered. |
+| `y` | array-like or `None` | — | Outcome aligned with `corpus.docs`. NaN / `None` entries filtered. `None` keeps every document and returns only the statistics that need no outcome; the outcome columns (`cov_bal`, `corr`, `pvalue`, `direction`, `rank`, and `q1`, `q4`, `corr_any` in `.summary`) are `None`. `suggest_lexicon` takes `None` only with `seeds`. |
 | `lexicon` | iterable[str] | — | Tokens to score (`evaluate_lexicon`). |
 | `seeds` | sequence[str] | `None` | Seed words, each a key of `embeddings` (`suggest_lexicon`). |
 | `embeddings` | `Embeddings` | `None` | Embeddings the cosines are taken in; required with `seeds`. |
@@ -172,18 +172,19 @@ Builds personal concept vectors (PCVs) from the corpus + lexicon, then fits a ba
 
 ```python
 ssd = SSD(embeddings, corpus, y, lexicon, *,
-          window=3, sif_a=1e-3, use_full_doc=False)
+          window=3, sif_a=1e-3, use_full_doc=False, data=None)
 ```
 
 | Argument | Type | Default | Description |
 |---|---|---|---|
 | `embeddings` | `Embeddings` | — | Word-embedding model. |
 | `corpus` | `Corpus` | — | Tokenized corpus aligned with `y`. |
-| `y` | array-like | — | Outcome. 1-D numeric for `fit_pls` / `fit_ols`; 1-D categorical labels accepted for `fit_groups`. A DataFrame or 2-D array `(n, q)` of numeric outcomes is for `fit_multipls` only (`SSD.outcome_names` holds the column names). NaN / invalid entries drop their documents silently; with several outcomes a row is dropped if any outcome is missing. |
+| `y` | array-like, `str` or `list[str]` | — | Outcome. 1-D numeric for `fit_pls` / `fit_regression`; 1-D categorical labels accepted for `fit_groups`. A DataFrame or 2-D array `(n, q)` of numeric outcomes is for `fit_multipls` only (`SSD.outcome_names` holds the column names). NaN / invalid entries drop their documents silently; with several outcomes a row is dropped if any outcome is missing. With `data`, a column name, or a list of column names for `fit_multipls`. |
 | `lexicon` | `Sequence[str] \| set[str]` | — | Seed words for context-window extraction. |
 | `window` | `int` | `3` | Context window size (tokens) around each seed. |
 | `sif_a` | `float` or `None` | `1e-3` | SIF smoothing. Must be > 0; `None` turns SIF off (plain mean of word vectors). |
 | `use_full_doc` | `bool` | `False` | Use full-document vectors instead of seed-windowed contexts. |
+| `data` | DataFrame or `dict` of 1-D arrays | `None` | One row per corpus document: outcome columns named by `y` and the columns used in `fit_regression` formulas. Must have `len(corpus)` rows. |
 
 Attributes after construction:
 
@@ -192,13 +193,15 @@ Attributes after construction:
 | `ssd.x` | `ndarray (n_kept, D)` | Document vectors. |
 | `ssd.y` | `ndarray (n_kept,)` or `(n_kept, q)` | Outcome aligned with retained documents; 2-D for several outcomes. |
 | `ssd.outcome_names` | `list[str] \| None` | Outcome column names for 2-D `y` (DataFrame columns, else `"y1"`, …); `None` for 1-D `y`. |
+| `ssd.data` | DataFrame, `dict` or `None` | `data` restricted to the retained documents, one row per row of `ssd.x`. |
 | `ssd.n_raw`, `ssd.n_kept`, `ssd.n_dropped` | `int` | Corpus documents, documents retained, and documents dropped (invalid outcome or no document vector). |
 | `ssd.lexicon`, `ssd.window`, `ssd.sif_a`, `ssd.lang` | — | Echoes of constructor input. |
 
-### `fit_ols()` — PCA + OLS
+### `fit_regression()` — PCA regression
 
 ```python
-result = ssd.fit_ols(*,
+result = ssd.fit_regression(formula=None, *,
+    family="gaussian", link=None,
     fixed_k=None,
     k_min=2, k_max=120, k_step=2,
     verbose=False,
@@ -207,11 +210,25 @@ result = ssd.fit_ols(*,
 
 | Argument | Type | Default | Description |
 |---|---|---|---|
+| `formula` | `str \| None` | `None` | Right-hand side over columns of `data`, e.g. `"~ age + gender + (1 \| ID)"`. A left-hand side is allowed only as `y` or the column name `y` was given as. Column names starting with `_ssd_` are reserved. |
+| `family` | `str` | `"gaussian"` | Any `glmm` family of the final model, e.g. `"binomial"` for a 0/1 outcome. |
+| `link` | `str \| None` | `None` | Link function; `None` takes glmm's default for the family. |
 | `fixed_k` | `int \| None` | `None` | Fixed number of PCA components. `None` selects K via the interpretability + stability sweep. |
 | `k_min`, `k_max`, `k_step` | `int` | `2`, `120`, `2` | Sweep range (ignored when `fixed_k` is set). |
 | `verbose` | `bool` | `False` | Print progress. |
 
-Returns a `PCAOLSResult`. Significance is reported as the OLS F-test. Sweep diagnostics and `result.plot_sweep(path=None, dpi=300)` are available when `fixed_k is None`.
+Returns a `PCAOLSResult`. K is chosen by the sweep (OLS on standardized y, whatever the family). The final model at that K is fit by `glmm` with the K component scores added to the formula, and `result.model` holds that fit (response `_ssd_y`, components `_ssd_pca_1` … `_ssd_pca_K`). The p-value tests the K components together: the formula alone against the formula plus the components, both fit by ML on the same rows. An OLS model (Gaussian, no random effects) gives the F-test (`test.name == "f_test"`), and so do Gamma and inverse-Gaussian GLMs (Wald F); every other model gives the likelihood-ratio test (`"lrt"`). A column the formula uses must have no missing values in the retained documents. Sweep diagnostics and `result.plot_sweep(path=None, dpi=300)` are available when `fixed_k is None`.
+
+For a Gaussian identity-link fit, `beta` is on the standardized-y scale; for other families it is on the link scale (e.g. log-odds). With a formula, `r2` / `r2_adj` are the whole model's, covariates included, and NaN for GLMs and mixed models. `docs.y_hat` uses `beta` only, not the covariates or random effects. `predict()` raises `NotImplementedError` after a fit with a formula or another family.
+
+```python
+ssd = SSD(emb, corpus, y="rating", lexicon=lexicon, data=df)
+result = ssd.fit_regression("~ age + gender + (1 | ID)")
+result.stats.pvalue       # likelihood-ratio test of the K components
+result.model.summary()    # covariate coefficients and random effects
+```
+
+`fit_ols(...)` is the old name: it takes the same keyword arguments and warns with `FutureWarning`.
 
 ### `fit_pls()` — PLS1
 
@@ -385,9 +402,9 @@ corpus = Corpus(texts, lang="en")
 lex = corpus.suggest_lexicon(scores, top_k=30)
 lexicon = lex.tokens[:20]
 
-# Continuous fit — PCA+OLS
+# Continuous fit — PCA regression
 ssd = SSD(emb, corpus, y=scores, lexicon=lexicon, window=3)
-ols = ssd.fit_ols()
+ols = ssd.fit_regression()
 ols.plot_sweep("sweep.png")
 ols.report(clusters={"n": 50, "n_words": 10, "n_snippets": 2}).save("report_ols.md")
 

@@ -387,6 +387,22 @@ def test_suggest_lexicon_seeds_reject_a_corpus_tokenized_for_other_embeddings(wo
         corpus.suggest_lexicon(SEED_Y, seeds=["dog"], embeddings=_angle_embeddings())
 
 
+def test_suggest_lexicon_seeds_without_y_list_the_same_neighbours():
+    with_y = _suggest_with_seeds(["cat", "dog"], top_k=10)
+    lex = Corpus(SEED_DOCS, pretokenized=True).suggest_lexicon(
+        None, seeds=["cat", "dog"], embeddings=_angle_embeddings(), top_k=10, min_docs=2,
+    )
+    free = ["seed", "token", "cos", "freq", "cov_all"]
+    assert lex.suggestions.to_records(cols=free) == with_y.suggestions.to_records(cols=free)
+    outcome = ["cov_bal", "corr", "pvalue", "direction", "rank"]
+    assert set(lex.suggestions.to_records(cols=outcome)) == {(None,) * 5}
+
+
+def test_suggest_lexicon_without_y_or_seeds_raises():
+    with pytest.raises(ValueError, match="needs an outcome"):
+        Corpus(SEED_DOCS, pretokenized=True).suggest_lexicon(None)
+
+
 # ---------------------------------------------------------------------------
 # Corpus.token_stats
 # ---------------------------------------------------------------------------
@@ -422,6 +438,18 @@ def test_token_stats_cov_all_correct(sample_docs, sample_y):
     assert abs(kraj_row["cov_all"] - 3 / 8) < 1e-10
 
 
+def test_token_stats_without_y_gives_the_counts_sorted_by_freq(sample_docs, sample_y):
+    # "kraj" and "narod" are in 3 documents, "panstwo" in 2.
+    corpus = Corpus(sample_docs, pretokenized=True, lang="pl")
+    lex = ["panstwo", "kraj", "narod"]
+    rows = corpus.token_stats(None, lex)
+    assert [r["token"] for r in rows] == ["kraj", "narod", "panstwo"]
+    with_y = {r["token"]: r for r in corpus.token_stats(sample_y, lex)}
+    for r in rows:
+        assert (r["freq"], r["cov_all"]) == (with_y[r["token"]]["freq"], with_y[r["token"]]["cov_all"])
+        assert [r[k] for k in ("cov_bal", "corr", "rank", "pvalue", "direction")] == [None] * 5
+
+
 # ---------------------------------------------------------------------------
 # Corpus.coverage_summary
 # ---------------------------------------------------------------------------
@@ -450,6 +478,18 @@ def test_coverage_summary_full_lexicon_all_docs(sample_docs, sample_y):
     summary = corpus.coverage_summary(sample_y, {"kraj", "narod", "panstwo"})
     assert summary["docs_any"] == 8
     assert abs(summary["cov_all"] - 1.0) < 1e-10
+
+
+def test_coverage_summary_without_y_gives_the_counts_only(sample_docs, sample_y):
+    corpus = Corpus(sample_docs, pretokenized=True, lang="pl")
+    lex = {"kraj", "narod"}
+    # var_type is ignored without y, so there is no group_cov.
+    summary = corpus.coverage_summary(None, lex, var_type="categorical")
+    with_y = corpus.coverage_summary(sample_y, lex)
+    free = ("docs_any", "cov_all", "hits_mean", "hits_median", "types_mean", "types_median")
+    assert {k: summary[k] for k in free} == {k: with_y[k] for k in free}
+    assert (summary["q1"], summary["q4"], summary["corr_any"]) == (None, None, None)
+    assert "group_cov" not in summary
 
 
 # ---------------------------------------------------------------------------
@@ -489,3 +529,30 @@ def test_evaluate_lexicon_summary_matches_coverage_summary(sample_docs, sample_y
     direct = corpus.coverage_summary(sample_y, lex)
     assert result.summary.docs_any == direct["docs_any"]
     assert abs(result.summary.cov_all - direct["cov_all"]) < 1e-12
+
+
+def test_evaluate_lexicon_without_y_keeps_every_document(sample_docs, sample_y_with_nan):
+    # The NaN in sample_y_with_nan drops document 3, which holds "kraj".
+    corpus = Corpus(sample_docs, pretokenized=True, lang="pl")
+    with_nan = corpus.evaluate_lexicon(sample_y_with_nan, ["kraj", "narod"])
+    lex = corpus.evaluate_lexicon(None, ["kraj", "narod"])
+    assert (with_nan.stats.n_docs, with_nan.summary.docs_any) == (7, 5)
+    assert (lex.stats.n_docs, lex.summary.docs_any) == (8, 6)
+    assert (lex.summary.q1, lex.summary.q4, lex.summary.corr_any) == (None, None, None)
+    assert [s.rank for s in lex.suggestions] == [None, None]
+
+
+def test_lexicon_results_without_y_render(sample_docs, tmp_path):
+    evaluated = Corpus(sample_docs, pretokenized=True, lang="pl").evaluate_lexicon(
+        None, ["kraj", "narod"],
+    )
+    seeded = Corpus(SEED_DOCS, pretokenized=True).suggest_lexicon(
+        None, seeds=["cat"], embeddings=_angle_embeddings(), min_docs=2,
+    )
+    for lex in (evaluated, seeded):
+        repr(lex)
+        lex._repr_html_()
+        report = lex.report()
+        assert all(t in report.to_text() for t in lex.tokens)
+        report.to_html()
+        lex.suggestions.save(tmp_path / "suggestions.csv")

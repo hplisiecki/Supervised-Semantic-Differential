@@ -360,12 +360,12 @@ def _texts(n: int, seed: int) -> tuple[list[str], np.ndarray]:
 def test_prefix_plus_on_request_matches_a_full_load(wordpack_path, monkeypatch):
     texts, y = _texts(40, seed=0)
     full = Embeddings.load(wordpack_path)
-    full_res = SSD(full, Corpus(texts, embeddings=full), y, use_full_doc=True).fit_ols(fixed_k=2)
+    full_res = SSD(full, Corpus(texts, embeddings=full), y, use_full_doc=True).fit_regression(fixed_k=2)
 
     monkeypatch.setattr(em, "_RAM_TOP_N", 18)
     small = Embeddings.load(wordpack_path)
     assert small._partial
-    small_res = SSD(small, Corpus(texts, embeddings=small), y, use_full_doc=True).fit_ols(fixed_k=2)
+    small_res = SSD(small, Corpus(texts, embeddings=small), y, use_full_doc=True).fit_regression(fixed_k=2)
 
     np.testing.assert_allclose(small_res.beta, full_res.beta, rtol=1e-5, atol=1e-6)
     full_pred = full_res.predict(NEW_TEXTS)
@@ -376,7 +376,7 @@ def test_prefix_plus_on_request_matches_a_full_load(wordpack_path, monkeypatch):
 def test_predict_raw_texts_equals_predict_on_a_wordpack_corpus(wordpack_path):
     texts, y = _texts(40, seed=1)
     emb = Embeddings.load(wordpack_path)
-    res = SSD(emb, Corpus(texts, embeddings=emb), y, use_full_doc=True).fit_ols(fixed_k=2)
+    res = SSD(emb, Corpus(texts, embeddings=emb), y, use_full_doc=True).fit_regression(fixed_k=2)
     np.testing.assert_array_equal(
         res.predict(NEW_TEXTS), res.predict(Corpus(NEW_TEXTS, embeddings=emb))
     )
@@ -385,7 +385,7 @@ def test_predict_raw_texts_equals_predict_on_a_wordpack_corpus(wordpack_path):
 def test_normalize_after_a_fit_leaves_the_fit_unchanged(wordpack_path):
     texts, y = _texts(40, seed=1)
     emb = Embeddings.load(wordpack_path)
-    res = SSD(emb, Corpus(texts, embeddings=emb), y, use_full_doc=True).fit_ols(fixed_k=2)
+    res = SSD(emb, Corpus(texts, embeddings=emb), y, use_full_doc=True).fit_regression(fixed_k=2)
     before = res.predict(NEW_TEXTS)
     emb.normalize(abtt=3)
     np.testing.assert_array_equal(res.predict(NEW_TEXTS), before)
@@ -394,7 +394,7 @@ def test_normalize_after_a_fit_leaves_the_fit_unchanged(wordpack_path):
 def test_a_single_string_is_refused_not_split_into_characters(wordpack_path):
     texts, y = _texts(40, seed=1)
     emb = Embeddings.load(wordpack_path)
-    res = SSD(emb, Corpus(texts, embeddings=emb), y, use_full_doc=True).fit_ols(fixed_k=2)
+    res = SSD(emb, Corpus(texts, embeddings=emb), y, use_full_doc=True).fit_regression(fixed_k=2)
     with pytest.raises(TypeError, match="single string"):
         Corpus("dog swim", embeddings=emb)
     with pytest.raises(TypeError, match="single string"):
@@ -422,7 +422,7 @@ def test_ssd_and_predict_refuse_a_corpus_tokenized_for_other_embeddings(wordpack
     with pytest.raises(ValueError, match=r"wordpack:en-fixture-9"):
         SSD(emb, other_version, y, use_full_doc=True)
 
-    res = SSD(emb, pack_corpus, y, use_full_doc=True).fit_ols(fixed_k=2)
+    res = SSD(emb, pack_corpus, y, use_full_doc=True).fit_regression(fixed_k=2)
     with pytest.raises(ValueError, match="tokenized with spacy:"):
         res.predict(Corpus(NEW_TEXTS, nlp=fake_nlp))
 
@@ -431,7 +431,7 @@ def test_a_pretokenized_corpus_is_not_checked(wordpack_path):
     emb = Embeddings.load(wordpack_path)
     texts, y = _texts(40, seed=3)
     docs = Corpus(texts, embeddings=emb).docs
-    res = SSD(emb, Corpus(docs, pretokenized=True), y, use_full_doc=True).fit_ols(fixed_k=2)
+    res = SSD(emb, Corpus(docs, pretokenized=True), y, use_full_doc=True).fit_regression(fixed_k=2)
     assert np.isfinite(res.predict(Corpus([["dog", "swim"]], pretokenized=True))).all()
 
 
@@ -440,7 +440,7 @@ def test_snippets_run_on_a_wordpack_corpus(wordpack_path, monkeypatch):
     emb = Embeddings.load(wordpack_path)
     texts, y = _texts(40, seed=4)
     corpus = Corpus(texts, embeddings=emb)
-    res = SSD(emb, corpus, y, use_full_doc=True).fit_ols(fixed_k=2)
+    res = SSD(emb, corpus, y, use_full_doc=True).fit_regression(fixed_k=2)
     rows = list(res.snippets)
     assert rows
     for sn in rows:
@@ -454,14 +454,14 @@ def _plain_report(res) -> str:
 def test_report_names_the_wordpack(wordpack_path):
     emb = Embeddings.load(wordpack_path)
     texts, y = _texts(40, seed=5)
-    res = SSD(emb, Corpus(texts, embeddings=emb), y, use_full_doc=True).fit_ols(fixed_k=2)
+    res = SSD(emb, Corpus(texts, embeddings=emb), y, use_full_doc=True).fit_regression(fixed_k=2)
     assert "en-fixture-1" in _plain_report(res)
 
 
 def test_deepcopy_of_a_wordpack_result_keeps_its_embeddings(wordpack_path):
     texts, y = _texts(40, seed=1)
     emb = Embeddings.load(wordpack_path)
-    res = SSD(emb, Corpus(texts, embeddings=emb), y, use_full_doc=True).fit_ols(fixed_k=2)
+    res = SSD(emb, Corpus(texts, embeddings=emb), y, use_full_doc=True).fit_regression(fixed_k=2)
     dup = copy.deepcopy(res)
     np.testing.assert_array_equal(dup.predict(NEW_TEXTS), res.predict(NEW_TEXTS))
 
@@ -469,7 +469,7 @@ def test_deepcopy_of_a_wordpack_result_keeps_its_embeddings(wordpack_path):
 def test_pickled_wordpack_result_takes_the_pack_back_by_path(wordpack_path):
     texts, y = _texts(40, seed=1)
     emb = Embeddings.load(wordpack_path).normalize(abtt=3)
-    res = SSD(emb, Corpus(texts, embeddings=emb), y, use_full_doc=True).fit_ols(fixed_k=2)
+    res = SSD(emb, Corpus(texts, embeddings=emb), y, use_full_doc=True).fit_regression(fixed_k=2)
     back = pickle.loads(pickle.dumps(res))
     assert back.embeddings is None
     with pytest.raises(ValueError, match="abtt=3"):
@@ -491,7 +491,7 @@ def test_attach_on_a_pickled_group_result_reaches_every_pair(wordpack_path):
 def test_report_names_the_file_for_other_formats(tmp_path, tiny_kv, sample_docs, sample_y, lexicon):
     tiny_kv.save(str(tmp_path / "tiny"))
     emb = Embeddings.load(str(tmp_path / "tiny.bin"))
-    res = SSD(emb, Corpus(sample_docs, pretokenized=True), sample_y, lexicon).fit_ols(fixed_k=2)
+    res = SSD(emb, Corpus(sample_docs, pretokenized=True), sample_y, lexicon).fit_regression(fixed_k=2)
     assert "tiny.bin" in _plain_report(res)
 
 

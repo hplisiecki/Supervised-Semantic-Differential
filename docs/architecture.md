@@ -12,7 +12,7 @@ For the results surface see [`results.md`](results.md).
 ```
 SSD                           — driver; prepares PCVs, dispatches to backends
   ├── .fit_pls()      → PLSResult        (ContinuousResult → _SingleResult → Result)
-  ├── .fit_ols()      → PCAOLSResult     (ContinuousResult → _SingleResult → Result)
+  ├── .fit_regression() → PCAOLSResult  (ContinuousResult → _SingleResult → Result)
   ├── .fit_groups()   → GroupResult      (_MultiContainer → Result)
   │                         └── dict[(g1, g2), PairResult]       (_SingleResult leaves)
   └── .fit_multipls() → MultiPLSResult   (_MultiContainer → Result)   — PLS3, several outcomes
@@ -126,13 +126,13 @@ ssd.x (n × D), ssd.y (n)
                           PLSResult
 ```
 
-### `fit_ols()`
+### `fit_regression()`
 
 ```
 ssd.x (n × D), ssd.y (n)
         │
         ├─ standardize X  (columns, ddof=0)
-        ├─ if fixed_k given → PCA(K) + OLS; else:
+        ├─ if fixed_k given → K = fixed_k; else:
         │    PCA sweep K=k_min..k_max, step=k_step
         │    for each K:
         │      PCA(K) → Z → OLS → β
@@ -143,9 +143,12 @@ ssd.x (n × D), ssd.y (n)
         │      stab   = −Δβ
         │      joint  = 0.5 · (AUC_interp + AUC_stab)
         │    → best_k
-        ├─ β = V_K w_K / X_scale    (back-project)
-        ├─ orient β: flip if corr(ŷ, y) < 0
-        └─ F-test p-value
+        ├─ PCA(K) → Z, scores as _ssd_pca_1 … _ssd_pca_K
+        ├─ glmm.compare(data + Z + _ssd_y,
+        │      "_ssd_y ~ formula", "_ssd_y ~ formula + _ssd_pca_*")
+        │      → F-test (OLS) or likelihood-ratio test; fit1 = result.model
+        ├─ w_K = _ssd_pca_* coefficients  (÷ sd(y) for Gaussian identity link)
+        └─ β = V_K w_K / X_scale    (back-project; no sign flip)
                 │
                 ▼
          PCAOLSResult
@@ -389,9 +392,9 @@ The backend box covers all four fit methods — each has its own file in `backen
 
 ## Significance testing
 
-### `fit_ols()` — F-test
+### `fit_regression()` — F-test or likelihood-ratio test
 
-Analytic F-test from OLS in PCA space. Tests the null that all PCA-space regression coefficients are zero. Cheap, always computed, returned as `result.stats.pvalue` and echoed on `result.test`.
+`glmm.compare` fits `_ssd_y ~ formula` and `_ssd_y ~ formula + _ssd_pca_1 + … + _ssd_pca_K` by ML on the same rows and tests the K components together. An OLS model (Gaussian, no random effects) gives the analytic F-test (with no formula, the same as OLS in PCA space), and so do Gamma and inverse-Gaussian GLMs (Wald F); every other model gives the likelihood-ratio test. Returned as `result.stats.pvalue` and echoed on `result.test` (`"f_test"` or `"lrt"`).
 
 ### `fit_pls()` — split_exact
 

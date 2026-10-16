@@ -247,15 +247,15 @@ class Suggestion:
         Number of documents containing this token.
     cov_all : float
         Fraction of all documents containing this token.
-    cov_bal : float
+    cov_bal : float or None
         Balanced coverage — fraction after equalizing group sizes.
-    corr : float
+    corr : float or None
         Point-biserial or Spearman correlation with the outcome variable.
-    pvalue : float
+    pvalue : float or None
         P-value for the correlation (uncorrected).
-    direction : str
+    direction : str or None
         ``"positive"``, ``"negative"``, or ``"none"`` — sign of ``corr``.
-    rank : float
+    rank : float or None
         Combined ranking score: balanced coverage × (1 − |corr| / corr_cap).
         Lower is better.
     seed : str or None
@@ -264,15 +264,18 @@ class Suggestion:
     cos : float or None
         Cosine between the token's and that seed's embedding vectors;
         ``None`` without seeds.
+
+    ``cov_bal``, ``corr``, ``pvalue``, ``direction`` and ``rank`` are ``None``
+    when the lexicon was computed with ``y=None``.
     """
     token: str
     freq: int
     cov_all: float
-    cov_bal: float
-    corr: float
-    pvalue: float
-    direction: str          # "positive", "negative", "none"
-    rank: float             # balanced coverage × (1 − |corr|/corr_cap)
+    cov_bal: float | None
+    corr: float | None
+    pvalue: float | None
+    direction: str | None   # "positive", "negative", "none"
+    rank: float | None      # balanced coverage × (1 − |corr|/corr_cap)
     seed: str | None = None
     cos: float | None = None
 
@@ -290,7 +293,8 @@ class Stats:
     Fields
     ------
     backend : str
-        ``"PLS"`` or ``"PCA+OLS"``.
+        ``"PLS"``, ``"PCA+OLS"``, or ``"PCA+GLMM"`` (``fit_regression`` with
+        a formula or a model other than Gaussian identity-link).
     r2 : float
         In-sample R² (variance explained by β).
     pvalue : float
@@ -314,7 +318,7 @@ class Stats:
     r2_adj : float or None
         Adjusted R² (PCA+OLS only).
     """
-    backend: str            # "PLS" | "PCA+OLS"
+    backend: str            # "PLS" | "PCA+OLS" | "PCA+GLMM"
     r2: float
     pvalue: float
     n_raw: int
@@ -354,6 +358,10 @@ class FitInfo:
     k_step: int | None = None
     best_k: int | None = None
     pca_k_source: str | None = None  # "sweep" | "fixed" | None (PLS)
+    formula: str | None = None       # fit_regression formula as given
+    family: str | None = None        # glmm family of fit_regression
+
+    __setstate__ = _setstate_filling_defaults
 
 
 @dataclass(frozen=True, slots=True)
@@ -361,12 +369,13 @@ class Summary:
     """LexiconResult summary (present only after evaluate_lexicon).
 
     Raw floats here; formatting is applied at render time (D11).
+    ``q1``, ``q4`` and ``corr_any`` are ``None`` when computed with ``y=None``.
     """
     docs_any: int
     cov_all: float
-    q1: float
-    q4: float
-    corr_any: float
+    q1: float | None
+    q4: float | None
+    corr_any: float | None
     hits_mean: float
     hits_median: float
     types_mean: float

@@ -60,11 +60,7 @@ A tag is checked first: `Embeddings.load("en")` loads the pack even when a file 
 
 ## Where packs are stored
 
-| System | Directory |
-|---|---|
-| Linux | `~/.cache/wordpack` (`$XDG_CACHE_HOME/wordpack` when that variable is set) |
-| macOS | `~/Library/Caches/wordpack` |
-| Windows | `%LOCALAPPDATA%\wordpack` |
+Packs are kept in `.wordpacks` in your home directory: `~/.wordpacks` on Linux and macOS, `C:\Users\<name>\.wordpacks` on Windows.
 
 Set the environment variable `WORDPACK_CACHE` to use another directory. Nothing removes the files: delete them there to free space.
 

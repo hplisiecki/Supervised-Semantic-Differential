@@ -548,7 +548,7 @@ class GroupResult(_MultiContainer):
     _access = (
         "stats", "test", "pairs", "words", "clusters", "snippets",
         "beta", "gradient", "beta_norm", "alignment_scores",
-        "group_labels", "report()", "test(...)", "attach(...)",
+        "group_labels", "report()", "save_page(...)", "test(...)", "attach(...)",
     )
     _arrays = ("x", "groups")
 

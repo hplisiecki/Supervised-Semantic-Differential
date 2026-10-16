@@ -308,8 +308,8 @@ def pls_result(ssd_instance):
 
 @pytest.fixture(scope="session")
 def pcaols_result(ssd_instance):
-    """Fitted PCAOLSResult from SSD.fit_ols()."""
-    return ssd_instance.fit_ols(fixed_k=3)
+    """Fitted PCAOLSResult from SSD.fit_regression()."""
+    return ssd_instance.fit_regression(fixed_k=3)
 
 
 @pytest.fixture(scope="session")
@@ -318,7 +318,7 @@ def pcaols_result_sweep(tiny_kv, large_docs, large_y, lexicon):
     from ssdiff.ssd import SSD
     corpus = Corpus(large_docs, pretokenized=True, lang="pl")
     ssd = SSD(tiny_kv, corpus, large_y, lexicon)
-    return ssd.fit_ols(fixed_k=None, k_min=2, k_max=6, k_step=1)
+    return ssd.fit_regression(fixed_k=None, k_min=2, k_max=6, k_step=1)
 
 
 @pytest.fixture(scope="session")

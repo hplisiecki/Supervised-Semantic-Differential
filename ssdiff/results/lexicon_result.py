@@ -9,6 +9,11 @@ from ssdiff.results.format import fmt_count, fmt_d, fmt_p, fmt_pct, fmt_r
 from ssdiff.results.report import Report, Section, _resolve_section
 from ssdiff.results.schema import Suggestion, Summary
 
+def _opt(fmt, value, **kw) -> str:
+    """Format *value* with *fmt*; an outcome statistic that is ``None`` shows as empty."""
+    return "" if value is None else fmt(value, **kw)
+
+
 # ---------- LexiconStatsView (ScalarView) ----------
 
 class LexiconStatsView(ScalarView):
@@ -190,11 +195,11 @@ class LexiconResult(Result):
                     sug.token,
                     fmt_count(sug.freq),
                     fmt_pct(sug.cov_all),
-                    fmt_pct(sug.cov_bal),
-                    fmt_r(sug.corr, signed=True),
-                    fmt_p(sug.pvalue),
-                    sug.direction,
-                    fmt_r(sug.rank),
+                    _opt(fmt_pct, sug.cov_bal),
+                    _opt(fmt_r, sug.corr, signed=True),
+                    _opt(fmt_p, sug.pvalue),
+                    sug.direction or "",
+                    _opt(fmt_r, sug.rank),
                 ]
                 if seeded:
                     row[1:1] = [fmt_r(sug.cos)]
@@ -222,9 +227,9 @@ class LexiconResult(Result):
             kv_rows = [
                 ("docs_any", fmt_count(sm.docs_any)),
                 ("cov_all", fmt_pct(sm.cov_all)),
-                ("q1", fmt_pct(sm.q1)),
-                ("q4", fmt_pct(sm.q4)),
-                ("corr_any", fmt_r(sm.corr_any, signed=True)),
+                ("q1", _opt(fmt_pct, sm.q1)),
+                ("q4", _opt(fmt_pct, sm.q4)),
+                ("corr_any", _opt(fmt_r, sm.corr_any, signed=True)),
                 ("hits_mean", fmt_d(sm.hits_mean)),
                 ("hits_median", fmt_d(sm.hits_median)),
                 ("types_mean", fmt_d(sm.types_mean)),

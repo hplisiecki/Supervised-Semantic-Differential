@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Sequence
 from typing import Literal
 
@@ -29,6 +30,8 @@ class SSD:
     outcome_names : list of str or None
         Names of the ``q`` outcome columns for 2-D ``y`` (DataFrame column
         names as strings, else ``"y1"``, …, ``"yq"``); ``None`` for 1-D ``y``.
+    data : DataFrame, dict of arrays, or None
+        The ``data`` given to the constructor, one row per row of ``x``.
 
     Builds document vectors from corpus + lexicon, then fit with a backend:
 
@@ -39,8 +42,8 @@ class SSD:
     >>> pls.r2, pls.pvalue
     >>> pls.top_words(20)
     >>>
-    >>> pcaols = ssd.fit_ols()
-    >>> pcaols.r2
+    >>> reg = ssd.fit_regression()
+    >>> reg.r2
     >>>
     >>> groups = ssd.fit_groups()          # y as categorical labels
     >>> groups = ssd.fit_groups(median_split=True)  # median split
@@ -56,6 +59,7 @@ class SSD:
         window: int = 3,
         sif_a: float | None = 1e-3,
         use_full_doc: bool = False,
+        data=None,
     ) -> None:
         """Build a **personal concept vector (PCV)** for each document via
         SIF-weighted aggregation of local contexts around lexicon occurrences,
@@ -67,11 +71,12 @@ class SSD:
             Word embeddings instance providing the vector space.
         corpus : Corpus
             Tokenized corpus (``Corpus`` instance) aligned with ``y``.
-        y : array-like of shape (n,) or (n, q), or DataFrame
+        y : array-like of shape (n,) or (n, q), DataFrame, str or list of str
             Outcome variable: 1-D numeric or categorical labels, or a 2-D
             numeric matrix / DataFrame of several outcomes. Entries (rows,
             for 2-D) with NaN are silently dropped together with the
-            corresponding documents.
+            corresponding documents. With ``data``, a column name, or a list
+            of column names for several outcomes.
         lexicon : sequence or set of str, optional
             Seed words used for context-window extraction. Required in the
             default seed-context mode; ignored when ``use_full_doc=True``.
@@ -84,12 +89,18 @@ class SSD:
         use_full_doc : bool, default False
             If True, use full-document vectors instead of seed-windowed
             contexts.
+        data : DataFrame or dict of 1-D arrays, optional
+            One row per corpus document: the outcome columns named by ``y``
+            and the covariates and grouping factors named in
+            :meth:`fit_regression` formulas. Kept as ``self.data``, restricted
+            to the documents that stay in the fit.
 
         Raises
         ------
         ValueError
-            If ``len(y) != len(corpus)``, if 2-D ``y`` is not numeric, or if
-            ``lexicon`` is empty and ``use_full_doc=False``.
+            If ``len(y) != len(corpus)`` or ``len(data) != len(corpus)``, if
+            2-D ``y`` is not numeric, if ``y`` names a column without
+            ``data``, or if ``lexicon`` is empty and ``use_full_doc=False``.
         """
         if window < 1:
             raise ValueError(f"window must be >= 1, got {window}")
@@ -128,9 +139,43 @@ class SSD:
         # Build doc vectors
         docs = corpus.docs
 
-        outcome_names = (
-            [str(c) for c in y.columns] if hasattr(y, "columns") else None
+        if data is not None:
+            lengths = (
+                {len(data)} if hasattr(data, "iloc")
+                else {len(np.asarray(v)) for v in data.values()}
+            )
+            if lengths != {len(docs)}:
+                shown = lengths.pop() if len(lengths) == 1 else sorted(lengths)
+                raise ValueError(
+                    f"len(data)={shown} != len(docs)={len(docs)}. "
+                    "data must have one row per corpus document."
+                )
+
+        # The column name y was given as; fit_regression accepts it as a formula's left side.
+        self._y_name = y if isinstance(y, str) else None
+        outcome_names = None
+        # A list of strings without data stays what it was: categorical labels.
+        is_list_of_names = (
+            data is not None and isinstance(y, list) and y
+            and all(isinstance(c, str) for c in y)
         )
+        if isinstance(y, str) or is_list_of_names:
+            if data is None:
+                raise ValueError(
+                    f"y={y!r} names a column, but no data was given. "
+                    f"Pass data=df, or pass the values, e.g. y=df[{y!r}]."
+                )
+            names = [y] if isinstance(y, str) else list(y)
+            missing = [c for c in names if c not in data]
+            if missing:
+                raise ValueError(f"y names columns {missing} that data does not have.")
+            if isinstance(y, str):
+                y = data[y]
+            else:
+                outcome_names = names
+                y = np.column_stack([np.asarray(data[c]) for c in names])
+        elif hasattr(y, "columns"):
+            outcome_names = [str(c) for c in y.columns]
 
         # Accept both numeric and categorical y
         y_raw = np.asarray(y)
@@ -193,6 +238,16 @@ class SSD:
         self.y = y_clean[keep]
         self.is_numeric = is_numeric
         self.outcome_names = outcome_names
+
+        # Rows of data line up with rows of x. A DataFrame stays a DataFrame
+        # so categorical columns keep their dtype and level order for glmm.
+        if data is not None:
+            idx = np.flatnonzero(keep_full)
+            if hasattr(data, "iloc"):
+                data = data.iloc[idx].reset_index(drop=True)
+            else:
+                data = {k: np.asarray(v)[idx] for k, v in data.items()}
+        self.data = data
 
     # ── Shared helpers ─────────────────────────────────────────
 
@@ -339,6 +394,8 @@ class SSD:
         -------
         PLSResult
         """
+        fit_args = {"k": k, "k_max": k_max, "keep": keep, "n_splits": n_splits,
+                    "random_state": random_state, "test": test}
         import plskit
 
         from ssdiff.results.continuous_result import PLSResult
@@ -530,7 +587,7 @@ class SSD:
         else:
             test_name, test_info = None, None
 
-        return PLSResult(
+        result = PLSResult(
             beta=beta,
             pvalue=pvalue,
             r2=stats["r2"],
@@ -552,6 +609,8 @@ class SSD:
             test_info=test_info,
             **kwargs,
         )
+        result.fit_args = fit_args
+        return result
 
     # ── PLS3 backend (several outcomes) ────────────────────────
 
@@ -622,6 +681,8 @@ class SSD:
         RuntimeError
             If no embeddings are attached.
         """
+        fit_args = {"k": k, "rotate": rotate, "outcome_groups": outcome_groups, "n_splits": n_splits,
+                    "n_perm": n_perm, "random_state": random_state}
         import plskit
 
         from ssdiff.backends.pca_sweep import _RESTRICT_VOCAB
@@ -762,7 +823,7 @@ class SSD:
             "random_state": random_state,
         }
 
-        return MultiPLSResult(
+        result = MultiPLSResult(
             x=self.x, y=self.y,
             U=U, V=V, U_rot=U_rot, V_rot=V_rot,
             singular_values=sigma,
@@ -784,12 +845,28 @@ class SSD:
             lang=self.lang,
             random_state=random_state,
         )
+        result.fit_args = fit_args
+        # Corpus row of each row of ``x``: the results page links documents back to their text.
+        result.doc_ids = np.flatnonzero(self._keep_mask)
+        return result
 
-    # ── PCA + OLS backend ─────────────────────────────────────
+    # ── PCA regression backend ────────────────────────────────
 
-    def fit_ols(
+    def fit_ols(self, **kwargs):
+        """Old name of :meth:`fit_regression`; takes the same keyword arguments."""
+        warnings.warn(
+            "fit_ols() is renamed fit_regression() and will be removed; "
+            "call ssd.fit_regression(...) with the same arguments.",
+            FutureWarning, stacklevel=2,
+        )
+        return self.fit_regression(**kwargs)
+
+    def fit_regression(
         self,
+        formula: str | None = None,
         *,
+        family: str = "gaussian",
+        link: str | None = None,
         fixed_k: int | None = None,
         k_min: int = 2,
         k_max: int = 120,
@@ -797,10 +874,29 @@ class SSD:
         verbose: bool = False,
         pca_sweep_args: dict | None = None,
     ):
-        """Fit PCA + OLS and return PCAOLSResult.
+        """Regress y on the first K PCA components of the document vectors.
+
+        K is chosen by the PCA-K sweep (OLS on standardized y), unless
+        ``fixed_k`` is given. The final model at that K is fit by ``glmm``:
+        the K component scores are added to ``formula``, so covariates and
+        random effects (``"~ age + (1 | ID)"``) are controlled for. The
+        p-value tests the K components together: the model with the formula
+        alone against the model with the formula and the components, both
+        fit by ML on the same rows. An OLS model (Gaussian, no random
+        effects) gets the F-test, and so do Gamma and inverse-Gaussian GLMs
+        (Wald F); every other model gets the likelihood-ratio test.
 
         Parameters
         ----------
+        formula : str or None
+            Right-hand side over columns of ``data``, e.g.
+            ``"~ age + gender + (1 | ID)"``. A left-hand side is allowed only
+            as ``y`` or the column name ``y`` was given as. ``None`` fits
+            intercept plus components.
+        family : str, default "gaussian"
+            Any ``glmm`` family, e.g. ``"binomial"`` for a 0/1 y.
+        link : str or None
+            Link function; ``None`` takes glmm's default for the family.
         fixed_k : int or None
             Fixed number of PCA components. None = auto-select via sweep.
         k_min, k_max, k_step : int
@@ -814,27 +910,68 @@ class SSD:
             ``cluster_topn``, ``cluster_k_min``, ``cluster_k_max``,
             ``weight_by_size``, ``auck_radius``) or for enabling table output
             (``save_tables``, ``out_dir``, ``prefix``).
-            Keys that ``fit_ols`` derives internally (``Xs``, ``X_scale``,
-            ``x``, ``ys``, ``embeddings``, ``pca_k_values``, ``verbose``,
-            ``lang``) cannot be overridden and raise ``ValueError`` if passed.
-            Ignored when ``fixed_k`` is set.
+            Keys that ``fit_regression`` derives internally (``Xs``,
+            ``X_scale``, ``x``, ``ys``, ``embeddings``, ``pca_k_values``,
+            ``verbose``, ``lang``) cannot be overridden and raise
+            ``ValueError`` if passed. Ignored when ``fixed_k`` is set.
 
         Returns
         -------
         PCAOLSResult
+            ``.model`` is the glmm fit with the components: covariate
+            coefficients, random effects, ``.summary()``. ``beta`` is on the
+            standardized-y scale for a Gaussian identity-link fit, else on
+            the link scale (e.g. log-odds). With a formula, ``r2`` is the
+            whole model's R², covariates included; it is NaN for GLMs and
+            mixed models.
+
+        Raises
+        ------
+        ValueError
+            If y is categorical or 2-D, if a formula is given without
+            ``data``, if its left side names another column, if a ``data``
+            column name starts with ``_ssd_``, or if a column the formula
+            uses has missing values in kept documents.
         """
+        fit_args = {"formula": formula, "family": family, "link": link,
+                    "fixed_k": fixed_k, "k_min": k_min, "k_max": k_max, "k_step": k_step,
+                    "pca_sweep_args": pca_sweep_args}
+        import glmm
+
         from ssdiff.results.continuous_result import PCAOLSResult
 
-        self._require_1d_y("fit_ols")
+        self._require_1d_y("fit_regression")
         if not self.is_numeric:
             raise ValueError(
-                "fit_ols() requires numeric y. This SSD was constructed with "
+                "fit_regression() requires numeric y. This SSD was constructed with "
                 "categorical labels — use fit_groups() instead."
             )
 
-        # Standardize y (deferred from __init__)
-        ys_2d, _y_mean, _y_scale = standardize(self.y.reshape(-1, 1))
-        ys = ys_2d.ravel()
+        rhs = "1"
+        if formula is not None:
+            if self.data is None:
+                raise ValueError(
+                    "fit_regression() got a formula but this SSD has no data. "
+                    "Construct it with SSD(..., data=df)."
+                )
+            lhs, _, rhs = formula.rpartition("~")
+            lhs, rhs = lhs.strip(), rhs.strip() or "1"
+            if lhs not in ("", "y", self._y_name):
+                raise ValueError(
+                    f"The formula's left side is {lhs!r}, but the outcome is y"
+                    + (f" ({self._y_name!r})" if self._y_name else "")
+                    + ". Give the right side only, e.g. '~ age + (1 | ID)'."
+                )
+        if self.data is not None:
+            columns = self.data.columns if hasattr(self.data, "iloc") else self.data.keys()
+            clash = sorted(str(c) for c in columns if str(c).startswith("_ssd_"))
+            if clash:
+                raise ValueError(
+                    f"data columns {clash} start with '_ssd_', which fit_regression() "
+                    "reserves for its own columns. Rename them."
+                )
+
+        ys = standardize(self.y.reshape(-1, 1))[0].ravel()
 
         # Standardize X
         Xs, X_mean, X_scale = standardize(self.x)
@@ -849,8 +986,8 @@ class SSD:
             collisions = reserved & extra.keys()
             if collisions:
                 raise ValueError(
-                    f"pca_sweep_args cannot override fit_ols-managed keys: "
-                    f"{sorted(collisions)}. Use the corresponding fit_ols "
+                    f"pca_sweep_args cannot override fit_regression-managed keys: "
+                    f"{sorted(collisions)}. Use the corresponding fit_regression "
                     f"parameter (k_min/k_max/k_step, verbose) instead."
                 )
             sweep_result = pca_sweep(
@@ -874,18 +1011,44 @@ class SSD:
         # PCA via SVD
         z, components, _ = pca_fit_transform(Xs, max_comp)
 
-        # OLS in PCA space
-        w_reg = np.linalg.solve(z.T @ z, z.T @ ys)
-        y_pred = z @ w_reg
-        stats = self._compute_fit_stats(ys, y_pred, max_comp)
+        pcs = [f"_ssd_pca_{i}" for i in range(1, max_comp + 1)]
+        cols = {"_ssd_y": self.y, **{c: z[:, i] for i, c in enumerate(pcs)}}
+        if hasattr(self.data, "iloc"):
+            cols = self.data.assign(**cols)
+        elif self.data is not None:
+            cols = {**self.data, **cols}
+        h0 = f"_ssd_y ~ {rhs}"
+        h1 = h0 + " + " + " + ".join(pcs)
+        cmp = glmm.compare(cols, h0, h1, family=family, link=link)
+        fit = cmp.fit1
+        if fit.nobs != self.n_kept:
+            raise ValueError(
+                f"The formula's columns have missing values in "
+                f"{self.n_kept - fit.nobs} of the {self.n_kept} kept documents. "
+                "Fill or drop those rows before building the SSD."
+            )
 
-        # Back-project to doc space
-        beta_std = components.T @ w_reg
+        p_col = "Pr(>F)" if "Pr(>F)" in cmp.table else "Pr(>Chisq)"
+        pvalue = float(cmp.table[p_col][1])
+        test_name = "f_test" if p_col == "Pr(>F)" else "lrt"
+
+        names = list(fit.names)
+        w_reg = np.array([fit.beta[names.index(c)] for c in pcs])
+        # A Gaussian identity-link fit reports w per raw-y unit; dividing by
+        # sd(y) puts beta on the standardized-y scale of the other backends.
+        # Other models keep the link scale, which has no y unit to divide by.
+        linear = fit.family == "gaussian" and fit.link == "identity"
+        if linear:
+            _y_mean, _y_scale = standardize(self.y.reshape(-1, 1))[1:]
+            w_reg = w_reg / _y_scale[0]
+        else:
+            _y_mean, _y_scale = np.zeros(1), np.ones(1)
+
+        # Back-project to doc space. No sign flip (_orient_beta): beta must
+        # keep the sign of the model's coefficients. Without covariates an
+        # OLS fit already correlates positively with y.
         scale = np.where(X_scale > 1e-12, X_scale, 1.0)
-        beta = beta_std / scale
-
-        # Orient beta
-        beta = self._orient_beta(beta, ys)
+        beta = (components.T @ w_reg) / scale
 
         kwargs = self._base_result_kwargs()
         kwargs["_y_mean"] = _y_mean
@@ -898,11 +1061,12 @@ class SSD:
                 {**r, "k": r["PCA_K"]} for r in sweep_result.df_joined
             ]
 
-        return PCAOLSResult(
+        result = PCAOLSResult(
+            backend="PCA+OLS" if formula is None and linear else "PCA+GLMM",
             beta=beta,
-            pvalue=stats["f_pvalue"],
-            r2=stats["r2"],
-            r2_adj=stats["r2_adj"],
+            pvalue=pvalue,
+            r2=float(fit.r_squared),
+            r2_adj=float(fit.adj_r_squared),
             fit_info={
                 "n_components": n_pca,
                 "k_min": k_min if sweep_result is not None else None,
@@ -910,6 +1074,8 @@ class SSD:
                 "k_step": k_step if sweep_result is not None else None,
                 "best_k": sweep_result.best_k if sweep_result is not None else None,
                 "pca_k_source": "sweep" if fixed_k is None else "fixed",
+                "formula": formula,
+                "family": fit.family,
             },
             raw_diagnostics={
                 "sweep_result": sweep_result,
@@ -917,10 +1083,13 @@ class SSD:
                 "pca_weights": w_reg,
             },
             sweep=_sweep_rows,
-            test_name="f_test",
-            test_info={"pvalue": stats["f_pvalue"]},
+            test_name=test_name,
+            test_info={"pvalue": pvalue},
             **kwargs,
         )
+        result.model = fit
+        result.fit_args = fit_args
+        return result
 
     # ── Group comparison backend ──────────────────────────────
 
@@ -970,6 +1139,10 @@ class SSD:
         from ssdiff.results.schema import Pair
 
         self._require_1d_y("fit_groups")
+        fit_args = {"median_split": median_split, "n_perm": n_perm,
+                    "correction": correction, "random_state": random_state}
+        # Corpus row of each row of ``x``: the results page links documents back to their text.
+        doc_ids = np.flatnonzero(self._keep_mask)
 
         # Local copies — never mutate self.x or self.y
         x_local = self.x.copy()
@@ -985,6 +1158,7 @@ class SSD:
             x_local, groups_local, n_group_dropped = filter_small_groups(
                 x_local, groups_local,
             )
+            doc_ids = doc_ids[np.isin(np.asarray(self.y, dtype=object), np.unique(groups_local))]
 
         group_labels = sorted(set(groups_local), key=str)
         G = len(group_labels)
@@ -1020,7 +1194,7 @@ class SSD:
 
         # words / clusters / snippets are computed lazily on access by
         # GroupResult, using (embeddings, x, groups) + per-pair gradient.
-        return GroupResult(
+        result = GroupResult(
             G=G,
             n_kept=len(x_local),
             n_perm=n_perm,
@@ -1038,6 +1212,9 @@ class SSD:
             window=self.window,
             sif_a=self.sif_a,
         )
+        result.fit_args = fit_args
+        result.doc_ids = doc_ids
+        return result
 
     def __repr__(self) -> str:
         dim = self.x.shape[1] if self.x.ndim == 2 else 0
@@ -1046,7 +1223,7 @@ class SSD:
             f"D={dim}  |L|={len(self.lexicon)}  lang={self.lang}"
         )
         arrays = "  arrays:  .x  .y"
-        methods = "  methods: .fit_pls()  .fit_multipls()  .fit_ols()  .fit_groups()"
+        methods = "  methods: .fit_pls()  .fit_multipls()  .fit_regression()  .fit_groups()"
         return "\n".join([header, arrays, methods])
 
     def _repr_html_(self) -> str:

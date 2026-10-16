@@ -277,8 +277,13 @@ def _rank_for_token_stats(
 
 def _filter_y(
     docs: list[list[str]], y, *, var_type: str = "continuous",
-) -> tuple[list[list[str]], np.ndarray]:
-    """Filter docs and y for valid entries. Returns (docs, y_clean)."""
+) -> tuple[list[list[str]], np.ndarray | None]:
+    """Filter docs and y for valid entries. Returns (docs, y_clean).
+
+    ``y=None`` drops nothing and returns ``(docs, None)``.
+    """
+    if y is None:
+        return docs, None
     _validate_var_type(var_type)
     if var_type == "categorical":
         y_arr = np.asarray(y, dtype=object)

@@ -858,6 +858,26 @@ class Result(ABC):  # noqa: B024 — marker base class; subclasses share infra, 
             self.embeddings = self.embeddings.with_corpus(self.corpus)
         return self
 
+    # -------- results page -------------------------------------------------
+    def page_data(self, *, title=None, dataset=None, snippets_per_side=200,
+                  snippets_per_cluster=50, doc_texts=50) -> dict:
+        """This result as the JSON object of the HTML results page. See ``save_page``."""
+        from ssdiff.results.page import page_data
+        return page_data(self, title=title, dataset=dataset, snippets_per_side=snippets_per_side,
+                         snippets_per_cluster=snippets_per_cluster, doc_texts=doc_texts)
+
+    def save_page(self, path="ssd_results.html", *, title=None, dataset=None, snippets_per_side=200,
+                  snippets_per_cluster=50, doc_texts=50) -> None:
+        """Write a self-contained HTML results page that opens from disk with no network.
+
+        ``doc_texts`` keeps the text of the ``doc_texts`` highest- and lowest-scoring
+        documents (and, for PLS and PCA+OLS, the most over- and under-predicted);
+        ``None`` keeps every document's text, ``0`` none.
+        """
+        from ssdiff.results.page import save_page
+        save_page(self, path, title=title, dataset=dataset, snippets_per_side=snippets_per_side,
+                  snippets_per_cluster=snippets_per_cluster, doc_texts=doc_texts)
+
     def _require_resource(self, resource: str, view_name: str) -> None:
         """Raise with an actionable hint when an accessor needs a missing resource."""
         if getattr(self, resource, None) is None:

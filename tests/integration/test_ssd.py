@@ -83,27 +83,27 @@ def test_fit_pls_beta_shape(ssd_instance, tiny_kv):
 
 
 # ---------------------------------------------------------------------------
-# 5. fit_ols with fixed_k
+# 5. fit_regression with fixed_k
 # ---------------------------------------------------------------------------
 
-def test_fit_ols_fixed_k(ssd_instance):
-    """fit_ols(fixed_k=3) returns PCAOLSResult with pca_k == 3."""
+def test_fit_regression_fixed_k(ssd_instance):
+    """fit_regression(fixed_k=3) returns PCAOLSResult with pca_k == 3."""
     from ssdiff.results.continuous_result import PCAOLSResult
-    result = ssd_instance.fit_ols(fixed_k=3)
+    result = ssd_instance.fit_regression(fixed_k=3)
     assert isinstance(result, PCAOLSResult)
     assert result.pca_k == 3
 
 
 # ---------------------------------------------------------------------------
-# 6. fit_ols sweep (fixed_k=None)
+# 6. fit_regression sweep (fixed_k=None)
 # ---------------------------------------------------------------------------
 
-def test_fit_ols_sweep(tiny_kv, large_docs, large_y, lexicon):
-    """fit_ols(fixed_k=None) sweep produces valid PCAOLSResult."""
+def test_fit_regression_sweep(tiny_kv, large_docs, large_y, lexicon):
+    """fit_regression(fixed_k=None) sweep produces valid PCAOLSResult."""
     from ssdiff.results.continuous_result import PCAOLSResult
     corpus = Corpus(large_docs, pretokenized=True, lang="pl")
     ssd = SSD(tiny_kv, corpus, large_y, lexicon)
-    result = ssd.fit_ols(fixed_k=None, k_min=2, k_max=6, k_step=1)
+    result = ssd.fit_regression(fixed_k=None, k_min=2, k_max=6, k_step=1)
     assert isinstance(result, PCAOLSResult)
     assert 0.0 <= result.stats.r2 <= 1.0
     assert result.pca_k >= 2
@@ -292,15 +292,15 @@ def test_fit_pls_k_auto(ssd_instance):
 
 
 # ---------------------------------------------------------------------------
-# 16. fit_ols raises ValueError on categorical y
+# 16. fit_regression raises ValueError on categorical y
 # ---------------------------------------------------------------------------
 
-def test_fit_ols_categorical_y_raises(tiny_kv, sample_docs, sample_groups, lexicon):
-    """SSD with categorical y raises ValueError on fit_ols()."""
+def test_fit_regression_categorical_y_raises(tiny_kv, sample_docs, sample_groups, lexicon):
+    """SSD with categorical y raises ValueError on fit_regression()."""
     corpus = Corpus(sample_docs, pretokenized=True, lang="pl")
     ssd = SSD(tiny_kv, corpus, sample_groups, lexicon)
     with pytest.raises(ValueError, match="categorical"):
-        ssd.fit_ols()
+        ssd.fit_regression()
 
 
 # ---------------------------------------------------------------------------
@@ -365,14 +365,14 @@ def test_y_2d_non_numeric_raises(tiny_kv, sample_docs, lexicon):
         _make_ssd(tiny_kv, sample_docs, y, lexicon)
 
 
-@pytest.mark.parametrize("method", ["fit_pls", "fit_ols", "fit_groups"])
+@pytest.mark.parametrize("method", ["fit_pls", "fit_regression", "fit_groups"])
 def test_single_outcome_fits_reject_2d_y(tiny_kv, sample_docs, lexicon, method):
     ssd = _make_ssd(tiny_kv, sample_docs, _y2(len(sample_docs)), lexicon)
     with pytest.raises(ValueError, match="fit_multipls"):
         getattr(ssd, method)()
 
 
-@pytest.mark.parametrize("method", ["fit_pls", "fit_ols", "fit_groups"])
+@pytest.mark.parametrize("method", ["fit_pls", "fit_regression", "fit_groups"])
 def test_single_column_2d_y_asks_for_1d(tiny_kv, sample_docs, lexicon, method):
     ssd = _make_ssd(tiny_kv, sample_docs, _y2(len(sample_docs), q=1), lexicon)
     with pytest.raises(ValueError, match="1-D y"):
@@ -385,7 +385,7 @@ def test_single_column_2d_y_asks_for_1d(tiny_kv, sample_docs, lexicon, method):
 
 @pytest.mark.parametrize("fit", [
     lambda s: s.fit_pls(k=2, n_splits=20, random_state=42),
-    lambda s: s.fit_ols(fixed_k=3),
+    lambda s: s.fit_regression(fixed_k=3),
 ], ids=["pls", "ols"])
 def test_predict_training_corpus_reproduces_fit(ssd_instance, fit):
     """predict() on the training corpus gives docs.y_hat, and its R² is stats.r2."""

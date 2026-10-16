@@ -13,9 +13,9 @@ This folder holds four tiers of documentation; runnable demos are in [`../exampl
 | Read this | When you want to… |
 |---|---|
 | [`embeddings.md`](embeddings.md) | Get embeddings. The ready English packs (`Embeddings.load()`), tags and full names, where packs are stored, and loading your own embedding file for another language. |
-| [`api_reference.md`](api_reference.md) | Fit a model. Covers `Embeddings`, `Corpus`, `SSD`, and the fit methods (`fit_ols`, `fit_pls`, `fit_groups`, `fit_multipls`) with argument tables and a full workflow example. Results are only sketched here. |
+| [`api_reference.md`](api_reference.md) | Fit a model. Covers `Embeddings`, `Corpus`, `SSD`, and the fit methods (`fit_regression`, `fit_pls`, `fit_groups`, `fit_multipls`) with argument tables and a full workflow example. Results are only sketched here. |
 | [`../examples/demo_pls.py`](../examples/demo_pls.py) | Runnable example for `fit_pls`. |
-| [`../examples/demo_pcaols.py`](../examples/demo_pcaols.py) | Runnable example for `fit_ols`. |
+| [`../examples/demo_pcaols.py`](../examples/demo_pcaols.py) | Runnable example for `fit_regression`. |
 | [`../examples/demo_groups.py`](../examples/demo_groups.py) | Runnable example for `fit_groups`. |
 | [`../examples/demo_multipls.py`](../examples/demo_multipls.py) | Runnable example for `fit_multipls`. |
 
@@ -50,7 +50,7 @@ emb    = Embeddings.load()                 # the default English wordpack, downl
 corpus = Corpus(texts, embeddings=emb)     # the pack's tokenizer and stopwords; no spaCy
 ssd    = SSD(emb, corpus, y=scores, lexicon=["happy", "sad", "joy"])
 
-result = ssd.fit_ols()          # PCA + OLS, F-test p-value
+result = ssd.fit_regression()   # PCA regression, F-test p-value
 # result = ssd.fit_pls()        # PLS with split-half test
 # result = ssd.fit_groups()     # categorical outcome, permutation test
 # result = ssd.fit_multipls(k=2)  # several outcomes (y as a DataFrame), PLS3

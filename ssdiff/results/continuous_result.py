@@ -57,6 +57,7 @@ class FitInfoView(ScalarView):
         "n_components", "pca_k", "p_at_k", "n_splits",
         "split_mean_r", "random_state", "keep",
         "k_min", "k_max", "k_step", "best_k", "pca_k_source",
+        "formula", "family",
     )
 
     def __init__(self, info: FitInfo):
@@ -1186,18 +1187,18 @@ class PLSTestView(TestView):
 
 
 class PCAOLSTestView(TestView):
-    """`.test` for PCAOLSResult — currently F-test only (extensible)."""
+    """`.test` for PCAOLSResult — the fit's own test: ``"f_test"`` or ``"lrt"``."""
 
     _columns = ("name", "pvalue")
     _default_name = "f_test"
 
     def _run(self, name, params):
-        """Return (name, info_dict) for the F-test; rerun is a no-op (analytic test)."""
-        if name != "f_test":
+        """Return (name, info_dict) for the stored test; rerun is a no-op (analytic test)."""
+        if name != self._test_name:
             raise ValueError(
-                f"Unknown PCA+OLS test {name!r}. Available: ('f_test',)"
+                f"Unknown test {name!r} for this fit. Available: ({self._test_name!r},)"
             )
-        # F-test is analytic and computed at fit. Rerun is a no-op;
+        # The test is analytic and computed at fit. Rerun is a no-op;
         # we return the current stored value so repeated calls stay consistent.
         return name, {"pvalue": self.pvalue}
 
@@ -1206,7 +1207,7 @@ class PCAOLSTestView(TestView):
         pass
 
     def _rerun_hint(self) -> str:
-        return "Rerun: .test('f_test')   # only test currently available"
+        return f"Rerun: .test({self._test_name!r})   # only test available for this fit"
 
 
 # ---------- ContinuousResult ----------
@@ -1421,10 +1422,20 @@ class ContinuousResult(_SingleResult):
             Raw texts for a fit whose embeddings are not a wordpack.
         ValueError
             A ``Corpus`` tokenized for other embeddings.
+        NotImplementedError
+            A ``fit_regression`` fit with a formula or a model other than
+            Gaussian identity-link. Its prediction needs the covariates and
+            random effects of the new documents, or the model's intercept
+            and inverse link, which the result does not apply.
         """
         from ssdiff.corpus import Corpus, _check_tokenizer
         from ssdiff.utils.vectors import build_and_normalize_doc_vectors
 
+        if self.stats.backend == "PCA+GLMM":
+            raise NotImplementedError(
+                "predict() works only for fit_regression() without a formula and "
+                "with the Gaussian family; this fit used a formula or another family."
+            )
         self._require_resource("embeddings", "predict()")
         if isinstance(texts, Corpus):
             corpus = texts
@@ -1451,7 +1462,7 @@ class ContinuousResult(_SingleResult):
 
     _access = (
         "stats", "fit_info", "words", "clusters", "snippets", "docs", "test",
-        "report()", "test(...)", "predict(...)", "attach(...)",
+        "report()", "save_page(...)", "test(...)", "predict(...)", "attach(...)",
     )
     _arrays = ("x", "y", "beta", "gradient", "alignment_scores")
 
@@ -1721,28 +1732,33 @@ class PLSResult(ContinuousResult):
 
 # ---------- PCAOLSResult ----------
 class PCAOLSResult(ContinuousResult):
-    """PCA + OLS result.
+    """PCA regression result (``SSD.fit_regression``).
 
     Attributes
     ----------
+    model : glmm.Fit
+        The glmm fit of y on the formula and the K component scores
+        (``_ssd_pca_1`` … ``_ssd_pca_K``; the response is ``_ssd_y``):
+        covariate coefficients, random effects, ``.summary()``.
     sweep_result : PCAKSelectionResult | None
         Full PCA sweep diagnostics. The **PCA sweep** procedure selects K
         by joint interpretability+stability score (see Plisiecki, Leniarska
-        et al., 2026). ``None`` when ``fit_ols(fixed_k=...)`` was used.
+        et al., 2026). ``None`` when ``fit_regression(fixed_k=...)`` was used.
     pca_k : int
         Number of PCA components used.
     pca_components : ndarray of shape (K, D)
         PCA loadings V_K — the first K principal directions of the
         standardized PCV matrix.
     pca_weights : ndarray of shape (K,)
-        OLS regression weights w_K estimated in PCA space;
+        Regression weights w_K of the K components in ``model``;
         ``β = V_K w_K / x_scale``.
     """
 
+    model = None
     _stats_view_cls = OLSStatsView
     _access = (
         "stats", "fit_info", "words", "clusters", "snippets", "docs", "sweep",
-        "test", "report()", "test(...)", "predict(...)", "attach(...)",
+        "test", "model", "report()", "save_page(...)", "test(...)", "predict(...)", "attach(...)",
     )
     _arrays = (
         "x", "y", "beta", "gradient", "alignment_scores",
@@ -1816,7 +1832,7 @@ class PCAOLSResult(ContinuousResult):
         """
         if self.sweep_result is None:
             raise RuntimeError(
-                "No sweep data — fit_ols() was called with an explicit "
+                "No sweep data — fit_regression() was called with an explicit "
                 "fixed_k. Re-run with fixed_k=None to enable "
                 "the PCA-K sweep."
             )

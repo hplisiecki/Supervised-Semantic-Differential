@@ -66,3 +66,6 @@ show("pls.test", pls.test)
 print("\n══════ Markdown report ══════")
 print(pls.report(clusters={"n": 30, "n_words": 10, "n_snippets": 1}))
 # pls.report(clusters={"n": 30, "n_words": 10, "n_snippets": 1}).save("report_pls.md")
+
+print("\n══════ Results page ══════")
+pls.save_page("ssd_results_pls.html", title="Warriner valence (PLS)")

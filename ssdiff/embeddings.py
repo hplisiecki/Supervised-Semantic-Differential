@@ -160,7 +160,7 @@ class Embeddings:
         4. Anything else raises ``FileNotFoundError`` listing the tags.
 
         A pack is downloaded once into a cache directory (``WORDPACK_CACHE``,
-        or the platform's cache directory under ``wordpack``) and loaded from
+        or ``~/.wordpacks``) and loaded from
         there, offline once it is cached. A tag means the same pack for a
         given ssdiff version; a full name always means the same file. With no
         argument, the tag ``"default"`` is loaded. A ``pathlib.Path`` is never

@@ -1,0 +1,1043 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SSD Results Page</title>
+<style>
+/* Layout: header strip, summary cards, tab bar; each tab is a grid of panels that stacks below 900px. */
+:root {
+  --bg: #F0F0F0; --panel: #E8E8E8; --panel-2: #FFFFFF;
+  --border: #C0C0C0; --border-2: #D4D4D4;
+  --fg: #0A0A0A; --fg-2: #3A3A3A; --fg-3: #686868;
+  --accent: #163060; --accent-fg: #FFFFFF; --sel: #B8CCE8;
+  --row-alt: #F5F5F5; --badge-ols: #5cb85c; --badge-groups: #f0ad4e;
+  --note-bg: #FFF6D8; --note-fg: #5A4600;
+  --font: "Segoe UI", "SF Pro Display", "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --r: 4px;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #14151f; --panel: #1c1d2e; --panel-2: #222336;
+  --border: #353650; --border-2: #2c2d44;
+  --fg: #e4e4f0; --fg-2: #9c9cb4; --fg-3: #6e6e88;
+  --accent: #6c9ce6; --accent-fg: #14151f; --sel: #3d5a8a;
+  --row-alt: #1f2032; --note-bg: #2e2a1a; --note-fg: #e8d9a0;
+  color-scheme: dark;
+} }
+:root[data-theme="dark"] {
+  --bg: #14151f; --panel: #1c1d2e; --panel-2: #222336;
+  --border: #353650; --border-2: #2c2d44;
+  --fg: #e4e4f0; --fg-2: #9c9cb4; --fg-3: #6e6e88;
+  --accent: #6c9ce6; --accent-fg: #14151f; --sel: #3d5a8a;
+  --row-alt: #1f2032; --note-bg: #2e2a1a; --note-fg: #e8d9a0;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font: 13px/1.45 var(--font); margin: 0; }
+#app { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 16px 32px; max-width: 1500px; margin: 0 auto; display: flex; flex-direction: column; gap: 12px; }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+
+/* header */
+.hdr { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.hdr h1 { font-size: 20px; margin: 0; font-weight: 700; text-wrap: balance; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: var(--r); font-size: 11px; font-weight: 700; letter-spacing: .04em; background: var(--accent); color: var(--accent-fg); }
+.badge.pca_ols { background: var(--badge-ols); color: #fff; }
+.badge.groups { background: var(--badge-groups); color: #1a1200; }
+.meta { color: var(--fg-2); display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.meta b { color: var(--fg); font-weight: 600; }
+.hdr .spacer { flex: 1; }
+
+/* buttons and menus */
+.btn { background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r); padding: 4px 10px; }
+.btn:hover { border-color: var(--accent); }
+.btn.small { padding: 1px 7px; font-size: 12px; }
+.btn.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.menu-wrap { position: relative; }
+.menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r); box-shadow: 0 6px 18px rgba(0,0,0,.18); min-width: 170px; padding: 4px 0; }
+.menu button { display: block; width: 100%; text-align: left; background: none; border: 0; padding: 5px 12px; }
+.menu button:hover { background: var(--sel); }
+.menu hr { border: 0; border-top: 1px solid var(--border-2); margin: 4px 0; }
+.menu .hint { color: var(--fg-3); font-size: 11px; padding: 2px 12px 4px; }
+
+/* unit selector */
+.unitbar { display: flex; align-items: center; gap: 8px; }
+
+/* cards */
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 0; background: var(--panel); border: 1px solid var(--border); border-radius: var(--r); }
+.card { padding: 10px 12px; text-align: center; border-right: 1px solid var(--border-2); }
+.card:last-child { border-right: 0; }
+.card .v { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.card .n { color: var(--fg-2); font-size: 12px; }
+
+/* tabs */
+.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); overflow-x: auto; }
+.tab { background: none; border: 1px solid transparent; border-bottom: 0; border-radius: var(--r) var(--r) 0 0; padding: 6px 14px; color: var(--fg-2); white-space: nowrap; margin-bottom: -1px; }
+.tab[aria-selected="true"] { background: var(--panel); border-color: var(--border); color: var(--fg); font-weight: 600; }
+.tabpanel { background: var(--panel); border: 1px solid var(--border); border-top: 0; border-radius: 0 0 var(--r) var(--r); padding: 12px; min-width: 0; }
+
+/* panels */
+.grid2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+.grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 900px) { .grid2, .grid3 { grid-template-columns: minmax(0, 1fr); } }
+.stack { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.box { background: var(--panel-2); border: 1px solid var(--border-2); border-radius: var(--r); padding: 10px; min-width: 0; }
+.box h3 { margin: 0 0 8px; font-size: 13px; font-weight: 600; }
+.box h3 .sub { color: var(--fg-3); font-weight: 400; }
+.controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.controls label { display: flex; align-items: center; gap: 6px; color: var(--fg-2); }
+.controls input[type=number] { width: 64px; background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r); padding: 2px 6px; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--r); overflow: hidden; }
+.seg button { background: var(--panel-2); border: 0; padding: 3px 12px; }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); }
+.muted { color: var(--fg-3); }
+.empty { color: var(--fg-3); padding: 18px 4px; }
+
+/* tables */
+.tbl-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.tbl-head h3 { margin: 0; flex: 1; }
+.tbl-scroll { overflow: auto; max-height: 520px; border: 1px solid var(--border-2); border-radius: var(--r); }
+.tbl-scroll.short { max-height: 320px; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th { position: sticky; top: 0; background: var(--panel); font-size: 11px; text-transform: uppercase; font-weight: 600; letter-spacing: .03em; color: var(--fg-2); text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; user-select: none; }
+th.sortable { cursor: pointer; }
+th.sortable:hover { color: var(--fg); }
+th .arrow { color: var(--accent); }
+td { padding: 4px 8px; border-bottom: 1px solid var(--border-2); vertical-align: top; }
+tbody tr:nth-child(even) td { background: var(--row-alt); }
+tbody tr.sel td { background: var(--sel); }
+tbody tr.clickable { cursor: pointer; }
+td.num, th.num { text-align: right; white-space: nowrap; }
+td.text { min-width: 260px; }
+.more { display: flex; gap: 8px; align-items: center; padding-top: 6px; color: var(--fg-3); font-size: 12px; }
+
+/* detail */
+dl.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 14px; margin: 0; }
+dl.kv dt { color: var(--fg-2); }
+dl.kv dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.kv-group + .kv-group { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-2); }
+.kv-group h4 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; color: var(--fg-3); font-weight: 600; }
+.quote { background: var(--bg); border-radius: var(--r); padding: 8px 10px; white-space: pre-wrap; overflow-wrap: anywhere; margin: 4px 0 0; }
+.words { display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; }
+.chip { background: var(--bg); border: 1px solid var(--border-2); border-radius: var(--r); padding: 0 6px; }
+.link { background: none; border: 0; color: var(--accent); padding: 0; text-decoration: underline; }
+
+/* dialog */
+.overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 50; display: flex; align-items: center; justify-content: center; padding: max(16px, env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) max(16px, env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px)); }
+.dialog { background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r); width: min(760px, 100%); max-height: 100%; display: flex; flex-direction: column; }
+.dialog header { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border-2); }
+.dialog header h2 { margin: 0; font-size: 15px; flex: 1; }
+.dialog .body { padding: 12px 14px; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
+.dialog pre { background: var(--bg); border-radius: var(--r); padding: 10px; margin: 0; font: 12px/1.45 var(--mono); overflow: auto; max-height: 50vh; white-space: pre; }
+.dialog footer { display: flex; gap: 8px; justify-content: flex-end; padding: 10px 14px; border-top: 1px solid var(--border-2); flex-wrap: wrap; }
+.guide h4 { margin: 4px 0; font-size: 13px; }
+.guide p { margin: 0; color: var(--fg-2); }
+.guide code { font-family: var(--mono); font-size: 12px; }
+.err { padding: 24px; font-size: 15px; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script type="application/json" id="ssd-data">__SSD_DATA__</script>
+<script>
+/* Preact 10.29.8 (dist/preact.umd.js) — https://preactjs.com
+ * Licence: MIT
+ *
+ * The MIT License (MIT)
+ *
+ * Copyright (c) 2015-present Jason Miller
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE. */
+!function(n,t){"object"==typeof exports&&"undefined"!=typeof module?t(exports):"function"==typeof define&&define.amd?define(["exports"],t):t((n||self).preact={})}(this,function(n){var t,i,e,r,f,o,u,c,s,a,h,l,p,y,v,d,w="http://www.w3.org/2000/svg",_="http://www.w3.org/1999/xhtml",g=null,m=void 0,b={},k=[],x=/acit|ex(?:s|g|n|p|$)|rph|grid|ows|mnc|ntw|ine[ch]|zoo|^ord|itera/i,M=Array.isArray;function S(n,t){for(var i in t)n[i]=t[i];return n}function T(n){n&&n.parentNode&&n.parentNode.removeChild(n)}function $(n,i,e){var r,f,o,u={};for(o in i)"key"==o?r=i[o]:"ref"==o?f=i[o]:u[o]=i[o];if(arguments.length>2&&(u.children=arguments.length>3?t.call(arguments,2):e),"function"==typeof n&&n.defaultProps!=g)for(o in n.defaultProps)u[o]===m&&(u[o]=n.defaultProps[o]);return C(n,u,r,f,g)}function C(n,t,r,f,o){var u={type:n,props:t,key:r,ref:f,__k:g,__:g,__b:0,__e:g,__c:g,constructor:m,__v:o==g?++e:o,__i:-1,__u:0};return o==g&&i.vnode!=g&&i.vnode(u),u}function I(n){return n.children}function P(n,t){this.props=n,this.context=t}function j(n,t){if(t==g)return n.__?j(n.__,n.__i+1):g;for(var i;t<n.__k.length;t++)if((i=n.__k[t])!=g&&i.__e!=g)return i.__e;return"function"==typeof n.type?j(n):g}function A(n){if(n.__P&&n.__d){var t=n.__v,e=t.__e,r=[],f=[],o=S({},t);o.__v=t.__v+1,i.vnode&&i.vnode(o),E(n.__P,o,t,n.__n,n.__P.namespaceURI,32&t.__u?[e]:g,r,e==g?j(t):e,!!(32&t.__u),f),o.__v=t.__v,o.__.__k[o.__i]=o,J(r,o,f),t.__e=t.__=null,o.__e!=e&&H(o)}}function H(n){if((n=n.__)!=g&&n.__c!=g)return n.__e=n.__c.base=g,n.__k.some(function(t){if(t!=g&&t.__e!=g)return n.__e=n.__c.base=t.__e}),H(n)}function L(n){(!n.__d&&(n.__d=!0)&&f.push(n)&&!F.__r++||o!=i.debounceRendering)&&((o=i.debounceRendering)||u)(F)}function F(){try{for(var n,t=1;f.length;)f.length>t&&f.sort(c),n=f.shift(),t=f.length,A(n)}finally{f.length=F.__r=0}}function O(n,t,i,e,r,f,o,u,c,s,a){var h,l,p,y,v,d,w=e&&e.__k||k,_=t.length;for(c=z(i,t,w,c,_),h=0;h<_;h++)(p=i.__k[h])!=g&&(l=-1!=p.__i&&w[p.__i]||b,p.__i=h,d=E(n,p,l,r,f,o,u,c,s,a),y=p.__e,p.ref&&l.ref!=p.ref&&(l.ref&&R(l.ref,g,p),a.push(p.ref,p.__c||y,p)),v==g&&y!=g&&(v=y),4&p.__u?(c=N(p,c,n),l.__e&&(l.__e=g)):"function"==typeof p.type&&d!==m?c=d:y&&(c=y.nextSibling),p.__u&=-7);return i.__e=v,c}function z(n,t,i,e,r){var f,o,u,c,s,a=i.length,h=a,l=0;for(n.__k=new Array(r),f=0;f<r;f++)(o=t[f])!=g&&"boolean"!=typeof o&&"function"!=typeof o?("string"==typeof o||"number"==typeof o||"bigint"==typeof o||o.constructor==String?o=n.__k[f]=C(g,o,g,g,g):M(o)?o=n.__k[f]=C(I,{children:o},g,g,g):o.constructor===m&&o.__b>0?o=n.__k[f]=C(o.type,o.props,o.key,o.ref?o.ref:g,o.__v):n.__k[f]=o,c=f+l,o.__=n,o.__b=n.__b+1,s=o.__i=V(o,i,c,h),u=g,-1!=s&&(h--,(u=i[s])&&(u.__u|=2)),u==g||u.__v==g?(-1==s&&(r>a?l--:r<a&&l++),"function"!=typeof o.type&&(o.__u|=4)):s!=c&&(s==c-1?l--:s==c+1?l++:(s>c?l--:l++,o.__u|=4))):n.__k[f]=g;if(h)for(f=0;f<a;f++)(u=i[f])!=g&&0==(2&u.__u)&&(u.__e==e&&(e=j(u)),U(u,u));return e}function N(n,t,i){var e,r;if("function"==typeof n.type){for(e=n.__k,r=0;e&&r<e.length;r++)e[r]&&(e[r].__=n,t=N(e[r],t,i));return t}n.__e!=t&&(t&&n.type&&!t.parentNode&&(t=j(n)),t=i.insertBefore(n.__e,t||g));do{t=t&&t.nextSibling}while(t!=g&&8==t.nodeType);return t}function V(n,t,i,e){var r,f,o,u=n.key,c=n.type,s=t[i],a=s!=g&&0==(2&s.__u);if(s===g&&null==u||a&&u==s.key&&c==s.type)return i;if(e>(a?1:0))for(r=i-1,f=i+1;r>=0||f<t.length;)if((s=t[o=r>=0?r--:f++])!=g&&0==(2&s.__u)&&u==s.key&&c==s.type)return o;return-1}function q(n,t,i){"-"==t[0]?n.setProperty(t,i==g?"":i):n[t]=i==g?"":"number"!=typeof i||x.test(t)?i:i+"px"}function B(n,t,i,e,r){var f,o;n:if("style"==t)if("string"==typeof i)n.style.cssText=i;else{if("string"==typeof e&&(n.style.cssText=e=""),e)for(t in e)i&&t in i||q(n.style,t,"");if(i)for(t in i)e&&i[t]==e[t]||q(n.style,t,i[t])}else if("o"==t[0]&&"n"==t[1])f=t!=(t=t.replace(l,"$1")),o=t.toLowerCase(),t=o in n||"onFocusOut"==t||"onFocusIn"==t?o.slice(2):t.slice(2),n.l||(n.l={}),n.l[t+f]=i,i?e?i[h]=e[h]:(i[h]=p,n.addEventListener(t,f?v:y,f)):n.removeEventListener(t,f?v:y,f);else{if(r==w)t=t.replace(/xlink(H|:h)/,"h").replace(/sName$/,"s");else if("width"!=t&&"height"!=t&&"href"!=t&&"list"!=t&&"form"!=t&&"tabIndex"!=t&&"download"!=t&&"rowSpan"!=t&&"colSpan"!=t&&"role"!=t&&"popover"!=t&&t in n)try{n[t]=i==g?"":i;break n}catch(n){}"function"==typeof i||(i==g||!1===i&&"-"!=t[4]?n.removeAttribute(t):n.setAttribute(t,"popover"==t&&1==i?"":i))}}function D(n){return function(t){if(this.l){var e=this.l[t.type+n];if(t[a]==g)t[a]=p++;else if(t[a]<e[h])return;return e(i.event?i.event(t):t)}}}function E(n,t,e,r,f,o,u,c,s,a){var h,l,p,y,v,d,w,_,b,x,$,C,A,H,L,F,z=t.type;if(t.constructor!==m)return g;128&e.__u&&(s=!!(32&e.__u),o=[c=t.__e=e.__e]),(h=i.__b)&&h(t);n:if("function"==typeof z){l=u.length;try{if(b=t.props,x=z.prototype&&z.prototype.render,$=(h=z.contextType)&&r[h.__c],C=h?$?$.props.value:h.__:r,e.__c?_=(p=t.__c=e.__c).__=p.__E:(x?t.__c=p=new z(b,C):(t.__c=p=new P(b,C),p.constructor=z,p.render=W),$&&$.sub(p),p.state||(p.state={}),p.__n=r,y=p.__d=!0,p.__h=[],p._sb=[]),x&&p.__s==g&&(p.__s=p.state),x&&z.getDerivedStateFromProps!=g&&(p.__s==p.state&&(p.__s=S({},p.__s)),S(p.__s,z.getDerivedStateFromProps(b,p.__s))),v=p.props,d=p.state,p.__v=t,y)x&&z.getDerivedStateFromProps==g&&p.componentWillMount!=g&&p.componentWillMount(),x&&p.componentDidMount!=g&&p.__h.push(p.componentDidMount);else{if(x&&z.getDerivedStateFromProps==g&&b!==v&&p.componentWillReceiveProps!=g&&p.componentWillReceiveProps(b,C),t.__v==e.__v||!p.__e&&p.shouldComponentUpdate!=g&&!1===p.shouldComponentUpdate(b,p.__s,C)){t.__v!=e.__v&&(p.props=b,p.state=p.__s,p.__d=!1),t.__e=e.__e,t.__k=e.__k,t.__k.some(function(n){n&&(n.__=t)}),k.push.apply(p.__h,p._sb),p._sb=[],p.__h.length&&u.push(p),c=j(e);break n}p.componentWillUpdate!=g&&p.componentWillUpdate(b,p.__s,C),x&&p.componentDidUpdate!=g&&p.__h.push(function(){p.componentDidUpdate(v,d,w)})}if(p.context=C,p.props=b,p.__P=n,p.__e=!1,A=i.__r,H=0,x)p.state=p.__s,p.__d=!1,A&&A(t),h=p.render(p.props,p.state,p.context),k.push.apply(p.__h,p._sb),p._sb=[];else do{p.__d=!1,A&&A(t),h=p.render(p.props,p.state,p.context),p.state=p.__s}while(p.__d&&++H<25);p.state=p.__s,p.getChildContext!=g&&(r=S(S({},r),p.getChildContext())),x&&!y&&p.getSnapshotBeforeUpdate!=g&&(w=p.getSnapshotBeforeUpdate(v,d)),L=h!=g&&h.type===I&&h.key==g?K(h.props.children):h,c=O(n,M(L)?L:[L],t,e,r,f,o,u,c,s,a),p.base=t.__e,t.__u&=-161,p.__h.length&&u.push(p),_&&(p.__E=p.__=g)}catch(n){if(u.length=l,t.__v=g,s||o!=g){if(n.then){for(t.__u|=s?160:128;c&&8==c.nodeType&&c.nextSibling;)c=c.nextSibling;o!=g&&(o[o.indexOf(c)]=g),t.__e=c}else if(o!=g)for(F=o.length;F--;)T(o[F])}else t.__e=e.__e;t.__k==g&&(t.__k=e.__k||[]),n.then||G(t),i.__e(n,t,e)}}else o==g&&t.__v==e.__v?(t.__k=e.__k,t.__e=e.__e):c=t.__e=Q(e.__e,t,e,r,f,o,u,s,a);return(h=i.diffed)&&h(t),128&t.__u?void 0:c}function G(n){n&&(n.__c&&(n.__c.__e=!0),n.__k&&n.__k.some(G))}function J(n,t,e){for(var r=0;r<e.length;r++)R(e[r],e[++r],e[++r]);i.__c&&i.__c(t,n),n.some(function(t){try{n=t.__h,t.__h=[],n.some(function(n){n.call(t)})}catch(n){i.__e(n,t.__v)}})}function K(n){return"object"!=typeof n||n==g||n.__b>0?n:M(n)?n.map(K):n.constructor!==m?null:S({},n)}function Q(n,e,r,f,o,u,c,s,a){var h,l,p,y,v,d,k,x=r.props||b,S=e.props,$=e.type;if("svg"==$?o=w:"math"==$?o="http://www.w3.org/1998/Math/MathML":o||(o=_),u!=g)for(h=0;h<u.length;h++)if((v=u[h])&&"setAttribute"in v==!!$&&($?v.localName==$:3==v.nodeType)){n=v,u[h]=g;break}if(n==g){if($==g)return document.createTextNode(S);n=document.createElementNS(o,$,S.is&&S),s&&(i.__m&&i.__m(e,u),s=!1),u=g}if($==g)x===S||s&&n.data==S||(n.data=S);else{if(u="textarea"==$&&S.defaultValue!=g?g:u&&t.call(n.childNodes),!s&&u!=g)for(x={},h=0;h<n.attributes.length;h++)x[(v=n.attributes[h]).name]=v.value;for(h in x)v=x[h],"dangerouslySetInnerHTML"==h?p=v:"children"==h||h in S||"value"==h&&"defaultValue"in S||"checked"==h&&"defaultChecked"in S||B(n,h,g,v,o);for(h in S)v=S[h],"children"==h?y=v:"dangerouslySetInnerHTML"==h?l=v:"value"==h?d=v:"checked"==h?k=v:s&&"function"!=typeof v||x[h]===v||B(n,h,v,x[h],o);if(l)s||p&&(l.__html==p.__html||l.__html==n.innerHTML)||(n.innerHTML=l.__html),e.__k=[];else if(p&&(n.innerHTML=""),O("template"==e.type?n.content:n,M(y)?y:[y],e,r,f,"foreignObject"==$?_:o,u,c,u?u[0]:r.__k&&j(r,0),s,a),u!=g)for(h=u.length;h--;)T(u[h]);s&&"textarea"!=$||(h="value","progress"==$&&d==g?n.removeAttribute("value"):d!=m&&(d!==n[h]||"progress"==$&&!d||"option"==$&&d!=x[h])&&B(n,h,d,x[h],o),h="checked",k!=m&&k!=n[h]&&B(n,h,k,x[h],o))}return n}function R(n,t,e){try{if("function"==typeof n){var r="function"==typeof n.__u;r&&n.__u(),r&&t==g||(n.__u=n(t))}else n.current=t}catch(n){i.__e(n,e)}}function U(n,t,e){var r,f;if(i.unmount&&i.unmount(n),(r=n.ref)&&(r.current&&r.current!=n.__e||R(r,g,t)),(r=n.__c)!=g){if(r.componentWillUnmount)try{r.componentWillUnmount()}catch(n){i.__e(n,t)}r.base=r.__P=r.__n=g}if(r=n.__k)for(f=0;f<r.length;f++)r[f]&&U(r[f],t,e||"function"!=typeof n.type);e||T(n.__e),n.__c=n.__=n.__e=m}function W(n,t,i){return this.constructor(n,i)}function X(n,e,r){var f,o,u,c;e==document&&(e=document.documentElement),i.__&&i.__(n,e),o=(f="function"==typeof r)?g:r&&r.__k||e.__k,u=[],c=[],E(e,n=(!f&&r||e).__k=$(I,g,[n]),o||b,b,e.namespaceURI,!f&&r?[r]:o?g:e.firstChild?t.call(e.childNodes):g,u,!f&&r?r:o?o.__e:e.firstChild,f,c),J(u,n,c),n.props.children=g}t=k.slice,i={__e:function(n,t,i,e){for(var r,f,o;t=t.__;)if((r=t.__c)&&!r.__)try{if((f=r.constructor)&&f.getDerivedStateFromError!=g&&(r.setState(f.getDerivedStateFromError(n)),o=r.__d),r.componentDidCatch!=g&&(r.componentDidCatch(n,e||{}),o=r.__d),o)return r.__E=r}catch(t){n=t}throw n}},e=0,r=function(n){return n!=g&&n.constructor===m},P.prototype.setState=function(n,t){var i;i=this.__s!=g&&this.__s!=this.state?this.__s:this.__s=S({},this.state),"function"==typeof n&&(n=n(S({},i),this.props)),n&&S(i,n),n!=g&&this.__v&&(t&&this._sb.push(t),L(this))},P.prototype.forceUpdate=function(n){this.__v&&(this.__e=!0,n&&this.__h.push(n),L(this))},P.prototype.render=I,f=[],u="function"==typeof Promise?Promise.prototype.then.bind(Promise.resolve()):setTimeout,c=function(n,t){return n.__v.__b-t.__v.__b},F.__r=0,s=Math.random().toString(8),a="__d"+s,h="__a"+s,l=/(PointerCapture)$|Capture$/i,p=0,y=D(!1),v=D(!0),d=0,n.Component=P,n.Fragment=I,n.cloneElement=function(n,i,e){var r,f,o,u,c=S({},n.props);for(o in n.type&&n.type.defaultProps&&(u=n.type.defaultProps),i)"key"==o?r=i[o]:"ref"==o?f=i[o]:c[o]=i[o]===m&&u!=m?u[o]:i[o];return arguments.length>2&&(c.children=arguments.length>3?t.call(arguments,2):e),C(n.type,c,r||n.key,f||n.ref,g)},n.createContext=function(n){function t(n){var i,e;return this.getChildContext||(i=new Set,(e={})[t.__c]=this,this.getChildContext=function(){return e},this.componentWillUnmount=function(){i=g},this.shouldComponentUpdate=function(n){this.props.value!=n.value&&i.forEach(function(n){n.__e=!0,L(n)})},this.sub=function(n){i.add(n);var t=n.componentWillUnmount;n.componentWillUnmount=function(){i&&i.delete(n),t&&t.call(n)}}),n.children}return t.__c="__cC"+d++,t.__=n,t.Provider=t.__l=(t.Consumer=function(n,t){return n.children(t)}).contextType=t,t},n.createElement=$,n.createRef=function(){return{current:g}},n.h=$,n.hydrate=function n(t,i){X(t,i,n)},n.isValidElement=r,n.options=i,n.render=X,n.toChildArray=function n(t,i){return i=i||[],t==g||"boolean"==typeof t||(M(t)?t.some(function(t){n(t,i)}):i.push(t)),i}});
+//# sourceMappingURL=preact.umd.js.map
+</script>
+<script>
+/* Preact 10.29.8 hooks (hooks/dist/hooks.umd.js) — https://preactjs.com
+ * Licence: MIT
+ *
+ * The MIT License (MIT)
+ *
+ * Copyright (c) 2015-present Jason Miller
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE. */
+!function(n,t){"object"==typeof exports&&"undefined"!=typeof module?t(exports,require("preact")):"function"==typeof define&&define.amd?define(["exports","preact"],t):t((n||self).preactHooks={},n.preact)}(this,function(n,t){var u,i,r,o,f=0,c=[],e=t.options,a=e.__b,v=e.__r,l=e.diffed,d=e.__c,p=e.unmount,s=e.__;function y(n,t){e.__h&&e.__h(i,n,f||t),f=0;var u=i.__H||(i.__H={__:[],__h:[]});return n>=u.__.length&&u.__.push({}),u.__[n]}function h(n){return f=1,m(j,n)}function m(n,t,r){var o=y(u++,2);if(o.t=n,!o.__c&&(o.__=[r?r(t):j(void 0,t),function(n){var t=o.__N?o.__N[0]:o.__[0],u=o.t(t,n);t!==u&&(o.__N=[u,o.__[1]],o.__c.setState({}))}],o.__c=i,!i.__f)){var f=function(n,t,u){if(!o.__c.__H)return!0;var i=!1,r=o.__c.props!==n;if(o.__c.__H.__.some(function(n){if(n.__N){i=!0;var t=n.__[0];n.__=n.__N,n.__N=void 0,t!==n.__[0]&&(r=!0)}}),c){var f=c.call(this,n,t,u);return i?f||r:f}return!i||r};i.__f=!0;var c=i.shouldComponentUpdate,e=i.componentWillUpdate;i.componentWillUpdate=function(n,t,u){if(this.__e){var i=c;c=void 0,f(n,t,u),c=i}e&&e.call(this,n,t,u)},i.shouldComponentUpdate=f}return o.__N||o.__}function T(n,t){var r=y(u++,4);!e.__s&&g(r.__H,t)&&(r.__=n,r.u=t,i.__h.push(r))}function _(n,t){var i=y(u++,7);return g(i.__H,t)&&(i.__=n(),i.__H=t,i.__h=n),i.__}function b(){for(var n;n=c.shift();){var t=n.__H;if(n.__P&&t)try{t.__h.some(A),t.__h.some(F),t.__h=[]}catch(u){t.__h=[],e.__e(u,n.__v)}}}e.__b=function(n){i=null,a&&a(n)},e.__=function(n,t){n&&t.__k&&t.__k.__m&&(n.__m=t.__k.__m),s&&s(n,t)},e.__r=function(n){v&&v(n),u=0;var t=(i=n.__c).__H;t&&(r===i?(t.__h=[],i.__h=[],t.__.some(function(n){n.__N&&(n.__=n.__N),n.u=n.__N=void 0})):(t.__h.some(A),t.__h.some(F),t.__h=[],u=0)),r=i},e.diffed=function(n){l&&l(n);var t=n.__c;t&&t.__H&&(t.__H.__h.length&&(1!==c.push(t)&&o===e.requestAnimationFrame||((o=e.requestAnimationFrame)||x)(b)),t.__H.__.some(function(n){n.u&&(n.__H=n.u,n.u=void 0)})),r=i=null},e.__c=function(n,t){t.some(function(n){try{n.__h.some(A),n.__h=n.__h.filter(function(n){return!n.__||F(n)})}catch(u){t.some(function(n){n.__h&&(n.__h=[])}),t=[],e.__e(u,n.__v)}}),d&&d(n,t)},e.unmount=function(n){p&&p(n);var t,u=n.__c;u&&u.__H&&(u.__H.__.some(function(n){try{A(n)}catch(n){t=n}}),u.__H=void 0,t&&e.__e(t,u.__v))};var q="function"==typeof requestAnimationFrame;function x(n){var t,u=function(){clearTimeout(i),q&&cancelAnimationFrame(t),setTimeout(n)},i=setTimeout(u,35);q&&(t=requestAnimationFrame(u))}function A(n){var t=i,u=n.__c;"function"==typeof u&&(n.__c=void 0,u()),i=t}function F(n){var t=i;n.__c=n.__(),i=t}function g(n,t){return!n||n.length!==t.length||t.some(function(t,u){return t!==n[u]})}function j(n,t){return"function"==typeof t?t(n):t}n.useCallback=function(n,t){return f=8,_(function(){return n},t)},n.useContext=function(n){var t=i.context[n.__c],r=y(u++,9);return r.c=n,t?(null==r.__&&(r.__=!0,t.sub(i)),t.props.value):n.__},n.useDebugValue=function(n,t){e.useDebugValue&&e.useDebugValue(t?t(n):n)},n.useEffect=function(n,t){var r=y(u++,3);!e.__s&&g(r.__H,t)&&(r.__=n,r.u=t,i.__H.__h.push(r))},n.useErrorBoundary=function(n){var t=y(u++,10),r=h();return t.__=n,i.componentDidCatch||(i.componentDidCatch=function(n,u){t.__&&t.__(n,u),r[1](n)}),[r[0],function(){r[1](void 0)}]},n.useId=function(){var n=y(u++,11);if(!n.__){for(var t=i.__v;null!==t&&!t.__m&&null!==t.__;)t=t.__;var r=t.__m||(t.__m=[0,0]);n.__="P"+r[0]+"-"+r[1]++}return n.__},n.useImperativeHandle=function(n,t,u){f=6,T(function(){if("function"==typeof n){var u=n(t());return function(){n(null),u&&"function"==typeof u&&u()}}if(n)return n.current=t(),function(){return n.current=null}},null==u?u:u.concat(n))},n.useLayoutEffect=T,n.useMemo=_,n.useReducer=m,n.useRef=function(n){return f=5,_(function(){return{current:n}},[])},n.useState=h});
+//# sourceMappingURL=hooks.umd.js.map
+</script>
+<script>
+/* htm 3.1.1 (dist/htm.umd.js) — https://github.com/developit/htm
+ * Licence: Apache-2.0
+ *
+ *                                  Apache License
+ *                            Version 2.0, January 2004
+ *                         http://www.apache.org/licenses/
+ *
+ *    TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+ *
+ *    1. Definitions.
+ *
+ *       "License" shall mean the terms and conditions for use, reproduction,
+ *       and distribution as defined by Sections 1 through 9 of this document.
+ *
+ *       "Licensor" shall mean the copyright owner or entity authorized by
+ *       the copyright owner that is granting the License.
+ *
+ *       "Legal Entity" shall mean the union of the acting entity and all
+ *       other entities that control, are controlled by, or are under common
+ *       control with that entity. For the purposes of this definition,
+ *       "control" means (i) the power, direct or indirect, to cause the
+ *       direction or management of such entity, whether by contract or
+ *       otherwise, or (ii) ownership of fifty percent (50%) or more of the
+ *       outstanding shares, or (iii) beneficial ownership of such entity.
+ *
+ *       "You" (or "Your") shall mean an individual or Legal Entity
+ *       exercising permissions granted by this License.
+ *
+ *       "Source" form shall mean the preferred form for making modifications,
+ *       including but not limited to software source code, documentation
+ *       source, and configuration files.
+ *
+ *       "Object" form shall mean any form resulting from mechanical
+ *       transformation or translation of a Source form, including but
+ *       not limited to compiled object code, generated documentation,
+ *       and conversions to other media types.
+ *
+ *       "Work" shall mean the work of authorship, whether in Source or
+ *       Object form, made available under the License, as indicated by a
+ *       copyright notice that is included in or attached to the work
+ *       (an example is provided in the Appendix below).
+ *
+ *       "Derivative Works" shall mean any work, whether in Source or Object
+ *       form, that is based on (or derived from) the Work and for which the
+ *       editorial revisions, annotations, elaborations, or other modifications
+ *       represent, as a whole, an original work of authorship. For the purposes
+ *       of this License, Derivative Works shall not include works that remain
+ *       separable from, or merely link (or bind by name) to the interfaces of,
+ *       the Work and Derivative Works thereof.
+ *
+ *       "Contribution" shall mean any work of authorship, including
+ *       the original version of the Work and any modifications or additions
+ *       to that Work or Derivative Works thereof, that is intentionally
+ *       submitted to Licensor for inclusion in the Work by the copyright owner
+ *       or by an individual or Legal Entity authorized to submit on behalf of
+ *       the copyright owner. For the purposes of this definition, "submitted"
+ *       means any form of electronic, verbal, or written communication sent
+ *       to the Licensor or its representatives, including but not limited to
+ *       communication on electronic mailing lists, source code control systems,
+ *       and issue tracking systems that are managed by, or on behalf of, the
+ *       Licensor for the purpose of discussing and improving the Work, but
+ *       excluding communication that is conspicuously marked or otherwise
+ *       designated in writing by the copyright owner as "Not a Contribution."
+ *
+ *       "Contributor" shall mean Licensor and any individual or Legal Entity
+ *       on behalf of whom a Contribution has been received by Licensor and
+ *       subsequently incorporated within the Work.
+ *
+ *    2. Grant of Copyright License. Subject to the terms and conditions of
+ *       this License, each Contributor hereby grants to You a perpetual,
+ *       worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+ *       copyright license to reproduce, prepare Derivative Works of,
+ *       publicly display, publicly perform, sublicense, and distribute the
+ *       Work and such Derivative Works in Source or Object form.
+ *
+ *    3. Grant of Patent License. Subject to the terms and conditions of
+ *       this License, each Contributor hereby grants to You a perpetual,
+ *       worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+ *       (except as stated in this section) patent license to make, have made,
+ *       use, offer to sell, sell, import, and otherwise transfer the Work,
+ *       where such license applies only to those patent claims licensable
+ *       by such Contributor that are necessarily infringed by their
+ *       Contribution(s) alone or by combination of their Contribution(s)
+ *       with the Work to which such Contribution(s) was submitted. If You
+ *       institute patent litigation against any entity (including a
+ *       cross-claim or counterclaim in a lawsuit) alleging that the Work
+ *       or a Contribution incorporated within the Work constitutes direct
+ *       or contributory patent infringement, then any patent licenses
+ *       granted to You under this License for that Work shall terminate
+ *       as of the date such litigation is filed.
+ *
+ *    4. Redistribution. You may reproduce and distribute copies of the
+ *       Work or Derivative Works thereof in any medium, with or without
+ *       modifications, and in Source or Object form, provided that You
+ *       meet the following conditions:
+ *
+ *       (a) You must give any other recipients of the Work or
+ *           Derivative Works a copy of this License; and
+ *
+ *       (b) You must cause any modified files to carry prominent notices
+ *           stating that You changed the files; and
+ *
+ *       (c) You must retain, in the Source form of any Derivative Works
+ *           that You distribute, all copyright, patent, trademark, and
+ *           attribution notices from the Source form of the Work,
+ *           excluding those notices that do not pertain to any part of
+ *           the Derivative Works; and
+ *
+ *       (d) If the Work includes a "NOTICE" text file as part of its
+ *           distribution, then any Derivative Works that You distribute must
+ *           include a readable copy of the attribution notices contained
+ *           within such NOTICE file, excluding those notices that do not
+ *           pertain to any part of the Derivative Works, in at least one
+ *           of the following places: within a NOTICE text file distributed
+ *           as part of the Derivative Works; within the Source form or
+ *           documentation, if provided along with the Derivative Works; or,
+ *           within a display generated by the Derivative Works, if and
+ *           wherever such third-party notices normally appear. The contents
+ *           of the NOTICE file are for informational purposes only and
+ *           do not modify the License. You may add Your own attribution
+ *           notices within Derivative Works that You distribute, alongside
+ *           or as an addendum to the NOTICE text from the Work, provided
+ *           that such additional attribution notices cannot be construed
+ *           as modifying the License.
+ *
+ *       You may add Your own copyright statement to Your modifications and
+ *       may provide additional or different license terms and conditions
+ *       for use, reproduction, or distribution of Your modifications, or
+ *       for any such Derivative Works as a whole, provided Your use,
+ *       reproduction, and distribution of the Work otherwise complies with
+ *       the conditions stated in this License.
+ *
+ *    5. Submission of Contributions. Unless You explicitly state otherwise,
+ *       any Contribution intentionally submitted for inclusion in the Work
+ *       by You to the Licensor shall be under the terms and conditions of
+ *       this License, without any additional terms or conditions.
+ *       Notwithstanding the above, nothing herein shall supersede or modify
+ *       the terms of any separate license agreement you may have executed
+ *       with Licensor regarding such Contributions.
+ *
+ *    6. Trademarks. This License does not grant permission to use the trade
+ *       names, trademarks, service marks, or product names of the Licensor,
+ *       except as required for reasonable and customary use in describing the
+ *       origin of the Work and reproducing the content of the NOTICE file.
+ *
+ *    7. Disclaimer of Warranty. Unless required by applicable law or
+ *       agreed to in writing, Licensor provides the Work (and each
+ *       Contributor provides its Contributions) on an "AS IS" BASIS,
+ *       WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+ *       implied, including, without limitation, any warranties or conditions
+ *       of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
+ *       PARTICULAR PURPOSE. You are solely responsible for determining the
+ *       appropriateness of using or redistributing the Work and assume any
+ *       risks associated with Your exercise of permissions under this License.
+ *
+ *    8. Limitation of Liability. In no event and under no legal theory,
+ *       whether in tort (including negligence), contract, or otherwise,
+ *       unless required by applicable law (such as deliberate and grossly
+ *       negligent acts) or agreed to in writing, shall any Contributor be
+ *       liable to You for damages, including any direct, indirect, special,
+ *       incidental, or consequential damages of any character arising as a
+ *       result of this License or out of the use or inability to use the
+ *       Work (including but not limited to damages for loss of goodwill,
+ *       work stoppage, computer failure or malfunction, or any and all
+ *       other commercial damages or losses), even if such Contributor
+ *       has been advised of the possibility of such damages.
+ *
+ *    9. Accepting Warranty or Additional Liability. While redistributing
+ *       the Work or Derivative Works thereof, You may choose to offer,
+ *       and charge a fee for, acceptance of support, warranty, indemnity,
+ *       or other liability obligations and/or rights consistent with this
+ *       License. However, in accepting such obligations, You may act only
+ *       on Your own behalf and on Your sole responsibility, not on behalf
+ *       of any other Contributor, and only if You agree to indemnify,
+ *       defend, and hold each Contributor harmless for any liability
+ *       incurred by, or claims asserted against, such Contributor by reason
+ *       of your accepting any such warranty or additional liability.
+ *
+ *    END OF TERMS AND CONDITIONS
+ *
+ *    APPENDIX: How to apply the Apache License to your work.
+ *
+ *       To apply the Apache License to your work, attach the following
+ *       boilerplate notice, with the fields enclosed by brackets "[]"
+ *       replaced with your own identifying information. (Don't include
+ *       the brackets!)  The text should be enclosed in the appropriate
+ *       comment syntax for the file format. We also recommend that a
+ *       file or class name and description of purpose be included on the
+ *       same "printed page" as the copyright notice for easier
+ *       identification within third-party archives.
+ *
+ *    Copyright 2018 Google Inc.
+ *
+ *    Licensed under the Apache License, Version 2.0 (the "License");
+ *    you may not use this file except in compliance with the License.
+ *    You may obtain a copy of the License at
+ *
+ *        http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *    Unless required by applicable law or agreed to in writing, software
+ *    distributed under the License is distributed on an "AS IS" BASIS,
+ *    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *    See the License for the specific language governing permissions and
+ *    limitations under the License. */
+!function(n,e){"object"==typeof exports&&"undefined"!=typeof module?module.exports=e():"function"==typeof define&&define.amd?define(e):n.htm=e()}(this,function(){var n=function(e,t,u,s){var r;t[0]=0;for(var p=1;p<t.length;p++){var h=t[p++],o=t[p]?(t[0]|=h?1:2,u[t[p++]]):t[++p];3===h?s[0]=o:4===h?s[1]=Object.assign(s[1]||{},o):5===h?(s[1]=s[1]||{})[t[++p]]=o:6===h?s[1][t[++p]]+=o+"":h?(r=e.apply(o,n(e,o,u,["",null])),s.push(r),o[0]?t[0]|=2:(t[p-2]=0,t[p]=r)):s.push(o)}return s},e=new Map;return function(t){var u=e.get(this);return u||(u=new Map,e.set(this,u)),(u=n(this,u.get(t)||(u.set(t,u=function(n){for(var e,t,u=1,s="",r="",p=[0],h=function(n){1===u&&(n||(s=s.replace(/^\s*\n\s*|\s*\n\s*$/g,"")))?p.push(0,n,s):3===u&&(n||s)?(p.push(3,n,s),u=2):2===u&&"..."===s&&n?p.push(4,n,0):2===u&&s&&!n?p.push(5,0,!0,s):u>=5&&((s||!n&&5===u)&&(p.push(u,0,s,t),u=6),n&&(p.push(u,n,0,t),u=6)),s=""},o=0;o<n.length;o++){o&&(1===u&&h(),h(o));for(var f=0;f<n[o].length;f++)e=n[o][f],1===u?"<"===e?(h(),p=[p],u=3):s+=e:4===u?"--"===s&&">"===e?(u=1,s=""):s=e+s[0]:r?e===r?r="":s+=e:'"'===e||"'"===e?r=e:">"===e?(h(),u=1):u&&("="===e?(u=5,t=s,s=""):"/"===e&&(u<5||">"===n[o][f+1])?(h(),3===u&&(p=p[0]),u=p,(p=p[0]).push(2,0,u),u=0):" "===e||"\t"===e||"\n"===e||"\r"===e?(h(),u=2):s+=e),3===u&&"!--"===s&&(u=4,p=p[0])}return h(),p}(t)),u),arguments,[])).length>1?u:u[0]}});
+</script>
+<script>
+"use strict";
+const REPORT_FORMAT = 1;
+const { h, render, createContext } = preact;
+const { useState, useMemo, useContext, useEffect, useRef } = preactHooks;
+const html = htm.bind(h);
+
+// ---------------------------------------------------------------- formatting
+const MINUS = "\u2212", DASH = "\u2014";
+const isNum = v => typeof v === "number" && isFinite(v);
+const signed = s => s.startsWith("-") ? MINUS + s.slice(1) : s;
+const fmtNum = (v, d = 4) => isNum(v) ? signed(v.toFixed(d)) : (v == null ? DASH : String(v));
+const fmtP = v => !isNum(v) ? DASH : v < 0.001 ? "<0.001" : v.toFixed(3);
+const fmtInt = v => isNum(v) ? Math.round(v).toLocaleString("en-US") : (v == null ? DASH : String(v));
+const PLACEHOLDER_SEEDS = new Set(["<SENT>", "<DOC>"]);  // full-document mode, set in ssdiff/utils/snippets.py
+const FMT = {
+  num: v => fmtNum(v, 4), num3: v => fmtNum(v, 3), p: fmtP, int: fmtInt,
+  text: v => v == null ? DASH : String(v),
+  seed: v => v == null || PLACEHOLDER_SEEDS.has(v) ? DASH : String(v),
+};
+const isNumFmt = f => f && !["text", "seed"].includes(f);
+const TRUNC = 600;
+const cut = s => s.length > TRUNC ? s.slice(0, TRUNC) + "\u2026" : s;
+const cellText = (col, row) => {
+  const s = FMT[col.fmt || "text"](row[col.key]);
+  return isNumFmt(col.fmt) ? s : cut(s);
+};
+const embLabel = E => E && E.name ? E.name + (E.version ? " v" + E.version : "") : DASH;
+
+// table JSON {columns, rows} -> array of row objects
+const objs = t => t ? t.rows.map(r => Object.fromEntries(t.columns.map((c, i) => [c, r[i]]))) : null;
+const one = t => (t && t.rows.length) ? objs(t)[0] : {};
+
+// ---------------------------------------------------------------- export writers
+const csvCell = v => {
+  if (v == null) return "";
+  const s = typeof v === "object" ? JSON.stringify(v) : String(v);
+  return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+};
+function toCSV(columns, rows) {
+  return [columns.map(csvCell).join(","), ...rows.map(r => columns.map(c => csvCell(r[c])).join(","))].join("\n") + "\n";
+}
+function toJSON(columns, rows) {
+  return JSON.stringify(rows.map(r => Object.fromEntries(columns.map(c => [c, r[c] ?? null]))), null, 2) + "\n";
+}
+const mdCell = s => s.replace(/\|/g, "\\|").replace(/\r?\n/g, "<br>");
+function toMD(cols, rows) {
+  const head = "| " + cols.map(c => mdCell(c.label)).join(" | ") + " |";
+  const rule = "| " + cols.map(c => isNumFmt(c.fmt) ? "---:" : "---").join(" | ") + " |";
+  return [head, rule, ...rows.map(r => "| " + cols.map(c => mdCell(cellText(c, r))).join(" | ") + " |")].join("\n") + "\n";
+}
+function toTXT(cols, rows) {
+  const flat = s => s.replace(/\s*\r?\n\s*/g, " ");
+  const cells = rows.map(r => cols.map(c => flat(cellText(c, r))));
+  const w = cols.map((c, i) => Math.max(c.label.length, ...cells.map(r => r[i].length)));
+  const pad = (s, i) => isNumFmt(cols[i].fmt) ? s.padStart(w[i]) : s.padEnd(w[i]);
+  const line = r => r.map(pad).join("  ").trimEnd();
+  return [line(cols.map(c => c.label)), w.map(n => "-".repeat(n)).join("  "), ...cells.map(line)].join("\n") + "\n";
+}
+const TEX_ESC = { "\\": "\\textbackslash{}", "&": "\\&", "%": "\\%", "$": "\\$", "#": "\\#", "_": "\\_", "{": "\\{", "}": "\\}", "~": "\\textasciitilde{}", "^": "\\textasciicircum{}" };
+const tex = s => s.replace(/[\\&%$#_{}~^]/g, ch => TEX_ESC[ch]).replace(/\r?\n/g, " ").replace(/\u2212/g, "$-$").replace(/\u2016/g, "$\\|$").replace(/\u03b2/g, "$\\beta$");
+function toTEX(cols, rows) {
+  // booktabs, matching ssdiff's own table writer; text columns get a paragraph column so long cells wrap
+  const spec = cols.map(c => isNumFmt(c.fmt) ? "r" : (c.wide ? "p{8cm}" : "l")).join("");
+  return [`\\begin{tabular}{${spec}}`, "\\toprule", cols.map(c => tex(c.label)).join(" & ") + " \\\\", "\\midrule",
+    ...rows.map(r => cols.map(c => tex(cellText(c, r))).join(" & ") + " \\\\"), "\\bottomrule", "\\end{tabular}"].join("\n") + "\n";
+}
+
+// ---------------------------------------------------------------- shared UI state
+// Every table's sort and row count lives here, so the whole-report export can
+// write each table as it is currently shown, including tabs not on screen.
+const Store = createContext(null);
+const DEFAULT_VIEW = { sort: null, limit: 100 };
+function sortRows(rows, sort) {
+  if (!sort) return rows;
+  const { key, dir } = sort, m = dir === "asc" ? 1 : -1;
+  return rows.slice().sort((a, b) => {
+    const x = a[key], y = b[key];
+    if (x == null && y == null) return 0;
+    if (x == null) return 1;
+    if (y == null) return -1;
+    if (typeof x === "number" && typeof y === "number") return (x - y) * m;
+    return String(x).localeCompare(String(y)) * m;
+  });
+}
+function shownRows(spec, view) {
+  const sorted = sortRows(spec.rows, view.sort);
+  return spec.fixed ? sorted : sorted.slice(0, view.limit);
+}
+
+// ---------------------------------------------------------------- table widget
+function DataTable({ spec, selectable, selectedKey, onSelect, rowKey, short }) {
+  const store = useContext(Store);
+  const view = store.views[spec.id] || DEFAULT_VIEW;
+  const setView = v => store.setView(spec.id, { ...view, ...v });
+  const rows = shownRows(spec, view);
+  const total = spec.rows.length;
+  const clickSort = col => {
+    if (!col.sortable && col.sortable !== undefined) return;
+    const cur = view.sort && view.sort.key === col.key ? view.sort.dir : null;
+    const dir = cur === null ? (isNumFmt(col.fmt) ? "desc" : "asc") : cur === "desc" ? "asc" : "desc";
+    setView({ sort: { key: col.key, dir } });
+  };
+  return html`
+    <div class="tbl-head">
+      <h3>${spec.title}${spec.subtitle ? html` <span class="sub">${spec.subtitle}</span>` : null}</h3>
+      <${ExportMenu} spec=${spec} />
+    </div>
+    <div class=${"tbl-scroll" + (short ? " short" : "")}>
+      <table>
+        <thead><tr>${spec.cols.map(c => {
+          const s = view.sort && view.sort.key === c.key ? (view.sort.dir === "asc" ? " \u25B2" : " \u25BC") : "";
+          return html`<th class=${(isNumFmt(c.fmt) ? "num " : "") + "sortable"} onClick=${() => clickSort(c)}
+            aria-sort=${s ? (view.sort.dir === "asc" ? "ascending" : "descending") : "none"}>${c.label}<span class="arrow">${s}</span></th>`;
+        })}</tr></thead>
+        <tbody>${rows.length === 0 ? html`<tr><td colspan=${spec.cols.length} class="muted">No rows.</td></tr>` :
+          rows.map(r => {
+            const key = selectable ? rowKey(r) : null;
+            const sel = selectable && key === selectedKey;
+            return html`<tr class=${(sel ? "sel " : "") + (selectable ? "clickable" : "")}
+                tabindex=${selectable ? 0 : undefined}
+                onClick=${selectable ? () => onSelect(r) : undefined}
+                onKeyDown=${selectable ? e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(r); } } : undefined}>
+              ${spec.cols.map(c => html`<td class=${isNumFmt(c.fmt) ? "num" : (c.wide ? "text" : "")}>${cellText(c, r)}</td>`)}
+            </tr>`;
+          })}
+        </tbody>
+      </table>
+    </div>
+    ${!spec.fixed && total > rows.length ? html`
+      <div class="more">
+        <span>Showing ${rows.length.toLocaleString("en-US")} of ${total.toLocaleString("en-US")}</span>
+        <button class="btn small" onClick=${() => setView({ limit: view.limit + 100 })}>Show 100 more</button>
+        <button class="btn small" onClick=${() => setView({ limit: Infinity })}>Show all</button>
+      </div>` : null}
+  `;
+}
+
+// ---------------------------------------------------------------- export UI
+function ExportMenu({ spec, report }) {
+  const store = useContext(Store);
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    const esc = e => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("mousedown", close); document.removeEventListener("keydown", esc); };
+  }, [open]);
+  const exts = report ? ["md", "txt", "tex", "json"] : ["csv", "json", "md", "txt", "tex"];
+  const pick = ext => {
+    setOpen(false);
+    download(report ? reportFile(store, ext) : tableFile(spec, store.views[spec.id] || DEFAULT_VIEW, ext));
+  };
+  return html`<div class="menu-wrap" ref=${ref}>
+    <button class=${"btn" + (report ? "" : " small")} aria-haspopup="menu" aria-expanded=${open} onClick=${() => setOpen(!open)}>
+      ${report ? "Export report \u25BE" : "Export \u25BE"}</button>
+    ${open ? html`<div class="menu" role="menu">
+      ${!report ? html`<div class="hint">All rows and columns</div>` : null}
+      ${exts.map((ext, i) => html`
+        ${!report && i === 2 ? html`<hr /><div class="hint">As shown on screen</div>` : null}
+        <button role="menuitem" onClick=${() => pick(ext)}>.${ext}</button>`)}
+      <hr />
+      <button role="menuitem" onClick=${() => { setOpen(false); store.showGuide(report ? null : spec); }}>Other formats\u2026</button>
+    </div>` : null}
+  </div>`;
+}
+
+function tableFile(spec, view, ext) {
+  const base = spec.file;
+  if (ext === "csv") return { name: base + ".csv", mime: "text/csv", text: toCSV(spec.srcCols, sortRows(spec.rows, view.sort)) };
+  if (ext === "json") return { name: base + ".json", mime: "application/json", text: toJSON(spec.srcCols, sortRows(spec.rows, view.sort)) };
+  const rows = shownRows(spec, view);
+  const fn = { md: toMD, txt: toTXT, tex: toTEX }[ext];
+  return { name: base + "." + ext, mime: "text/plain", text: fn(spec.cols, rows) };
+}
+
+function download(file) {
+  const url = URL.createObjectURL(new Blob([file.text], { type: file.mime + ";charset=utf-8" }));
+  const a = document.createElement("a");
+  a.href = url; a.download = file.name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function Dialog({ title, onClose, children }) {
+  useEffect(() => {
+    const esc = e => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", esc);
+    return () => document.removeEventListener("keydown", esc);
+  }, []);
+  return html`<div class="overlay" onClick=${e => { if (e.target === e.currentTarget) onClose(); }}>
+    <div class="dialog" role="dialog" aria-modal="true" aria-label=${title}>
+      <header><h2>${title}</h2><button class="btn small" onClick=${onClose} aria-label="Close">\u2715</button></header>
+      ${children}
+    </div>
+  </div>`;
+}
+
+// Code shown for formats the page does not write, in the language that made the file.
+function GuideDialog({ data, spec, onClose }) {
+  const lang = data.software.language;
+  const py = spec && spec.py;
+  return html`<${Dialog} title="Other formats" onClose=${onClose}>
+    <div class="body guide">
+      <p>This page writes .csv, .json, .md, .txt and .tex. For other formats, use the package that made this file, or convert one of those files.</p>
+      ${lang === "python" ? html`
+        <h4>Word and Excel, from Python</h4>
+        ${py ? html`<pre>${`${py}.save("${spec.file}.xlsx")\n${py}.save("${spec.file}.docx")`}</pre>` : null}
+        <pre>${`result.report().save("ssd_report.docx")   # whole report; also .html .tex .json .md .txt`}</pre>
+        <p>Every table on this page is a view of the result object, and every view's <code>.save()</code> picks the format from the file extension: .csv .json .xlsx .md .txt .html .tex .docx.</p>
+      ` : null}
+      <h4>PDF</h4>
+      <p>Open this file in a browser and print it to PDF, or convert a .md export: <code>pandoc ssd_report.md -o ssd_report.pdf</code> (needs a LaTeX installation).</p>
+      <h4>Spreadsheets without Python</h4>
+      <p>Excel, LibreOffice and Google Sheets open the .csv export directly.</p>
+      <h4>Anything else</h4>
+      <p>Pandoc converts the .md export to most document formats, for example <code>pandoc ssd_report.md -o ssd_report.docx</code> or <code>-o ssd_report.odt</code>.</p>
+    </div>
+    <footer><button class="btn" onClick=${onClose}>Close</button></footer>
+  <//>`;
+}
+
+// ---------------------------------------------------------------- table specs
+// One place defines every table of every tab: the tabs render from these specs
+// and the whole-report export walks them, so both always agree.
+const C = (key, label, fmt, extra) => ({ key, label, fmt, ...extra });
+const KIND_LABEL = { pls: "PLS", pca_ols: "PCA+OLS", groups: "Groups", multipls: "MultiPLS" };
+
+function buildSpecs(data, unit, ui) {
+  const T = unit.tables, kind = data.kind, specs = {};
+  const add = (tab, s) => { if (s.rows) specs[s.id] = { tab, srcCols: s.srcCols, ...s }; };
+  const sideName = side => side === "pos" ? unit.pos_label : unit.neg_label;
+  const pyUnit = kind === "groups" ? `result[(${unit.key.split("_").map(g => JSON.stringify(g)).join(", ")})]`
+    : kind === "multipls" ? `result[${JSON.stringify(unit.key)}]` : "result";
+  const continuous = kind === "pls" || kind === "pca_ols";
+  // groups: each side is named by its group; MultiPLS: by the sign of the dimension
+  const sideSub = side => continuous ? (side === "pos" ? "higher outcome" : "lower outcome")
+    : kind === "multipls" ? (side === "pos" ? "positive end" : "negative end") : null;
+
+  // Cluster Overview
+  const clusters = objs(T.clusters), cwords = objs(T.cluster_words);
+  if (clusters) for (const side of ["pos", "neg"]) {
+    const rows = clusters.filter(c => c.side === side).map(c => {
+      const members = (cwords || []).filter(w => w.side === side && w.cluster_id === c.cluster_id).map(w => w.word);
+      return { ...c, "#": c.cluster_id + 1, top_n: members.length ? members.slice(0, ui.topWords).join(", ") : c.top_words };
+    });
+    add("overview", { id: "clusters_" + side, title: sideName(side), subtitle: sideSub(side),
+      file: "clusters_" + side, rows, srcCols: T.clusters.columns, py: `${pyUnit}.clusters.${side}`,
+      cols: [C("#", "#", "int"), C("size", "Size", "int"), C("coherence", "Coherence", "num3"),
+             C("centroid_cos_beta", "Centroid cos(\u03b2)", "num3"), C("top_n", "Top Words", "text", { wide: true })] });
+  }
+  const csn = objs(T.cluster_snippets);
+  if (csn && ui.cluster) {
+    const { side, id } = ui.cluster;
+    const rows = csn.filter(s => s.side === side && s.cluster_id === id).slice(0, ui.nSnips);
+    add("overview", { id: "cluster_snippets", title: `Snippets \u2014 ${sideName(side)} cluster #${id + 1}`, fixed: true,
+      file: `cluster_snippets_${side}_${id + 1}`, rows, srcCols: T.cluster_snippets.columns,
+      py: `${pyUnit}.clusters.${side}(${id}).snippets`,
+      cols: [C("seed", "Seed", "seed"), C("cosine", "Cosine", "num"), C("doc_id", "Doc", "int"), C("text_window", "Snippet", "text", { wide: true })] });
+  }
+
+  // Beta / Contrast Snippets
+  const sn = objs(T.snippets);
+  if (sn) add("snippets", { id: "snippets_" + ui.snipSide, title: sideName(ui.snipSide) + " snippets",
+    file: "snippets_" + ui.snipSide, rows: sn.filter(s => s.side === ui.snipSide), srcCols: T.snippets.columns,
+    py: `${pyUnit}.snippets(top_per_side=200).${ui.snipSide}`,
+    cols: [C("seed", "Seed", "seed"), C("cosine", "Cosine", "num"), C("doc_id", "Doc ID", "int"), C("text_window", "Snippet", "text", { wide: true })] });
+
+  // Semantic Poles
+  const words = objs(T.words);
+  if (words) for (const side of ["pos", "neg"]) add("poles", { id: "words_" + side, title: sideName(side),
+    subtitle: sideSub(side),
+    file: "words_" + side, rows: words.filter(w => w.side === side), srcCols: T.words.columns, py: `${pyUnit}.words.${side}`,
+    cols: [C("rank", "Rank", "int"), C("word", "Word", "text"), C("cos_beta", "cos(\u03b2)", "num")] });
+
+  // Document Scores, Extreme, Misdiagnosed
+  const docs = objs(T.docs);
+  if (docs) {
+    const scoreCols = kind === "groups" ? [C("doc_id", "Doc #", "int"), C("group", "Group", "text"), C("alignment_score", "Cosine", "num")]
+      : kind === "multipls" ? [C("doc_id", "Doc #", "int"), C("alignment_score", "Cosine", "num")]
+      : [C("doc_id", "Doc #", "int"), C("alignment_score", "Cosine", "num"), C("y_hat", "Predicted", "num")];
+    const pyDocs = continuous ? "result.docs" : null;
+    add("scores", { id: "docs", title: "Documents", file: "docs", rows: docs, srcCols: T.docs.columns, py: pyDocs, cols: scoreCols });
+
+    const byScore = docs.slice().sort((a, b) => b.alignment_score - a.alignment_score);
+    const last = kind === "groups" ? C("group", "Group", "text") : kind === "multipls" ? null : C("y_true", "Actual Y", "num");
+    const extCols = [C("rank", "Rank", "int"), C("text", "Document Text", "text", { wide: true }), C("alignment_score", "Score", "num"), last].filter(Boolean);
+    const rank = rows => rows.map((r, i) => ({ ...r, rank: i + 1 }));
+    add("extreme", { id: "extreme_high", title: "Highest scores", fixed: true, file: "extreme_high", rows: rank(byScore.slice(0, 5)), srcCols: T.docs.columns, py: pyDocs, cols: extCols });
+    add("extreme", { id: "extreme_low", title: "Lowest scores", fixed: true, file: "extreme_low", rows: rank(byScore.slice(-5).reverse()), srcCols: T.docs.columns, py: pyDocs, cols: extCols });
+
+    if (continuous) {
+      const byRes = docs.slice().sort((a, b) => a.residual - b.residual);
+      const misCols = [C("rank", "Rank", "int"), C("text", "Document Text", "text", { wide: true }), C("y_true", "Actual Y", "num"), C("y_hat", "Predicted Y", "num"), C("residual", "Residual", "num")];
+      add("mis", { id: "mis_over", title: "Over-predicted", subtitle: "predicted higher than observed", fixed: true, file: "misdiagnosed_over", rows: rank(byRes.slice(0, 5)), srcCols: T.docs.columns, py: pyDocs, cols: misCols });
+      add("mis", { id: "mis_under", title: "Under-predicted", subtitle: "predicted lower than observed", fixed: true, file: "misdiagnosed_under", rows: rank(byRes.slice(-5).reverse()), srcCols: T.docs.columns, py: pyDocs, cols: misCols });
+    }
+  }
+
+  // Details: pair tests (groups), outcome loadings (MultiPLS); PCA Sweep table
+  if (data.tables.pairs) {
+    // the pairs table holds canonical g1, g2; the units carry the original group names
+    const names = Object.fromEntries(data.units.map(u => [u.key, [u.pos_label, u.neg_label]]));
+    const rows = objs(data.tables.pairs).map(p => ({ ...p, g1: (names[p.contrast] || [p.g1])[0], g2: (names[p.contrast] || [, p.g2])[1] }));
+    add("details", { id: "pairs", title: "Pairs", file: "pairs", rows, srcCols: data.tables.pairs.columns, py: "result.pairs", fixed: true,
+      cols: [C("g1", "Group A", "text"), C("g2", "Group B", "text"), C("n_g1", "n_A", "int"), C("n_g2", "n_B", "int"),
+             C("contrast_norm", "Contrast norm", "num"), C("p_raw", "p", "p"), C("p_corrected", "p (corr)", "p"),
+             C("cohens_d", "Cohen's d", "num3")] });
+  }
+  if (T.outcomes) add("details", { id: "outcomes", title: `Outcome loadings \u2014 ${unit.label}`, file: "outcomes_" + unit.key,
+    rows: objs(T.outcomes), srcCols: T.outcomes.columns, py: `${pyUnit}.outcomes`, fixed: true,
+    cols: [C("outcome", "Outcome", "text"), C("group", "Group", "text"), C("loading", "Loading", "num")] });
+  if (data.tables.sweep) add("sweep", { id: "sweep", title: "Sweep", file: "pca_sweep", rows: objs(data.tables.sweep),
+    srcCols: data.tables.sweep.columns, py: "result.sweep", fixed: true,
+    cols: data.tables.sweep.columns.map(c => C(c, c, c === "k" || c === "n_clusters" || c === "total_size" ? "int" : "num")) });
+  return specs;
+}
+
+function tabsFor(data, specs) {
+  const k = data.kind, t = [["overview", "Cluster Overview"], ["details", "Details"]];
+  if (k === "pca_ols" && data.tables.sweep) t.push(["sweep", "PCA Sweep"]);
+  if (Object.values(specs).some(s => s.tab === "snippets")) t.push(["snippets", k === "groups" ? "Contrast Snippets" : "Beta Snippets"]);
+  t.push(["poles", "Semantic Poles"]);
+  // results pickled before doc_ids existed carry no docs table for groups and MultiPLS
+  if (specs.docs) {
+    t.push(["scores", "Document Scores"], ["extreme", "Extreme Documents"]);
+    if (k === "pls" || k === "pca_ols") t.push(["mis", "Misdiagnosed"]);
+  }
+  return t;
+}
+
+// ---------------------------------------------------------------- summary cards
+function cardsFor(data, unit) {
+  const s = one(data.tables.stats), k = data.kind;
+  if (k === "pls") return [
+    ["R\u00B2", fmtNum(s.r2)], ["p", fmtP(s.pvalue)], ["\u2016\u03b2\u2016", fmtNum(s.beta_norm)],
+    ["\u0394y / +0.10 cos", fmtNum(s.delta)], ["Docs", fmtInt(s.n_kept)], ["IQR Effect", fmtNum(s.iqr_effect)],
+    ["Corr(y, \u0177)", fmtNum(s.y_corr_pred)]];
+  if (k === "pca_ols") return [
+    ["R\u00B2", fmtNum(s.r2)], ["Adj. R\u00B2", fmtNum(s.r2_adj)], ["p", fmtP(s.pvalue)],
+    ["\u2016\u03b2\u2016", fmtNum(s.beta_norm)], ["Docs", fmtInt(s.n_kept)],
+    ["Selected K", fmtInt(one(data.tables.fit_info).n_components)], ["Corr(y, \u0177)", fmtNum(s.y_corr_pred)]];
+  if (k === "groups") {
+    const pair = (objs(data.tables.pairs) || []).find(p => p.contrast === unit.key) || {};
+    const nA = `n(${unit.pos_label})`, nB = `n(${unit.neg_label})`;
+    const tail = [["Cohen's d", fmtNum(pair.cohens_d, 3)], ["\u2016Contrast\u2016", fmtNum(pair.contrast_norm)],
+                  ["Docs", fmtInt(s.n_kept)], [nA, fmtInt(pair.n_g1)], [nB, fmtInt(pair.n_g2)]];
+    if (data.units.length === 1) return [["p", fmtP(pair.p_raw)], ...tail.slice(0, 2), ["Permutations", fmtInt(s.n_perm)], ...tail.slice(2)];
+    return [["Omnibus p", fmtP(s.pvalue)], ["p (corrected)", fmtP(pair.p_corrected)], ...tail];
+  }
+  const u = one(unit.tables.stats);  // multipls: the last two follow the selected dimension
+  return [["Cov. explained", fmtNum(s.cov_explained)], ["p", fmtP(s.pvalue)], ["Docs", fmtInt(s.n)],
+          ["Outcomes", fmtInt(s.q)], ["Dimensions", fmtInt(s.k)], ["Cov. share", fmtNum(u.cov_share)],
+          ["Score corr.", fmtNum(u.score_corr)]];
+}
+
+// ---------------------------------------------------------------- whole-report export
+function reportParts(store) {
+  const { data, specs, tabs, unit } = store;
+  return {
+    title: data.title || "SSD results",
+    meta: [["Analysis", KIND_LABEL[data.kind] + (unit.label ? ` (${unit.label})` : "")], ["Embedding", embLabel(data.embeddings)],
+           ["Software", `${data.software.package} ${data.software.version}`], ["Created", data.created]],
+    cards: cardsFor(data, unit),
+    sections: tabs.map(([key, label]) => ({ label, tables: Object.values(specs).filter(s => s.tab === key) })).filter(s => s.tables.length),
+  };
+}
+function reportFile(store, ext) {
+  if (ext === "json") return { name: "ssd_report.json", mime: "application/json", text: JSON.stringify(store.data, null, 2) + "\n" };
+  const p = reportParts(store), view = id => store.views[id] || DEFAULT_VIEW;
+  const cardCols = p.cards.map(([n], i) => C(String(i), n, "text"));
+  const cardRow = Object.fromEntries(p.cards.map(([, v], i) => [String(i), v]));
+  const fn = { md: toMD, txt: toTXT, tex: toTEX }[ext];
+  const out = [];
+  if (ext === "md") {
+    out.push(`# ${p.title}\n`, p.meta.map(([k, v]) => `**${k}:** ${v}`).join("  \n") + "\n", fn(cardCols, [cardRow]));
+    for (const s of p.sections) { out.push(`## ${s.label}\n`); for (const t of s.tables) out.push(`### ${t.title}\n`, fn(t.cols, shownRows(t, view(t.id)))); }
+  } else if (ext === "txt") {
+    out.push(p.title, "=".repeat(p.title.length), ...p.meta.map(([k, v]) => `${k}: ${v}`), "", fn(cardCols, [cardRow]));
+    for (const s of p.sections) { out.push(s.label, "-".repeat(s.label.length), ""); for (const t of s.tables) out.push(t.title, fn(t.cols, shownRows(t, view(t.id)))); }
+  } else {
+    out.push(`\\section*{${tex(p.title)}}`, p.meta.map(([k, v]) => `\\textbf{${tex(k)}:} ${tex(String(v))}`).join(" \\\\\n") + "\n", fn(cardCols, [cardRow]));
+    for (const s of p.sections) { out.push(`\\subsection*{${tex(s.label)}}`); for (const t of s.tables) out.push(`\\subsubsection*{${tex(t.title)}}`, fn(t.cols, shownRows(t, view(t.id)))); }
+  }
+  return { name: "ssd_report." + ext, mime: "text/plain", text: out.join("\n") };
+}
+
+// ---------------------------------------------------------------- tabs
+function SnippetDetail({ s }) {
+  if (!s) return html`<div class="box"><h3>Snippet</h3><div class="empty">Select a snippet to see its context.</div></div>`;
+  return html`<div class="box">
+    <h3>Snippet</h3>
+    <dl class="kv"><dt>Document</dt><dd>${s.doc_id}</dd><dt>Seed</dt><dd>${FMT.seed(s.seed)}</dd><dt>Cosine</dt><dd>${fmtNum(s.cosine)}</dd></dl>
+    <div class="kv-group"><h4>Window</h4><p class="quote">${s.text_window}</p></div>
+    <div class="kv-group"><h4>Sentences</h4><p class="quote">${s.text_surface}</p></div>
+  </div>`;
+}
+
+function OverviewTab({ unit, specs, ui, setUi }) {
+  const [showAll, setShowAll] = useState(false);
+  const [snip, setSnip] = useState(null);
+  const cw = objs(unit.tables.cluster_words) || [];
+  const sel = ui.cluster;
+  const members = sel ? cw.filter(w => w.side === sel.side && w.cluster_id === sel.id).map(w => w.word) : [];
+  const pick = side => r => { setUi({ cluster: { side, id: r.cluster_id } }); setSnip(null); setShowAll(false); };
+  const clamp = (v, lo, hi, d) => { const n = parseInt(v, 10); return isNaN(n) ? d : Math.min(hi, Math.max(lo, n)); };
+  return html`<div class="grid2">
+    <div class="stack">
+      <div class="controls">
+        <label for="topw">Top words per cluster <input id="topw" type="number" min="3" max="30" value=${ui.topWords}
+          onChange=${e => setUi({ topWords: clamp(e.target.value, 3, 30, 5) })} /></label>
+        <label for="nsn">Snippets per cluster <input id="nsn" type="number" min="5" max="50" value=${ui.nSnips}
+          onChange=${e => setUi({ nSnips: clamp(e.target.value, 5, 50, 20) })} /></label>
+      </div>
+      ${["pos", "neg"].map(side => specs["clusters_" + side] ? html`<div class="box">
+        <${DataTable} spec=${specs["clusters_" + side]} short selectable rowKey=${r => side + ":" + r.cluster_id}
+          selectedKey=${sel ? sel.side + ":" + sel.id : null} onSelect=${pick(side)} /></div>` : null)}
+    </div>
+    <div class="stack">
+      ${!sel ? html`<div class="box"><div class="empty">Select a cluster to see its words and snippets.</div></div>` : html`
+        <div class="box">
+          <h3>${(sel.side === "pos" ? unit.pos_label : unit.neg_label)} cluster #${sel.id + 1} <span class="sub">\u00B7 ${members.length} words</span></h3>
+          <div class="words">
+            ${(showAll ? members : members.slice(0, 8)).map(w => html`<span class="chip">${w}</span>`)}
+            ${members.length > 8 ? html`<button class="link" onClick=${() => setShowAll(!showAll)}>${showAll ? "show less" : `+${members.length - 8} more`}</button>` : null}
+          </div>
+        </div>
+        ${specs.cluster_snippets ? html`<div class="box"><${DataTable} spec=${specs.cluster_snippets} short selectable
+          rowKey=${r => r.snippet_id + ":" + r.doc_id} selectedKey=${snip ? snip.snippet_id + ":" + snip.doc_id : null} onSelect=${setSnip} /></div>
+          <${SnippetDetail} s=${snip} />` : null}
+      `}
+    </div>
+  </div>`;
+}
+
+function SnippetsTab({ unit, specs, ui, setUi }) {
+  const [snip, setSnip] = useState(null);
+  const spec = specs["snippets_" + ui.snipSide];
+  return html`<div class="stack">
+    <div class="controls"><span class="muted">Side</span>
+      <div class="seg" role="group" aria-label="Side">
+        ${["pos", "neg"].map(s => html`<button aria-pressed=${ui.snipSide === s} onClick=${() => { setUi({ snipSide: s }); setSnip(null); }}>
+          ${s === "pos" ? unit.pos_label : unit.neg_label}</button>`)}
+      </div>
+    </div>
+    <div class="grid2">
+      <div class="box"><${DataTable} spec=${spec} selectable rowKey=${r => r.snippet_id} selectedKey=${snip && snip.snippet_id} onSelect=${setSnip} /></div>
+      <${SnippetDetail} s=${snip} />
+    </div>
+  </div>`;
+}
+
+function PolesTab({ specs }) {
+  return html`<div class="grid2">
+    ${["pos", "neg"].map(s => specs["words_" + s] ? html`<div class="box"><${DataTable} spec=${specs["words_" + s]} /></div>` : null)}
+  </div>`;
+}
+
+function ScoresTab({ specs, kind }) {
+  const [doc, setDoc] = useState(null);
+  return html`<div class="grid2">
+    <div class="box"><${DataTable} spec=${specs.docs} selectable rowKey=${r => r.doc_id} selectedKey=${doc && doc.doc_id} onSelect=${setDoc} /></div>
+    <div class="box">
+      <h3>${doc ? `Document ${doc.doc_id}` : "Document"}</h3>
+      ${!doc ? html`<div class="empty">Select a row to see the document.</div>` : html`
+        <dl class="kv">
+          <dt>Cosine</dt><dd>${fmtNum(doc.alignment_score)}</dd>
+          ${"y_true" in doc ? html`<dt>Actual Y</dt><dd>${fmtNum(doc.y_true)}</dd><dt>Predicted Y</dt><dd>${fmtNum(doc.y_hat)}</dd><dt>Residual</dt><dd>${fmtNum(doc.residual)}</dd>` : null}
+          ${"group" in doc ? html`<dt>Group</dt><dd>${doc.group}</dd>` : null}
+        </dl>
+        <div class="kv-group"><h4>Text</h4>${doc.text != null ? html`<p class="quote">${doc.text}</p>`
+          : html`<p class="muted">This file does not hold this document's text. Text is stored for the documents with the highest and lowest scores${kind === "pls" || kind === "pca_ols" ? " and the largest prediction errors" : ""}.</p>`}</div>`}
+    </div>
+  </div>`;
+}
+
+// Rolling median, centred, window 7; the window shrinks at the ends (as the old app's plot did).
+function rollingMedian(v, w = 7) {
+  const h = Math.floor(w / 2);
+  return v.map((_, i) => {
+    const s = v.slice(Math.max(0, i - h), i + h + 1).filter(isNum).sort((a, b) => a - b);
+    return s.length ? (s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2) : null;
+  });
+}
+
+function SweepTab({ data, specs }) {
+  const rows = objs(data.tables.sweep), K = one(data.tables.fit_info).n_components;
+  const xs = rows.map(r => r.k), zl = rows.map(r => r.interp_resid_z), zr = rollingMedian(rows.map(r => r.beta_delta_1_minus_cos));
+  const W = 800, H = 340, m = { l: 56, r: 64, t: 16, b: 40 };
+  const ext = (v, extra = []) => { const f = v.concat(extra).filter(isNum); if (!f.length) return [0, 1]; const lo = Math.min(...f), hi = Math.max(...f); return lo === hi ? [lo - 1, hi + 1] : [lo, hi]; };
+  const [x0, x1] = ext(xs), [l0, l1] = ext(zl, [0]), [r0, r1] = ext(zr);
+  const X = x => m.l + (x - x0) / (x1 - x0) * (W - m.l - m.r);
+  const YL = y => H - m.b - (y - l0) / (l1 - l0) * (H - m.t - m.b);
+  const YR = y => H - m.b - (y - r0) / (r1 - r0) * (H - m.t - m.b);
+  const path = (ys, Y) => ys.map((y, i) => isNum(y) ? `${X(xs[i])},${Y(y)}` : null).filter(Boolean).join(" ");
+  const ticks = (a, b, n = 5) => Array.from({ length: n + 1 }, (_, i) => a + (b - a) * i / n);
+  return html`<div class="stack">
+    <div class="box"><svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto" role="img" aria-label="PCA sweep">
+      ${ticks(l0, l1).map(t => html`<line x1=${m.l} x2=${W - m.r} y1=${YL(t)} y2=${YL(t)} stroke="var(--border-2)" />
+        <text x=${m.l - 6} y=${YL(t) + 4} text-anchor="end" font-size="11" fill="var(--fg-2)">${fmtNum(t, 2)}</text>`)}
+      ${ticks(r0, r1).map(t => html`<text x=${W - m.r + 6} y=${YR(t) + 4} font-size="11" fill="var(--fg-2)">${fmtNum(t, 3)}</text>`)}
+      ${ticks(x0, x1).map(t => html`<text x=${X(t)} y=${H - m.b + 16} text-anchor="middle" font-size="11" fill="var(--fg-2)">${Math.round(t)}</text>`)}
+      <text x=${(m.l + W - m.r) / 2} y=${H - 6} text-anchor="middle" font-size="12" fill="var(--fg)">K</text>
+      <line x1=${m.l} x2=${W - m.r} y1=${YL(0)} y2=${YL(0)} stroke="var(--fg-3)" stroke-dasharray="4 4" />
+      ${isNum(K) ? html`<line x1=${X(K)} x2=${X(K)} y1=${m.t} y2=${H - m.b} stroke="rgb(220,40,40)" stroke-dasharray="6 4" />` : null}
+      <polyline points=${path(zr, YR)} fill="none" stroke="rgb(255,127,14)" stroke-width="3" />
+      <polyline points=${path(zl, YL)} fill="none" stroke="rgb(31,119,180)" stroke-width="1.5" />
+      ${zl.map((y, i) => isNum(y) ? html`<circle cx=${X(xs[i])} cy=${YL(y)} r="2.5" fill="rgb(31,119,180)" />` : null)}
+    </svg>
+    <div class="words">
+      <span class="chip" style="border-color:rgb(31,119,180)">Detrended interpretability (z), left axis</span>
+      <span class="chip" style="border-color:rgb(255,127,14)">Beta change (rolling median, 7), right axis</span>
+      ${isNum(K) ? html`<span class="chip" style="border-color:rgb(220,40,40)">Selected K = ${K}</span>` : null}
+    </div></div>
+    <div class="box"><${DataTable} spec=${specs.sweep} /></div>
+  </div>`;
+}
+
+function PairTablesTab({ specs, tab }) {
+  return html`<div class="stack">
+    ${Object.values(specs).filter(s => s.tab === tab).map(s => html`<div class="box"><${DataTable} spec=${s} /></div>`)}
+  </div>`;
+}
+
+const STAT_LABELS = {
+  backend: "Backend", r2: "R\u00B2", r2_adj: "Adj. R\u00B2", pvalue: "p", n_raw: "Documents (raw)", n_kept: "Documents kept",
+  n_dropped: "Documents dropped", y_mean: "Mean y", y_std: "SD y", beta_norm: "\u2016\u03b2\u2016", delta: "\u0394y / +0.10 cos",
+  iqr_effect: "IQR effect", y_corr_pred: "Corr(y, \u0177)", n_components: "Components", pca_k: "PCA K", p_at_k: "p at K",
+  n_splits: "Splits", split_mean_r: "Mean split r", random_state: "Random state", name: "Test", split_r2: "Split R\u00B2",
+  k: "k", k_max: "k max", k_min: "k min", topn: "Words clustered", min_cluster_size: "Min. cluster size",
+  G: "Groups", n_perm: "Permutations", correction: "Correction", omnibus_T: "Omnibus T", omnibus_p: "Omnibus p",
+  n: "Documents", q: "Outcomes", rotate: "Rotation", cov_explained: "Cov. explained", statistic: "Statistic",
+};
+const fmtAny = (k, v) => v == null ? DASH : typeof v === "boolean" ? (v ? "yes" : "no") : ["pvalue", "p_at_k", "omnibus_p"].includes(k) ? fmtP(v)
+  : Number.isInteger(v) ? fmtInt(v) : isNum(v) ? fmtNum(v) : Array.isArray(v) ? v.join(", ") : String(v);
+function KV({ title, obj, skipNull }) {
+  const entries = Object.entries(obj || {}).filter(([, v]) => !(skipNull && v == null));
+  if (!entries.length) return null;
+  return html`<div class="kv-group">${title ? html`<h4>${title}</h4>` : null}
+    <dl class="kv">${entries.map(([k, v]) => html`<dt>${STAT_LABELS[k] || k}</dt><dd>${fmtAny(k, v)}</dd>`)}</dl></div>`;
+}
+
+function DetailsTab({ data, specs }) {
+  const st = one(data.tables.stats), S = data.settings, E = data.embeddings || {};
+  const pick = keys => Object.fromEntries(keys.filter(k => k in st).map(k => [k, st[k]]));
+  const continuous = data.kind === "pls" || data.kind === "pca_ols";
+  return html`<div class="grid3">
+    <div class="box"><h3>Result information</h3>
+      ${continuous ? html`
+        <${KV} title="Model fit" obj=${pick(["backend", "r2", "r2_adj", "pvalue", "y_corr_pred"])} />
+        <${KV} title="Effect size" obj=${pick(["beta_norm", "delta", "iqr_effect", "y_mean", "y_std"])} />
+        <${KV} title="Data retention" obj=${pick(["n_raw", "n_kept", "n_dropped"])} />`
+      : html`<${KV} title="Summary" obj=${st} />`}
+      <${KV} title="Fit" obj=${one(data.tables.fit_info || data.tables.pls_info)} skipNull />
+      <${KV} title="Test" obj=${one(data.tables.test)} skipNull />
+      ${specs.pairs ? html`<${DataTable} spec=${specs.pairs} />` : null}
+      ${specs.outcomes ? html`<${DataTable} spec=${specs.outcomes} />` : null}
+    </div>
+    <div class="box"><h3>Concept</h3>
+      <${KV} obj=${{ Mode: S.use_full_doc ? "Full document" : "Lexicon", ...(S.lexicon ? { Lexicon: S.lexicon } : {}), Window: S.window, SIF: S.sif_a }} />
+    </div>
+    <div class="box"><h3>Model</h3>
+      <${KV} title="Embedding" obj=${{ Name: E.name, Version: E.version, Language: E.language, Vocabulary: E.n, Dimensions: E.dims, ABTT: E.abtt }} />
+      <${KV} title="Fit arguments" obj=${S.fit} />
+      <${KV} title="Clustering arguments" obj=${S.clusters} />
+      ${data.dataset ? html`<${KV} title="Dataset" obj=${data.dataset} />` : null}
+    </div>
+  </div>`;
+}
+
+// ---------------------------------------------------------------- app
+function App({ data }) {
+  const [unitIdx, setUnitIdx] = useState(0);
+  const [tab, setTab] = useState("overview");
+  const [views, setViews] = useState({});
+  const [ui, setUiState] = useState({ topWords: 5, nSnips: 20, cluster: null, snipSide: "pos" });
+  const [dialog, setDialog] = useState(null);
+  const unit = data.units[unitIdx];
+  const specs = useMemo(() => buildSpecs(data, unit, ui), [unit, ui]);
+  const tabs = tabsFor(data, specs);
+  const setUi = patch => setUiState(u => ({ ...u, ...patch }));
+  const store = {
+    data, specs, tabs, views, unit,
+    setView: (id, v) => setViews(vs => ({ ...vs, [id]: v })),
+    showGuide: spec => setDialog({ kind: "guide", spec }),
+  };
+  const body = {
+    overview: html`<${OverviewTab} unit=${unit} specs=${specs} ui=${ui} setUi=${setUi} />`,
+    details: html`<${DetailsTab} data=${data} specs=${specs} />`,
+    sweep: html`<${SweepTab} data=${data} specs=${specs} />`,
+    snippets: html`<${SnippetsTab} unit=${unit} specs=${specs} ui=${ui} setUi=${setUi} />`,
+    poles: html`<${PolesTab} specs=${specs} />`,
+    scores: html`<${ScoresTab} specs=${specs} kind=${data.kind} />`,
+    extreme: html`<${PairTablesTab} specs=${specs} tab="extreme" />`,
+    mis: html`<${PairTablesTab} specs=${specs} tab="mis" />`,
+  }[tab];
+  return html`<${Store.Provider} value=${store}>
+    <header class="hdr">
+      <h1>${data.title || "SSD results"}</h1>
+      <span class=${"badge " + data.kind}>${KIND_LABEL[data.kind]}</span>
+      <span class="spacer"></span>
+      <${ExportMenu} report />
+    </header>
+    <div class="meta">
+      <span>Embedding <b>${embLabel(data.embeddings)}</b></span>
+      <span>${data.software.package} <b>${data.software.version}</b></span>
+      <span>${new Date(data.created).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" })}</span>
+    </div>
+    ${data.units.length > 1 ? html`<div class="unitbar"><label for="unit">${data.kind === "groups" ? "Pair" : "Dimension"}</label>
+      <select id="unit" value=${unitIdx} onChange=${e => { setUnitIdx(+e.target.value); setUi({ cluster: null, snipSide: "pos" }); }}>
+        ${data.units.map((u, i) => html`<option value=${i}>${u.label}</option>`)}</select></div>` : null}
+    <section class="cards" aria-label="Summary">${cardsFor(data, unit).map(([n, v]) => html`<div class="card"><div class="v">${v}</div><div class="n">${n}</div></div>`)}</section>
+    <nav class="tabs" role="tablist">${tabs.map(([k, label]) => html`<button class="tab" role="tab" aria-selected=${tab === k} onClick=${() => setTab(k)}>${label}</button>`)}</nav>
+    <section class="tabpanel" role="tabpanel">${body}</section>
+    ${dialog && dialog.kind === "guide" ? html`<${GuideDialog} data=${data} spec=${dialog.spec} onClose=${() => setDialog(null)} />` : null}
+  <//>`;
+}
+
+const root = document.getElementById("app");
+const data = JSON.parse(document.getElementById("ssd-data").textContent);
+if (data.report_format !== REPORT_FORMAT) {
+  root.innerHTML = "";
+  const p = document.createElement("p");
+  p.className = "err";
+  p.textContent = `This file has report format ${data.report_format}; this page reads format ${REPORT_FORMAT}.`;
+  root.appendChild(p);
+} else {
+  render(html`<${App} data=${data} />`, root);
+}
+</script>
+</body>
+</html>

@@ -72,3 +72,6 @@ for p in gr3.pairs:
 print("\n══════ Markdown report (3-group) ══════")
 print(gr3.report(top_words={"n": 10}, clusters={"n": 20}))
 # gr3.report(top_words={"n": 10}, clusters={"n": 20}).save("report_groups.md")
+
+print("\n══════ Results page (3-group) ══════")
+gr3.save_page("ssd_results_groups.html", title="Warriner valence terciles (groups)")

@@ -282,7 +282,7 @@ class MultiPLSResult(_MultiContainer):
         "words", "clusters", "snippets",
         "beta", "gradient", "beta_norm", "alignment_scores",
         "outcome_names", "outcome_groups",
-        "report()", "test(...)", "attach(...)",
+        "report()", "save_page(...)", "test(...)", "attach(...)",
     )
     _arrays = (
         "x", "y", "U", "V", "U_rot", "V_rot", "singular_values",

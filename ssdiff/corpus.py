@@ -221,10 +221,14 @@ class Corpus:
 
         Parameters
         ----------
-        y : array-like
+        y : array-like or None
             Outcome variable (numeric for continuous, labels for
             categorical).  Must have the same length as ``self.docs``;
             invalid entries (NaN / None) are filtered automatically.
+            ``None`` is allowed with *seeds*: no rows are dropped, the
+            outcome columns (``cov_bal``, ``corr``, ``pvalue``,
+            ``direction``, ``rank``) are ``None``, and *n_bins*,
+            *corr_cap* and *var_type* are ignored.
         seeds : sequence of str or None
             Seed words; each must be a key of *embeddings*. A seed need not
             occur in the corpus.
@@ -257,7 +261,8 @@ class Corpus:
         TypeError
             If *seeds* is a single string rather than a sequence of seeds.
         ValueError
-            If *seeds* is empty; if only one of *seeds* and *embeddings* is
+            If *y* is ``None`` without *seeds* (ranking needs an outcome);
+            if *seeds* is empty; if only one of *seeds* and *embeddings* is
             given; if a seed is not a key of *embeddings*; if the corpus was
             not tokenized for *embeddings*.
         """
@@ -269,6 +274,11 @@ class Corpus:
         if seeds is None:
             if embeddings is not None:
                 raise ValueError("embeddings= is only used with seeds=.")
+            if y is None:
+                raise ValueError(
+                    "Ranking needs an outcome y. To list neighbours of words "
+                    "without one, pass seeds= and embeddings=."
+                )
         else:
             if isinstance(seeds, str):
                 # Iterating a str would make one seed per character.
@@ -337,9 +347,13 @@ class Corpus:
 
         Parameters
         ----------
-        y : array-like
+        y : array-like or None
             Outcome variable.  Must have the same length as
             ``self.docs``; invalid entries are filtered automatically.
+            ``None`` drops no rows and leaves ``cov_bal``, ``corr``,
+            ``rank``, ``pvalue`` and ``direction`` as ``None``; rows are
+            then sorted by descending ``freq``. *n_bins*, *corr_cap* and
+            *var_type* are ignored.
         lexicon : iterable of str
             Tokens to compute stats for.
         n_bins : int, default 4
@@ -377,6 +391,12 @@ class Corpus:
                 dtype=_np.int8,
                 count=len(token_sets),
             )
+            if y_clean is None:
+                rows.append(dict(
+                    token=t, freq=int(pres.sum()), cov_all=float(pres.mean()),
+                    cov_bal=None, corr=None, rank=None, pvalue=None, direction=None,
+                ))
+                continue
             cov_all, cov_bal, corr, rank = _rank_for_token_stats(
                 pres, y_clean,
                 n_bins=n_bins, corr_cap=corr_cap,
@@ -403,7 +423,10 @@ class Corpus:
                 direction=direction,
             ))
 
-        rows.sort(key=lambda r: (-r["rank"], -r["cov_bal"], -r["freq"]))
+        if y_clean is None:
+            rows.sort(key=lambda r: -r["freq"])
+        else:
+            rows.sort(key=lambda r: (-r["rank"], -r["cov_bal"], -r["freq"]))
         return rows
 
     def coverage_summary(
@@ -418,9 +441,12 @@ class Corpus:
 
         Parameters
         ----------
-        y : array-like
+        y : array-like or None
             Outcome variable.  Must have the same length as
             ``self.docs``; invalid entries are filtered automatically.
+            ``None`` drops no rows and leaves ``q1``, ``q4`` and
+            ``corr_any`` as ``None``, without ``group_cov``. *n_bins* and
+            *var_type* are ignored.
         lexicon : iterable of str
             Tokens to measure coverage for.
         n_bins : int, default 4
@@ -446,9 +472,9 @@ class Corpus:
         )
 
         docs, y_clean = _filter_y(self.docs, y, var_type=var_type)
-        is_categorical = var_type == "categorical"
+        is_categorical = y is not None and var_type == "categorical"
 
-        if len(docs) == 0 or len(y_clean) == 0:
+        if y is not None and (len(docs) == 0 or len(y_clean) == 0):
             summary = dict(
                 docs_any=0, cov_all=0.0, q1=0.0, q4=0.0,
                 corr_any=0.0, hits_mean=0.0, hits_median=0.0,
@@ -470,7 +496,9 @@ class Corpus:
         docs_any = int(pres_any.sum())
         overall = float(pres_any.mean()) if len(pres_any) else 0.0
 
-        if is_categorical:
+        if y_clean is None:
+            q1 = q4 = corr_any = None
+        elif is_categorical:
             groups = y_clean
             group_labels = sorted(set(groups))
             group_cov_any: dict = {}
@@ -539,8 +567,10 @@ class Corpus:
 
         Parameters
         ----------
-        y : array-like
-            Outcome variable (same length as ``self.docs``).
+        y : array-like or None
+            Outcome variable (same length as ``self.docs``). ``None``
+            returns only the statistics that need no outcome; the others are
+            ``None``.
         lexicon : iterable of str
             Tokens to evaluate; a repeated token is evaluated once.
         n_bins, corr_cap, var_type :

@@ -178,7 +178,7 @@ Default = full. Nothing to prune.
 
 ### `test` — `PCAOLSTestView` (ScalarView)
 
-Columns: `name`, `pvalue`. Default = full (rerun is a no-op; F-test is analytic).
+Columns: `name`, `pvalue`. Default = full (rerun is a no-op; the test is analytic).
 
 ### `sweep` — `SweepView` (PCAOLSResult only)
 

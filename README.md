@@ -32,7 +32,7 @@ https://doi.org/10.31234/osf.io/gvrsb_v3
 - [Preprocessing (Corpus)](#preprocessing-corpus)
 - [Lexicon Utilities](#lexicon-utilities)
 - [Fitting SSD](#fitting-ssd)
-  - [PCA + OLS](#pca--ols)
+  - [PCA regression](#pca-regression)
   - [PLS](#pls)
   - [Several outcomes (PLS3)](#several-outcomes-pls3)
   - [Cross-Group Comparison](#cross-group-comparison)
@@ -88,7 +88,7 @@ lexicon = ["happy", "sad", "joy", "anger"]
 
 # 5) Build SSD and fit
 ssd = SSD(emb, corpus, y=scores, lexicon=lexicon)
-result = ssd.fit_pls()                 # or ssd.fit_ols() for PCA+OLS
+result = ssd.fit_pls()                 # or ssd.fit_regression() for PCA regression
 
 # 6) Inspect
 print(result.stats)            # r², p-value, n_kept, β-norm, IQR effect
@@ -109,7 +109,7 @@ to one side with `.pos` / `.neg`, or export with `.to_df()` / `.save(...)`.
 - **Per-document vector**: SIF-weighted average of context vectors around each seed occurrence (+-3 tokens), then averaged across occurrences.
 - **SSD fitting**: Learn a semantic gradient (beta) that best predicts the outcome y. Two backends are available:
   - **PLS**: Partial Least Squares regression directly in embedding space.
-  - **PCA+OLS**: PCA dimensionality reduction followed by OLS regression (matches original SSD paper).
+  - **PCA regression**: PCA dimensionality reduction followed by a regression on the first K components (matches original SSD paper), optionally with covariates and random effects.
 - **Interpretation**: nearest neighbors to +beta/-beta, clustering neighbors into themes, and showing original sentences whose local context aligns with centroids or beta.
 
 ---
@@ -141,7 +141,7 @@ pred = res.predict(new_texts)
 
 A full name always means the same file, and it is what `report()` and `corpus.tokenizer` record, so use it in scripts whose results must be reproducible. A tag means the same pack for a given ssdiff version, and a later version can move it to a newer pack. Loading by tag prints one line that names the pack.
 
-Packs are kept in `~/.cache/wordpack` on Linux (`$XDG_CACHE_HOME/wordpack` when that variable is set), `~/Library/Caches/wordpack` on macOS and `%LOCALAPPDATA%\wordpack` on Windows; set `WORDPACK_CACHE` to use another directory. Nothing removes them: delete files there to free space.
+Packs are kept in `~/.wordpacks` (`C:\Users\<name>\.wordpacks` on Windows); set `WORDPACK_CACHE` to use another directory. Nothing removes them: delete files there to free space.
 
 A pack loads with ABTT (m = 1) already applied and keeps its 50,000 most frequent words in RAM; other words are read from the file when needed, so keep the file in place while you use `emb`.
 
@@ -290,7 +290,7 @@ lex.report().save("lexicon.md")         # narrative overview
 ## Fitting SSD
 
 Create an SSD instance with embeddings, corpus, outcome, and lexicon.
-The constructor builds document vectors but does **not** fit a model — call `fit_pls()`, `fit_multipls()`, `fit_ols()`, or `fit_groups()` explicitly. Pass a 1-D `y` for `fit_pls`, `fit_ols` and `fit_groups`. Pass several numeric outcomes (a DataFrame or a 2-D array) for `fit_multipls`.
+The constructor builds document vectors but does **not** fit a model — call `fit_pls()`, `fit_multipls()`, `fit_regression()`, or `fit_groups()` explicitly. Pass a 1-D `y` for `fit_pls`, `fit_regression` and `fit_groups`. Pass several numeric outcomes (a DataFrame or a 2-D array) for `fit_multipls`.
 
 ```python
 from ssdiff import Embeddings, Corpus, SSD
@@ -308,12 +308,14 @@ ssd = SSD(
 )
 ```
 
-### PCA + OLS
+### PCA regression
 
-Original SSD algorithm from the paper.
+Original SSD algorithm from the paper: PCA of the document vectors, then a regression of `y` on the first K components.
 
 ```python
-result = ssd.fit_ols(
+result = ssd.fit_regression(
+    formula=None,         # e.g. "~ age + gender + (1 | ID)"; None = components only
+    family="gaussian",    # any glmm family, e.g. "binomial" for a 0/1 outcome
     fixed_k=None,         # None = auto-select via interpretability+stability sweep
     k_min=2,
     k_max=120,
@@ -324,11 +326,28 @@ result = ssd.fit_ols(
 
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
+| `formula` | `str \| None` | `None` | Covariates and random effects over columns of `data` |
+| `family` | `str` | `"gaussian"` | glmm family of the final model |
+| `link` | `str \| None` | `None` | Link function; `None` = the family's default |
 | `fixed_k` | `int \| None` | `None` | Fixed PCA components. `None` = auto-select via sweep |
 | `k_min` | `int` | `2` | Minimum PCA-K for sweep |
 | `k_max` | `int` | `120` | Maximum PCA-K for sweep |
 | `k_step` | `int` | `2` | Step size |
 | `verbose` | `bool` | `False` | Print progress |
+
+#### Covariates and mixed models
+
+Pass a table with one row per document as `data`, name the outcome column as `y`, and give the covariates as a formula. Random effects such as `(1 | ID)` handle several texts per person. K is still chosen by the sweep below; the final model at that K is fit by [`glmm`](https://github.com/pawlenartowicz/glmm), with the K component scores added to your formula.
+
+```python
+ssd = SSD(emb, corpus, y="rating", lexicon=lexicon, data=df)
+result = ssd.fit_regression("~ age + gender + (1 | ID)")
+
+result.stats.pvalue      # the K components together: formula alone vs formula + components
+result.model.summary()   # glmm fit: covariate coefficients, random effects
+```
+
+The p-value comes from an F-test for an OLS model (Gaussian, no random effects) and for Gamma and inverse-Gaussian GLMs, and from a likelihood-ratio test otherwise (`result.test.name` is `"f_test"` or `"lrt"`). Rows of `data` follow the documents SSD keeps. A column the formula uses must have no missing values in those documents. With a formula, `r2` is the whole model's R², covariates included; it is NaN for mixed models and GLMs. `predict()` is not available after a fit with a formula or a non-Gaussian family.
 
 #### Automatic K selection (PCA sweep)
 
@@ -343,7 +362,7 @@ For each candidate PCA dimensionality K, the sweep fits SSD and tracks:
 These signals are smoothed using an AUCK window.
 
 ```python
-result = ssd.fit_ols(fixed_k=None, k_min=2, k_max=120, verbose=True)
+result = ssd.fit_regression(fixed_k=None, k_min=2, k_max=120, verbose=True)
 print(f"Selected K = {result.pca_k}")   # PCAOLSResult exposes .pca_k (PLSResult uses .n_components)
 print(result.stats)
 
@@ -428,7 +447,7 @@ Container attributes and views:
 - `.test` — LV1 test; call `.test(n_splits=..., n_perm=..., seed=...)` to rerun
 - `.outcome_names`, `.outcome_groups`
 - `.words`, `.clusters`, `.snippets` — fan out across dimensions
-- `.report()`, `.attach(...)`
+- `.report()`, `.save_page(...)`, `.attach(...)`
 
 Leaf views (`result["dim-1"]`):
 
@@ -445,7 +464,7 @@ When your research question involves **categorical groups** rather than a contin
 
 | Scenario | Use |
 |---|---|
-| Continuous outcome (scale score, rating) | `fit_pls()` or `fit_ols()` |
+| Continuous outcome (scale score, rating) | `fit_pls()` or `fit_regression()` |
 | Categorical groups (diagnosis, condition) | `fit_groups()` |
 | Continuous outcome AND group labels | Both — `fit_pls()` for the continuous analysis, `fit_groups()` for the group comparison |
 
@@ -666,15 +685,15 @@ from ssdiff.results.multi_pls_result import MultiPLSResult
 
 ### `SSD`
 
-- `SSD(embeddings, corpus, y, lexicon, *, window=3, sif_a=1e-3, use_full_doc=False)`
+- `SSD(embeddings, corpus, y, lexicon, *, window=3, sif_a=1e-3, use_full_doc=False, data=None)`
 - `.fit_pls(*, k="auto", k_max=5, keep=None, n_splits=50, random_state=2137, verbose=False)` -> `PLSResult`
 - `.fit_multipls(*, k, rotate=None, outcome_groups=None, n_splits=50, n_perm=1000, random_state=2137, verbose=False)` -> `MultiPLSResult`
-- `.fit_ols(*, fixed_k=None, k_min=2, k_max=120, k_step=2, verbose=False)` -> `PCAOLSResult`
+- `.fit_regression(formula=None, *, family="gaussian", link=None, fixed_k=None, k_min=2, k_max=120, k_step=2, verbose=False)` -> `PCAOLSResult`
 - `.fit_groups(*, median_split=False, n_perm=5000, correction="holm", random_state=2137, verbose=False)` -> `GroupResult`
 
 ### `PLSResult` / `PCAOLSResult`
 
-**Direct array attributes**: `beta`, `gradient`, `beta_norm`, `alignment_scores`, `x`, `y`. The component count is named per backend: **PLS** exposes `n_components`, **PCA+OLS** exposes `pca_k` (both are also available as `result.fit_info.n_components`). PLS adds `component_scores`, `component_weights`, `find_k_result`, `cv_scores`. PCA+OLS adds `pca_components`, `pca_weights`, `sweep_result`.
+**Direct array attributes**: `beta`, `gradient`, `beta_norm`, `alignment_scores`, `x`, `y`. The component count is named per backend: **PLS** exposes `n_components`, **PCA regression** exposes `pca_k` (both are also available as `result.fit_info.n_components`). PLS adds `component_scores`, `component_weights`, `find_k_result`, `cv_scores`. PCA regression adds `pca_components`, `pca_weights`, `sweep_result`, and `model` (the glmm fit).
 
 **Scalar views** (all expose `.r2`, `.pvalue`, … as attributes; print to read, export with `.to_df()` / `.save(...)`):
 - `.stats` — `backend`, `r2`, `r2_adj` (OLS only), `pvalue`, `n_raw`, `n_kept`, `n_dropped`, `y_mean`, `y_std`, `beta_norm`, `delta`, `iqr_effect`, `y_corr_pred`
@@ -690,6 +709,7 @@ from ssdiff.results.multi_pls_result import MultiPLSResult
 
 **Methods**:
 - `.report(clusters=True, top_words=True, extreme_docs=True, misdiagnosed=True)` -> `Report` — every section is on by default; pass `section=False` to drop one. Each section toggle is `True` / `False` / `None` / `dict` (e.g. `clusters={"n": 20, "n_words": 5, "n_snippets": 1}`). Stats + Fit info are always included. Use `.to_text()`, `.to_html()`, `.save("report.md")`.
+- `.save_page(path="ssd_results.html")` — self-contained HTML results page (see `docs/results.md`)
 - `.attach(corpus=None, embeddings=None)` — re-attach after un-pickling
 - `.plot_sweep(path=None)` — PCA-K sweep chart (`PCAOLSResult` only)
 
@@ -701,7 +721,7 @@ from ssdiff.results.multi_pls_result import MultiPLSResult
 
 **Pair access**: `result[("g1", "g2")]` → `PairResult` (canonical keys only) with its own `.words`, `.clusters`, `.snippets`, `.gradient`, `.beta`. Use `result.keys()` to list available pair keys; `result.group_labels` to map canonical → original.
 
-**Methods**: `.report(clusters=True, top_words=True)` — both sections on by default; pass `section=False` to drop one. Each toggle is `True` / `False` / `None` / `dict` (e.g. `clusters={"n": 20, "n_words": 5, "n_snippets": 1}`). Omnibus + Group labels + Pairwise contrasts are always included. `.test(n_perm=…, correction=…)` (re-runs in place); `.attach(...)`.
+**Methods**: `.report(clusters=True, top_words=True)` — both sections on by default; pass `section=False` to drop one. Each toggle is `True` / `False` / `None` / `dict` (e.g. `clusters={"n": 20, "n_words": 5, "n_snippets": 1}`). Omnibus + Group labels + Pairwise contrasts are always included. `.test(n_perm=…, correction=…)` (re-runs in place); `.save_page(...)`; `.attach(...)`.
 
 ### Lexicon utilities
 

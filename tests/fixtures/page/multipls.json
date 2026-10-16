@@ -1,0 +1,3889 @@
+{
+ "report_format": 1,
+ "kind": "multipls",
+ "title": "Example (multipls)",
+ "created": "2026-01-01T00:00:00Z",
+ "software": {
+  "package": "ssdiff",
+  "language": "python",
+  "version": "3.2.0"
+ },
+ "embeddings": {
+  "name": null,
+  "version": null,
+  "language": "pl",
+  "n": 20,
+  "dims": 8,
+  "abtt": 0
+ },
+ "settings": {
+  "lexicon": [
+   "kraj",
+   "narod",
+   "panstwo"
+  ],
+  "window": 3,
+  "sif_a": 0.001,
+  "use_full_doc": false,
+  "fit": {
+   "k": 2,
+   "rotate": null,
+   "outcome_groups": null,
+   "n_splits": 5,
+   "n_perm": 19,
+   "random_state": 0
+  },
+  "clusters": {
+   "topn": 100,
+   "k": null,
+   "k_min": 2,
+   "k_max": 10,
+   "random_state": 2137,
+   "min_cluster_size": 2
+  }
+ },
+ "tables": {
+  "stats": {
+   "columns": [
+    "n",
+    "q",
+    "k",
+    "rotate",
+    "cov_explained",
+    "pvalue"
+   ],
+   "rows": [
+    [
+     50,
+     3,
+     2,
+     null,
+     0.9381134011691122,
+     0.55
+    ]
+   ]
+  },
+  "pls_info": {
+   "columns": [
+    "k",
+    "rotate",
+    "order",
+    "signs",
+    "kaiser_normalized",
+    "sweeps",
+    "V_converged",
+    "random_state"
+   ],
+   "rows": [
+    [
+     2,
+     null,
+     [
+      0,
+      1
+     ],
+     [
+      1.0,
+      -1.0
+     ],
+     false,
+     0,
+     0.0,
+     0
+    ]
+   ]
+  },
+  "test": {
+   "columns": [
+    "name",
+    "pvalue",
+    "statistic",
+    "n_splits",
+    "n_perm",
+    "random_state"
+   ],
+   "rows": [
+    [
+     "split_exact",
+     0.55,
+     -0.08644472173036354,
+     5,
+     19,
+     0
+    ]
+   ]
+  }
+ },
+ "units": [
+  {
+   "key": "dim-1",
+   "label": "Dim 1",
+   "pos_label": "+",
+   "neg_label": "−",
+   "tables": {
+    "stats": {
+     "columns": [
+      "cov_share",
+      "score_corr"
+     ],
+     "rows": [
+      [
+       0.5889738053783582,
+       0.41190633353496636
+      ]
+     ]
+    },
+    "outcomes": {
+     "columns": [
+      "outcome",
+      "group",
+      "loading"
+     ],
+     "rows": [
+      [
+       "y1",
+       null,
+       0.8838617271475194
+      ],
+      [
+       "y2",
+       null,
+       -0.2578617682348404
+      ],
+      [
+       "y3",
+       null,
+       -0.39025088823294857
+      ]
+     ]
+    },
+    "words": {
+     "columns": [
+      "side",
+      "rank",
+      "word",
+      "cos_beta",
+      "contrast"
+     ],
+     "rows": [
+      [
+       "pos",
+       1,
+       "narod",
+       0.7619184255599976,
+       "dim-1"
+      ],
+      [
+       "pos",
+       2,
+       "panstwo",
+       0.6550416946411133,
+       "dim-1"
+      ],
+      [
+       "pos",
+       3,
+       "piekny",
+       0.6506174206733704,
+       "dim-1"
+      ],
+      [
+       "pos",
+       4,
+       "miasto",
+       0.5573081970214844,
+       "dim-1"
+      ],
+      [
+       "pos",
+       5,
+       "kraj",
+       0.543912947177887,
+       "dim-1"
+      ],
+      [
+       "pos",
+       6,
+       "rzeka",
+       0.438032865524292,
+       "dim-1"
+      ],
+      [
+       "pos",
+       7,
+       "stary",
+       0.36546069383621216,
+       "dim-1"
+      ],
+      [
+       "pos",
+       8,
+       "silny",
+       0.2996429204940796,
+       "dim-1"
+      ],
+      [
+       "pos",
+       9,
+       "dobry",
+       0.22882016003131866,
+       "dim-1"
+      ],
+      [
+       "pos",
+       10,
+       "szkola",
+       0.18498319387435913,
+       "dim-1"
+      ],
+      [
+       "pos",
+       11,
+       "nowy",
+       0.16068440675735474,
+       "dim-1"
+      ],
+      [
+       "pos",
+       12,
+       "las",
+       0.04439343512058258,
+       "dim-1"
+      ],
+      [
+       "pos",
+       13,
+       "zly",
+       0.029799923300743103,
+       "dim-1"
+      ],
+      [
+       "neg",
+       1,
+       "maly",
+       -0.7354170680046082,
+       "dim-1"
+      ],
+      [
+       "neg",
+       2,
+       "gora",
+       -0.4595561623573303,
+       "dim-1"
+      ],
+      [
+       "neg",
+       3,
+       "dom",
+       -0.3324049711227417,
+       "dim-1"
+      ],
+      [
+       "neg",
+       4,
+       "praca",
+       -0.3100978136062622,
+       "dim-1"
+      ],
+      [
+       "neg",
+       5,
+       "wielki",
+       -0.06884504109621048,
+       "dim-1"
+      ]
+     ]
+    },
+    "clusters": {
+     "columns": [
+      "cluster_id",
+      "side",
+      "size",
+      "coherence",
+      "centroid_cos_beta",
+      "contrast",
+      "top_words",
+      "top_snippet"
+     ],
+     "rows": [
+      [
+       2,
+       "pos",
+       5,
+       0.7938113981801106,
+       0.7716993063118813,
+       null,
+       "piekny, miasto, rzeka, narod, panstwo",
+       ""
+      ],
+      [
+       0,
+       "pos",
+       3,
+       0.8410205648838517,
+       0.3699542535237605,
+       null,
+       "dobry, kraj, nowy",
+       ""
+      ],
+      [
+       3,
+       "pos",
+       2,
+       0.9214985548318828,
+       0.18667219237884275,
+       null,
+       "silny, las",
+       ""
+      ],
+      [
+       8,
+       "pos",
+       2,
+       0.9247778649427988,
+       -0.5773397115322064,
+       null,
+       "dom, maly",
+       ""
+      ],
+      [
+       9,
+       "neg",
+       2,
+       0.9247778649427988,
+       -0.5773397115322064,
+       null,
+       "dom, maly",
+       ""
+      ],
+      [
+       4,
+       "neg",
+       2,
+       0.9214985548318828,
+       0.18667219237884275,
+       null,
+       "silny, las",
+       ""
+      ],
+      [
+       1,
+       "neg",
+       3,
+       0.8410205648838517,
+       0.3699542535237605,
+       null,
+       "dobry, kraj, nowy",
+       ""
+      ],
+      [
+       2,
+       "neg",
+       2,
+       0.9294498253819121,
+       0.4322414631504507,
+       null,
+       "rzeka, stary",
+       ""
+      ],
+      [
+       3,
+       "neg",
+       4,
+       0.8221887834062218,
+       0.798139590834438,
+       null,
+       "piekny, miasto, panstwo, narod",
+       ""
+      ]
+     ]
+    },
+    "cluster_words": {
+     "columns": [
+      "cluster_id",
+      "side",
+      "word",
+      "cos_centroid",
+      "cos_beta",
+      "contrast"
+     ],
+     "rows": [
+      [
+       2,
+       "pos",
+       "piekny",
+       0.9414773185136694,
+       0.6506173967653034,
+       null
+      ],
+      [
+       2,
+       "pos",
+       "miasto",
+       0.8159610267912971,
+       0.5573081711890121,
+       null
+      ],
+      [
+       2,
+       "pos",
+       "rzeka",
+       0.747974029517322,
+       0.43803284988425534,
+       null
+      ],
+      [
+       2,
+       "pos",
+       "narod",
+       0.7335528359052987,
+       0.7619184303959757,
+       null
+      ],
+      [
+       2,
+       "pos",
+       "panstwo",
+       0.7300917801729657,
+       0.6550416783557333,
+       null
+      ],
+      [
+       0,
+       "pos",
+       "dobry",
+       0.9125955344730368,
+       0.2288201306176998,
+       null
+      ],
+      [
+       0,
+       "pos",
+       "kraj",
+       0.8549920504806221,
+       0.5439128917188392,
+       null
+      ],
+      [
+       0,
+       "pos",
+       "nowy",
+       0.7554741096978963,
+       0.16068438350267072,
+       null
+      ],
+      [
+       3,
+       "pos",
+       "silny",
+       0.9214985738326459,
+       0.29964289074897316,
+       null
+      ],
+      [
+       3,
+       "pos",
+       "las",
+       0.9214985358311196,
+       0.04439342025983256,
+       null
+      ],
+      [
+       8,
+       "pos",
+       "dom",
+       0.9247779573588262,
+       -0.33240494962241834,
+       null
+      ],
+      [
+       8,
+       "pos",
+       "maly",
+       0.9247777725267714,
+       -0.7354170219324722,
+       null
+      ],
+      [
+       9,
+       "neg",
+       "dom",
+       0.9247779573588262,
+       -0.33240494962241834,
+       null
+      ],
+      [
+       9,
+       "neg",
+       "maly",
+       0.9247777725267714,
+       -0.7354170219324722,
+       null
+      ],
+      [
+       4,
+       "neg",
+       "silny",
+       0.9214985738326459,
+       0.29964289074897316,
+       null
+      ],
+      [
+       4,
+       "neg",
+       "las",
+       0.9214985358311196,
+       0.04439342025983256,
+       null
+      ],
+      [
+       1,
+       "neg",
+       "dobry",
+       0.9125955344730368,
+       0.2288201306176998,
+       null
+      ],
+      [
+       1,
+       "neg",
+       "kraj",
+       0.8549920504806221,
+       0.5439128917188392,
+       null
+      ],
+      [
+       1,
+       "neg",
+       "nowy",
+       0.7554741096978963,
+       0.16068438350267072,
+       null
+      ],
+      [
+       2,
+       "neg",
+       "rzeka",
+       0.9294498465434711,
+       0.43803284988425534,
+       null
+      ],
+      [
+       2,
+       "neg",
+       "stary",
+       0.9294498042203531,
+       0.3654606550117617,
+       null
+      ],
+      [
+       3,
+       "neg",
+       "piekny",
+       0.899239969553659,
+       0.6506173967653034,
+       null
+      ],
+      [
+       3,
+       "neg",
+       "miasto",
+       0.8653832051004543,
+       0.5573081711890121,
+       null
+      ],
+      [
+       3,
+       "neg",
+       "panstwo",
+       0.8152914145271561,
+       0.6550416783557333,
+       null
+      ],
+      [
+       3,
+       "neg",
+       "narod",
+       0.7088405444436175,
+       0.7619184303959757,
+       null
+      ]
+     ]
+    },
+    "snippets": {
+     "columns": [
+      "snippet_id",
+      "side",
+      "doc_id",
+      "cosine",
+      "seed",
+      "start_token_idx",
+      "end_token_idx",
+      "start_sent_idx",
+      "end_sent_idx",
+      "text_window",
+      "text_surface",
+      "cluster_id",
+      "post_id",
+      "contrast"
+     ],
+     "rows": [
+      [
+       0,
+       "pos",
+       39,
+       0.7357035009677801,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj piekny silny dobry",
+       "kraj piekny silny dobry",
+       null,
+       0,
+       null
+      ],
+      [
+       1,
+       "pos",
+       34,
+       0.7127878817823752,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod silny piekny szkola",
+       "narod silny piekny szkola",
+       null,
+       0,
+       null
+      ],
+      [
+       2,
+       "pos",
+       31,
+       0.6842489291519912,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod stary miasto silny",
+       "narod stary miasto silny",
+       null,
+       0,
+       null
+      ],
+      [
+       3,
+       "pos",
+       48,
+       0.6842489291519912,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj silny miasto stary",
+       "kraj silny miasto stary",
+       null,
+       0,
+       null
+      ],
+      [
+       4,
+       "pos",
+       37,
+       0.6719247087771769,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod silny miasto wielki",
+       "narod silny miasto wielki",
+       null,
+       0,
+       null
+      ],
+      [
+       5,
+       "pos",
+       43,
+       0.6614981034805727,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod zly silny piekny",
+       "narod zly silny piekny",
+       null,
+       0,
+       null
+      ],
+      [
+       6,
+       "pos",
+       11,
+       0.6362990281613342,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo piekny stary silny",
+       "panstwo piekny stary silny",
+       null,
+       0,
+       null
+      ],
+      [
+       7,
+       "pos",
+       1,
+       0.6220599182247117,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod piekny miasto dom",
+       "narod piekny miasto dom",
+       null,
+       0,
+       null
+      ],
+      [
+       8,
+       "pos",
+       7,
+       0.6168610345530179,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod miasto szkola piekny",
+       "narod miasto szkola piekny",
+       null,
+       0,
+       null
+      ],
+      [
+       9,
+       "pos",
+       27,
+       0.6052519063275913,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj piekny dobry stary",
+       "kraj piekny dobry stary",
+       null,
+       0,
+       null
+      ],
+      [
+       10,
+       "neg",
+       2,
+       0.7069233269517088,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo maly praca dom",
+       "panstwo maly praca dom",
+       null,
+       0,
+       null
+      ],
+      [
+       11,
+       "neg",
+       47,
+       0.6316738430729378,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo maly praca nowy",
+       "panstwo maly praca nowy",
+       null,
+       0,
+       null
+      ],
+      [
+       12,
+       "neg",
+       4,
+       0.5289371437630598,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod maly wielki zly",
+       "narod maly wielki zly",
+       null,
+       0,
+       null
+      ],
+      [
+       13,
+       "neg",
+       44,
+       0.4843899390930236,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo dom maly silny",
+       "panstwo dom maly silny",
+       null,
+       0,
+       null
+      ],
+      [
+       14,
+       "neg",
+       18,
+       0.47111308453326417,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj wielki praca dom",
+       "kraj wielki praca dom",
+       null,
+       0,
+       null
+      ],
+      [
+       15,
+       "neg",
+       19,
+       0.4517134240592438,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod dom zly praca",
+       "narod dom zly praca",
+       null,
+       0,
+       null
+      ],
+      [
+       16,
+       "neg",
+       14,
+       0.4016000505594606,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo maly zly nowy",
+       "panstwo maly zly nowy",
+       null,
+       0,
+       null
+      ],
+      [
+       17,
+       "neg",
+       36,
+       0.3948763894563919,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj silny szkola maly",
+       "kraj silny szkola maly",
+       null,
+       0,
+       null
+      ],
+      [
+       18,
+       "neg",
+       3,
+       0.3098635070235942,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj maly nowy silny",
+       "kraj maly nowy silny",
+       null,
+       0,
+       null
+      ],
+      [
+       19,
+       "neg",
+       40,
+       0.26430521246704886,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod szkola dobry maly",
+       "narod szkola dobry maly",
+       null,
+       0,
+       null
+      ]
+     ]
+    },
+    "cluster_snippets": {
+     "columns": [
+      "snippet_id",
+      "side",
+      "doc_id",
+      "cosine",
+      "seed",
+      "start_token_idx",
+      "end_token_idx",
+      "start_sent_idx",
+      "end_sent_idx",
+      "text_window",
+      "text_surface",
+      "cluster_id",
+      "post_id",
+      "contrast"
+     ],
+     "rows": [
+      [
+       0,
+       "pos",
+       1,
+       0.9450339800652812,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod piekny miasto dom",
+       "narod piekny miasto dom",
+       2,
+       0,
+       null
+      ],
+      [
+       1,
+       "pos",
+       7,
+       0.8301623329128327,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod miasto szkola piekny",
+       "narod miasto szkola piekny",
+       2,
+       0,
+       null
+      ],
+      [
+       2,
+       "pos",
+       48,
+       0.7549063452303247,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj silny miasto stary",
+       "kraj silny miasto stary",
+       2,
+       0,
+       null
+      ],
+      [
+       3,
+       "pos",
+       31,
+       0.7549063452303246,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod stary miasto silny",
+       "narod stary miasto silny",
+       2,
+       0,
+       null
+      ],
+      [
+       4,
+       "pos",
+       41,
+       0.7377493684248813,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo miasto dom zly",
+       "panstwo miasto dom zly",
+       2,
+       0,
+       null
+      ],
+      [
+       5,
+       "pos",
+       17,
+       0.9651037251445478,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo nowy silny dobry",
+       "panstwo nowy silny dobry",
+       0,
+       0,
+       null
+      ],
+      [
+       6,
+       "pos",
+       13,
+       0.827112697032331,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod szkola wielki dobry",
+       "narod szkola wielki dobry",
+       0,
+       0,
+       null
+      ],
+      [
+       7,
+       "pos",
+       35,
+       0.8107421392987972,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo wielki nowy silny",
+       "panstwo wielki nowy silny",
+       0,
+       0,
+       null
+      ],
+      [
+       8,
+       "pos",
+       30,
+       0.8067306639349149,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj dobry miasto dom",
+       "kraj dobry miasto dom",
+       0,
+       0,
+       null
+      ],
+      [
+       9,
+       "pos",
+       28,
+       0.7890951430704224,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod szkola dobry zly",
+       "narod szkola dobry zly",
+       0,
+       0,
+       null
+      ],
+      [
+       10,
+       "pos",
+       39,
+       0.520954928276543,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj piekny silny dobry",
+       "kraj piekny silny dobry",
+       3,
+       0,
+       null
+      ],
+      [
+       11,
+       "pos",
+       26,
+       0.511982865828493,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo maly silny stary",
+       "panstwo maly silny stary",
+       3,
+       0,
+       null
+      ],
+      [
+       12,
+       "pos",
+       16,
+       0.5017899559890805,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod szkola wielki silny",
+       "narod szkola wielki silny",
+       3,
+       0,
+       null
+      ],
+      [
+       13,
+       "pos",
+       44,
+       0.45762299682756363,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo dom maly silny",
+       "panstwo dom maly silny",
+       3,
+       0,
+       null
+      ],
+      [
+       14,
+       "pos",
+       36,
+       0.43505194080668214,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj silny szkola maly",
+       "kraj silny szkola maly",
+       3,
+       0,
+       null
+      ],
+      [
+       15,
+       "pos",
+       44,
+       0.9237352147219393,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo dom maly silny",
+       "panstwo dom maly silny",
+       8,
+       0,
+       null
+      ],
+      [
+       16,
+       "pos",
+       40,
+       0.8149131888342009,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod szkola dobry maly",
+       "narod szkola dobry maly",
+       8,
+       0,
+       null
+      ],
+      [
+       17,
+       "pos",
+       3,
+       0.710587707521772,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj maly nowy silny",
+       "kraj maly nowy silny",
+       8,
+       0,
+       null
+      ],
+      [
+       18,
+       "pos",
+       36,
+       0.584219647068983,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj silny szkola maly",
+       "kraj silny szkola maly",
+       8,
+       0,
+       null
+      ],
+      [
+       19,
+       "pos",
+       14,
+       0.5370029381206862,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo maly zly nowy",
+       "panstwo maly zly nowy",
+       8,
+       0,
+       null
+      ],
+      [
+       0,
+       "neg",
+       44,
+       0.9237352147219393,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo dom maly silny",
+       "panstwo dom maly silny",
+       9,
+       0,
+       null
+      ],
+      [
+       1,
+       "neg",
+       40,
+       0.8149131888342009,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod szkola dobry maly",
+       "narod szkola dobry maly",
+       9,
+       0,
+       null
+      ],
+      [
+       2,
+       "neg",
+       3,
+       0.710587707521772,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj maly nowy silny",
+       "kraj maly nowy silny",
+       9,
+       0,
+       null
+      ],
+      [
+       3,
+       "neg",
+       36,
+       0.584219647068983,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj silny szkola maly",
+       "kraj silny szkola maly",
+       9,
+       0,
+       null
+      ],
+      [
+       4,
+       "neg",
+       14,
+       0.5370029381206862,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo maly zly nowy",
+       "panstwo maly zly nowy",
+       9,
+       0,
+       null
+      ],
+      [
+       5,
+       "neg",
+       39,
+       0.520954928276543,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj piekny silny dobry",
+       "kraj piekny silny dobry",
+       4,
+       0,
+       null
+      ],
+      [
+       6,
+       "neg",
+       26,
+       0.511982865828493,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo maly silny stary",
+       "panstwo maly silny stary",
+       4,
+       0,
+       null
+      ],
+      [
+       7,
+       "neg",
+       16,
+       0.5017899559890805,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod szkola wielki silny",
+       "narod szkola wielki silny",
+       4,
+       0,
+       null
+      ],
+      [
+       8,
+       "neg",
+       44,
+       0.45762299682756363,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo dom maly silny",
+       "panstwo dom maly silny",
+       4,
+       0,
+       null
+      ],
+      [
+       9,
+       "neg",
+       36,
+       0.43505194080668214,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj silny szkola maly",
+       "kraj silny szkola maly",
+       4,
+       0,
+       null
+      ],
+      [
+       10,
+       "neg",
+       17,
+       0.9651037251445478,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo nowy silny dobry",
+       "panstwo nowy silny dobry",
+       1,
+       0,
+       null
+      ],
+      [
+       11,
+       "neg",
+       13,
+       0.827112697032331,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod szkola wielki dobry",
+       "narod szkola wielki dobry",
+       1,
+       0,
+       null
+      ],
+      [
+       12,
+       "neg",
+       35,
+       0.8107421392987972,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo wielki nowy silny",
+       "panstwo wielki nowy silny",
+       1,
+       0,
+       null
+      ],
+      [
+       13,
+       "neg",
+       30,
+       0.8067306639349149,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj dobry miasto dom",
+       "kraj dobry miasto dom",
+       1,
+       0,
+       null
+      ],
+      [
+       14,
+       "neg",
+       28,
+       0.7890951430704224,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod szkola dobry zly",
+       "narod szkola dobry zly",
+       1,
+       0,
+       null
+      ],
+      [
+       15,
+       "neg",
+       11,
+       0.9180464341926933,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo piekny stary silny",
+       "panstwo piekny stary silny",
+       2,
+       0,
+       null
+      ],
+      [
+       16,
+       "neg",
+       27,
+       0.8165056074194261,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj piekny dobry stary",
+       "kraj piekny dobry stary",
+       2,
+       0,
+       null
+      ],
+      [
+       17,
+       "neg",
+       22,
+       0.7938902307369908,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod zly stary dom",
+       "narod zly stary dom",
+       2,
+       0,
+       null
+      ],
+      [
+       18,
+       "neg",
+       48,
+       0.7836704056943612,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj silny miasto stary",
+       "kraj silny miasto stary",
+       2,
+       0,
+       null
+      ],
+      [
+       19,
+       "neg",
+       31,
+       0.7836704056943611,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod stary miasto silny",
+       "narod stary miasto silny",
+       2,
+       0,
+       null
+      ],
+      [
+       20,
+       "neg",
+       1,
+       0.9523829972772908,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod piekny miasto dom",
+       "narod piekny miasto dom",
+       3,
+       0,
+       null
+      ],
+      [
+       21,
+       "neg",
+       7,
+       0.8634467058866172,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod miasto szkola piekny",
+       "narod miasto szkola piekny",
+       3,
+       0,
+       null
+      ],
+      [
+       22,
+       "neg",
+       41,
+       0.7590847550280647,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo miasto dom zly",
+       "panstwo miasto dom zly",
+       3,
+       0,
+       null
+      ],
+      [
+       23,
+       "neg",
+       48,
+       0.6984083129185412,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj silny miasto stary",
+       "kraj silny miasto stary",
+       3,
+       0,
+       null
+      ],
+      [
+       24,
+       "neg",
+       31,
+       0.6984083129185412,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod stary miasto silny",
+       "narod stary miasto silny",
+       3,
+       0,
+       null
+      ]
+     ]
+    },
+    "docs": {
+     "columns": [
+      "doc_id",
+      "alignment_score",
+      "text"
+     ],
+     "rows": [
+      [
+       0,
+       0.473095255291637,
+       null
+      ],
+      [
+       1,
+       0.6220599275265717,
+       null
+      ],
+      [
+       2,
+       -0.7069233389942553,
+       "panstwo maly praca dom"
+      ],
+      [
+       3,
+       -0.309863547544366,
+       null
+      ],
+      [
+       4,
+       -0.5289371572529104,
+       "narod maly wielki zly"
+      ],
+      [
+       5,
+       0.3009405205213959,
+       null
+      ],
+      [
+       6,
+       0.14630452135017813,
+       null
+      ],
+      [
+       7,
+       0.6168610373392127,
+       null
+      ],
+      [
+       8,
+       0.5639340958318507,
+       null
+      ],
+      [
+       9,
+       -0.25458157937010156,
+       null
+      ],
+      [
+       10,
+       0.08105811861555344,
+       null
+      ],
+      [
+       11,
+       0.6362990269501076,
+       null
+      ],
+      [
+       12,
+       -0.13259031261635068,
+       null
+      ],
+      [
+       13,
+       0.23368580343851425,
+       null
+      ],
+      [
+       14,
+       -0.4016000746886491,
+       null
+      ],
+      [
+       15,
+       0.12704254370635457,
+       null
+      ],
+      [
+       16,
+       0.2499097600343153,
+       null
+      ],
+      [
+       17,
+       0.3059539868063963,
+       null
+      ],
+      [
+       18,
+       -0.4711130876251436,
+       null
+      ],
+      [
+       19,
+       -0.4517134282307176,
+       null
+      ],
+      [
+       20,
+       -0.09889879824421277,
+       null
+      ],
+      [
+       21,
+       0.3998536911822249,
+       null
+      ],
+      [
+       22,
+       0.18436928094254046,
+       null
+      ],
+      [
+       23,
+       0.015154232865619593,
+       null
+      ],
+      [
+       24,
+       0.5130190528432967,
+       null
+      ],
+      [
+       25,
+       -0.05412344775360879,
+       null
+      ],
+      [
+       26,
+       -0.07655343844709543,
+       null
+      ],
+      [
+       27,
+       0.6052519091189636,
+       null
+      ],
+      [
+       28,
+       0.397761514517182,
+       null
+      ],
+      [
+       29,
+       0.3436531358632516,
+       null
+      ],
+      [
+       30,
+       0.46604181446003196,
+       null
+      ],
+      [
+       31,
+       0.6842489331047017,
+       null
+      ],
+      [
+       32,
+       0.15722649245231254,
+       null
+      ],
+      [
+       33,
+       0.03732750034139792,
+       null
+      ],
+      [
+       34,
+       0.712787887794388,
+       "narod silny piekny szkola"
+      ],
+      [
+       35,
+       0.21571694774723313,
+       null
+      ],
+      [
+       36,
+       -0.3948764384002133,
+       null
+      ],
+      [
+       37,
+       0.6719247088765103,
+       null
+      ],
+      [
+       38,
+       0.017678830691392602,
+       null
+      ],
+      [
+       39,
+       0.7357035040401791,
+       "kraj piekny silny dobry"
+      ],
+      [
+       40,
+       -0.26430523369606296,
+       null
+      ],
+      [
+       41,
+       0.4347006834679469,
+       null
+      ],
+      [
+       42,
+       0.23405340399254268,
+       null
+      ],
+      [
+       43,
+       0.6614980968851303,
+       null
+      ],
+      [
+       44,
+       -0.4843899578245824,
+       null
+      ],
+      [
+       45,
+       0.23923667987607536,
+       null
+      ],
+      [
+       46,
+       0.5666586575202145,
+       null
+      ],
+      [
+       47,
+       -0.6316738639164488,
+       "panstwo maly praca nowy"
+      ],
+      [
+       48,
+       0.6842489331047017,
+       "kraj silny miasto stary"
+      ],
+      [
+       49,
+       0.3404365470701831,
+       null
+      ]
+     ]
+    }
+   }
+  },
+  {
+   "key": "dim-2",
+   "label": "Dim 2",
+   "pos_label": "+",
+   "neg_label": "−",
+   "tables": {
+    "stats": {
+     "columns": [
+      "cov_share",
+      "score_corr"
+     ],
+     "rows": [
+      [
+       0.4110261946216417,
+       0.3914067553554894
+      ]
+     ]
+    },
+    "outcomes": {
+     "columns": [
+      "outcome",
+      "group",
+      "loading"
+     ],
+     "rows": [
+      [
+       "y1",
+       null,
+       0.28267365890997076
+      ],
+      [
+       "y2",
+       null,
+       -0.37026662215210804
+      ],
+      [
+       "y3",
+       null,
+       0.8848718726903446
+      ]
+     ]
+    },
+    "words": {
+     "columns": [
+      "side",
+      "rank",
+      "word",
+      "cos_beta",
+      "contrast"
+     ],
+     "rows": [
+      [
+       "pos",
+       1,
+       "nowy",
+       0.8127199411392212,
+       "dim-2"
+      ],
+      [
+       "pos",
+       2,
+       "dobry",
+       0.5662124156951904,
+       "dim-2"
+      ],
+      [
+       "pos",
+       3,
+       "kraj",
+       0.5596325993537903,
+       "dim-2"
+      ],
+      [
+       "pos",
+       4,
+       "dom",
+       0.4193432331085205,
+       "dim-2"
+      ],
+      [
+       "pos",
+       5,
+       "silny",
+       0.38843727111816406,
+       "dim-2"
+      ],
+      [
+       "pos",
+       6,
+       "gora",
+       0.33721762895584106,
+       "dim-2"
+      ],
+      [
+       "pos",
+       7,
+       "szkola",
+       0.24651461839675903,
+       "dim-2"
+      ],
+      [
+       "pos",
+       8,
+       "las",
+       0.11349111050367355,
+       "dim-2"
+      ],
+      [
+       "pos",
+       9,
+       "panstwo",
+       0.09350383281707764,
+       "dim-2"
+      ],
+      [
+       "pos",
+       10,
+       "narod",
+       0.020515263080596924,
+       "dim-2"
+      ],
+      [
+       "pos",
+       11,
+       "maly",
+       0.011792361736297607,
+       "dim-2"
+      ],
+      [
+       "neg",
+       1,
+       "rzeka",
+       -0.6932260990142822,
+       "dim-2"
+      ],
+      [
+       "neg",
+       2,
+       "piekny",
+       -0.5701436996459961,
+       "dim-2"
+      ],
+      [
+       "neg",
+       3,
+       "stary",
+       -0.5287576913833618,
+       "dim-2"
+      ],
+      [
+       "neg",
+       4,
+       "zly",
+       -0.459138423204422,
+       "dim-2"
+      ],
+      [
+       "neg",
+       5,
+       "praca",
+       -0.31156429648399353,
+       "dim-2"
+      ],
+      [
+       "neg",
+       6,
+       "miasto",
+       -0.13982471823692322,
+       "dim-2"
+      ],
+      [
+       "neg",
+       7,
+       "wielki",
+       -0.10893575102090836,
+       "dim-2"
+      ]
+     ]
+    },
+    "clusters": {
+     "columns": [
+      "cluster_id",
+      "side",
+      "size",
+      "coherence",
+      "centroid_cos_beta",
+      "contrast",
+      "top_words",
+      "top_snippet"
+     ],
+     "rows": [
+      [
+       7,
+       "pos",
+       3,
+       0.8410205648838517,
+       0.7683382669777661,
+       null,
+       "dobry, kraj, nowy",
+       ""
+      ],
+      [
+       5,
+       "pos",
+       2,
+       0.9214985548318828,
+       0.2723435451659983,
+       null,
+       "silny, las",
+       ""
+      ],
+      [
+       1,
+       "pos",
+       2,
+       0.8756821562330892,
+       0.19927888898540758,
+       null,
+       "gora, maly",
+       ""
+      ],
+      [
+       2,
+       "pos",
+       2,
+       0.8719640318537146,
+       -0.3656649664226906,
+       null,
+       "wielki, stary",
+       ""
+      ],
+      [
+       6,
+       "pos",
+       4,
+       0.8275665198493899,
+       -0.4176942784067367,
+       null,
+       "piekny, rzeka, narod, miasto",
+       ""
+      ],
+      [
+       9,
+       "neg",
+       2,
+       0.9294498253819121,
+       -0.6573693986830097,
+       null,
+       "rzeka, stary",
+       ""
+      ],
+      [
+       4,
+       "neg",
+       4,
+       0.7357447683973534,
+       -0.12570593325742085,
+       null,
+       "miasto, piekny, panstwo, szkola",
+       ""
+      ],
+      [
+       8,
+       "neg",
+       2,
+       0.9247778649427988,
+       0.23310224144650743,
+       null,
+       "dom, maly",
+       ""
+      ],
+      [
+       5,
+       "neg",
+       2,
+       0.9214985548318828,
+       0.2723435451659983,
+       null,
+       "silny, las",
+       ""
+      ],
+      [
+       1,
+       "neg",
+       3,
+       0.8410205648838517,
+       0.7683382669777661,
+       null,
+       "dobry, kraj, nowy",
+       ""
+      ]
+     ]
+    },
+    "cluster_words": {
+     "columns": [
+      "cluster_id",
+      "side",
+      "word",
+      "cos_centroid",
+      "cos_beta",
+      "contrast"
+     ],
+     "rows": [
+      [
+       7,
+       "pos",
+       "dobry",
+       0.9125955344730368,
+       0.5662123742297135,
+       null
+      ],
+      [
+       7,
+       "pos",
+       "kraj",
+       0.8549920504806221,
+       0.5596325744370517,
+       null
+      ],
+      [
+       7,
+       "pos",
+       "nowy",
+       0.7554741096978963,
+       0.8127199012797958,
+       null
+      ],
+      [
+       5,
+       "pos",
+       "silny",
+       0.9214985738326459,
+       0.3884372635067377,
+       null
+      ],
+      [
+       5,
+       "pos",
+       "las",
+       0.9214985358311196,
+       0.11349110306978034,
+       null
+      ],
+      [
+       1,
+       "pos",
+       "gora",
+       0.8756822171808052,
+       0.3372175708683654,
+       null
+      ],
+      [
+       1,
+       "pos",
+       "maly",
+       0.875682095285373,
+       0.01179236352858681,
+       null
+      ],
+      [
+       2,
+       "pos",
+       "wielki",
+       0.8719640566266164,
+       -0.10893573961991325,
+       null
+      ],
+      [
+       2,
+       "pos",
+       "stary",
+       0.8719640070808128,
+       -0.5287576572392516,
+       null
+      ],
+      [
+       6,
+       "pos",
+       "piekny",
+       0.9412855178071025,
+       -0.5701436865514522,
+       null
+      ],
+      [
+       6,
+       "pos",
+       "rzeka",
+       0.83143452087713,
+       -0.6932260883954202,
+       null
+      ],
+      [
+       6,
+       "pos",
+       "narod",
+       0.7708232312392489,
+       0.02051526383233108,
+       null
+      ],
+      [
+       6,
+       "pos",
+       "miasto",
+       0.7667228094740776,
+       -0.13982469025371944,
+       null
+      ],
+      [
+       9,
+       "neg",
+       "rzeka",
+       0.9294498465434711,
+       -0.6932260883954202,
+       null
+      ],
+      [
+       9,
+       "neg",
+       "stary",
+       0.9294498042203531,
+       -0.5287576572392516,
+       null
+      ],
+      [
+       4,
+       "neg",
+       "miasto",
+       0.9474852549818796,
+       -0.13982469025371944,
+       null
+      ],
+      [
+       4,
+       "neg",
+       "piekny",
+       0.8153426984481319,
+       -0.5701436865514522,
+       null
+      ],
+      [
+       4,
+       "neg",
+       "panstwo",
+       0.7541165581507555,
+       0.09350382464345923,
+       null
+      ],
+      [
+       4,
+       "neg",
+       "szkola",
+       0.42603456200864676,
+       0.24651462115909517,
+       null
+      ],
+      [
+       8,
+       "neg",
+       "dom",
+       0.9247779573588262,
+       0.4193432227879769,
+       null
+      ],
+      [
+       8,
+       "neg",
+       "maly",
+       0.9247777725267714,
+       0.01179236352858681,
+       null
+      ],
+      [
+       5,
+       "neg",
+       "silny",
+       0.9214985738326459,
+       0.3884372635067377,
+       null
+      ],
+      [
+       5,
+       "neg",
+       "las",
+       0.9214985358311196,
+       0.11349110306978034,
+       null
+      ],
+      [
+       1,
+       "neg",
+       "dobry",
+       0.9125955344730368,
+       0.5662123742297135,
+       null
+      ],
+      [
+       1,
+       "neg",
+       "kraj",
+       0.8549920504806221,
+       0.5596325744370517,
+       null
+      ],
+      [
+       1,
+       "neg",
+       "nowy",
+       0.7554741096978963,
+       0.8127199012797958,
+       null
+      ]
+     ]
+    },
+    "snippets": {
+     "columns": [
+      "snippet_id",
+      "side",
+      "doc_id",
+      "cosine",
+      "seed",
+      "start_token_idx",
+      "end_token_idx",
+      "start_sent_idx",
+      "end_sent_idx",
+      "text_window",
+      "text_surface",
+      "cluster_id",
+      "post_id",
+      "contrast"
+     ],
+     "rows": [
+      [
+       0,
+       "pos",
+       17,
+       0.8349769044593466,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo nowy silny dobry",
+       "panstwo nowy silny dobry",
+       null,
+       0,
+       null
+      ],
+      [
+       1,
+       "pos",
+       3,
+       0.7974289563872096,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj maly nowy silny",
+       "kraj maly nowy silny",
+       null,
+       0,
+       null
+      ],
+      [
+       2,
+       "pos",
+       35,
+       0.6753927499466518,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo wielki nowy silny",
+       "panstwo wielki nowy silny",
+       null,
+       0,
+       null
+      ],
+      [
+       3,
+       "pos",
+       21,
+       0.637420701511082,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj nowy miasto dom",
+       "kraj nowy miasto dom",
+       null,
+       0,
+       null
+      ],
+      [
+       4,
+       "pos",
+       40,
+       0.6193596103687127,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod szkola dobry maly",
+       "narod szkola dobry maly",
+       null,
+       0,
+       null
+      ],
+      [
+       5,
+       "pos",
+       32,
+       0.5673725792490769,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo wielki szkola nowy",
+       "panstwo wielki szkola nowy",
+       null,
+       0,
+       null
+      ],
+      [
+       6,
+       "pos",
+       30,
+       0.5341384156315805,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj dobry miasto dom",
+       "kraj dobry miasto dom",
+       null,
+       0,
+       null
+      ],
+      [
+       7,
+       "pos",
+       0,
+       0.5243148981833621,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj nowy piekny dom",
+       "kraj nowy piekny dom",
+       null,
+       0,
+       null
+      ],
+      [
+       8,
+       "pos",
+       13,
+       0.5004568607879388,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod szkola wielki dobry",
+       "narod szkola wielki dobry",
+       null,
+       0,
+       null
+      ],
+      [
+       9,
+       "pos",
+       36,
+       0.43629300516292807,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj silny szkola maly",
+       "kraj silny szkola maly",
+       null,
+       0,
+       null
+      ],
+      [
+       10,
+       "neg",
+       29,
+       0.5482040999353536,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo piekny dom zly",
+       "panstwo piekny dom zly",
+       null,
+       0,
+       null
+      ],
+      [
+       11,
+       "neg",
+       22,
+       0.5361992789317804,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod zly stary dom",
+       "narod zly stary dom",
+       null,
+       0,
+       null
+      ],
+      [
+       12,
+       "neg",
+       43,
+       0.5089689261515975,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod zly silny piekny",
+       "narod zly silny piekny",
+       null,
+       0,
+       null
+      ],
+      [
+       13,
+       "neg",
+       11,
+       0.466804587366202,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo piekny stary silny",
+       "panstwo piekny stary silny",
+       null,
+       0,
+       null
+      ],
+      [
+       14,
+       "neg",
+       19,
+       0.3910030796879946,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod dom zly praca",
+       "narod dom zly praca",
+       null,
+       0,
+       null
+      ],
+      [
+       15,
+       "neg",
+       49,
+       0.338094171222765,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod dom piekny wielki",
+       "narod dom piekny wielki",
+       null,
+       0,
+       null
+      ],
+      [
+       16,
+       "neg",
+       25,
+       0.33379555048352927,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod maly szkola piekny",
+       "narod maly szkola piekny",
+       null,
+       0,
+       null
+      ],
+      [
+       17,
+       "neg",
+       46,
+       0.33378869568160907,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod szkola wielki piekny",
+       "narod szkola wielki piekny",
+       null,
+       0,
+       null
+      ],
+      [
+       18,
+       "neg",
+       26,
+       0.30413372789690585,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo maly silny stary",
+       "panstwo maly silny stary",
+       null,
+       0,
+       null
+      ],
+      [
+       19,
+       "neg",
+       5,
+       0.3030614821422001,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo szkola stary wielki",
+       "panstwo szkola stary wielki",
+       null,
+       0,
+       null
+      ]
+     ]
+    },
+    "cluster_snippets": {
+     "columns": [
+      "snippet_id",
+      "side",
+      "doc_id",
+      "cosine",
+      "seed",
+      "start_token_idx",
+      "end_token_idx",
+      "start_sent_idx",
+      "end_sent_idx",
+      "text_window",
+      "text_surface",
+      "cluster_id",
+      "post_id",
+      "contrast"
+     ],
+     "rows": [
+      [
+       0,
+       "pos",
+       17,
+       0.9651037251445478,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo nowy silny dobry",
+       "panstwo nowy silny dobry",
+       7,
+       0,
+       null
+      ],
+      [
+       1,
+       "pos",
+       13,
+       0.827112697032331,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod szkola wielki dobry",
+       "narod szkola wielki dobry",
+       7,
+       0,
+       null
+      ],
+      [
+       2,
+       "pos",
+       35,
+       0.8107421392987972,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo wielki nowy silny",
+       "panstwo wielki nowy silny",
+       7,
+       0,
+       null
+      ],
+      [
+       3,
+       "pos",
+       30,
+       0.8067306639349149,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj dobry miasto dom",
+       "kraj dobry miasto dom",
+       7,
+       0,
+       null
+      ],
+      [
+       4,
+       "pos",
+       28,
+       0.7890951430704224,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod szkola dobry zly",
+       "narod szkola dobry zly",
+       7,
+       0,
+       null
+      ],
+      [
+       5,
+       "pos",
+       39,
+       0.520954928276543,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj piekny silny dobry",
+       "kraj piekny silny dobry",
+       5,
+       0,
+       null
+      ],
+      [
+       6,
+       "pos",
+       26,
+       0.511982865828493,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo maly silny stary",
+       "panstwo maly silny stary",
+       5,
+       0,
+       null
+      ],
+      [
+       7,
+       "pos",
+       16,
+       0.5017899559890805,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod szkola wielki silny",
+       "narod szkola wielki silny",
+       5,
+       0,
+       null
+      ],
+      [
+       8,
+       "pos",
+       44,
+       0.45762299682756363,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo dom maly silny",
+       "panstwo dom maly silny",
+       5,
+       0,
+       null
+      ],
+      [
+       9,
+       "pos",
+       36,
+       0.43505194080668214,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj silny szkola maly",
+       "kraj silny szkola maly",
+       5,
+       0,
+       null
+      ],
+      [
+       10,
+       "pos",
+       44,
+       0.7642225860763854,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo dom maly silny",
+       "panstwo dom maly silny",
+       1,
+       0,
+       null
+      ],
+      [
+       11,
+       "pos",
+       2,
+       0.7252766913655959,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo maly praca dom",
+       "panstwo maly praca dom",
+       1,
+       0,
+       null
+      ],
+      [
+       12,
+       "pos",
+       36,
+       0.7052743069443,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj silny szkola maly",
+       "kraj silny szkola maly",
+       1,
+       0,
+       null
+      ],
+      [
+       13,
+       "pos",
+       47,
+       0.6372242907676751,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo maly praca nowy",
+       "panstwo maly praca nowy",
+       1,
+       0,
+       null
+      ],
+      [
+       14,
+       "pos",
+       3,
+       0.6317341144273478,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj maly nowy silny",
+       "kraj maly nowy silny",
+       1,
+       0,
+       null
+      ],
+      [
+       15,
+       "pos",
+       5,
+       0.8803201477290457,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo szkola stary wielki",
+       "panstwo szkola stary wielki",
+       2,
+       0,
+       null
+      ],
+      [
+       16,
+       "pos",
+       22,
+       0.8413519452659164,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod zly stary dom",
+       "narod zly stary dom",
+       2,
+       0,
+       null
+      ],
+      [
+       17,
+       "pos",
+       49,
+       0.7930851231890483,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod dom piekny wielki",
+       "narod dom piekny wielki",
+       2,
+       0,
+       null
+      ],
+      [
+       18,
+       "pos",
+       27,
+       0.7683418667622905,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj piekny dobry stary",
+       "kraj piekny dobry stary",
+       2,
+       0,
+       null
+      ],
+      [
+       19,
+       "pos",
+       6,
+       0.6956907329224181,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj wielki silny zly",
+       "kraj wielki silny zly",
+       2,
+       0,
+       null
+      ],
+      [
+       20,
+       "pos",
+       1,
+       0.9128295042939933,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod piekny miasto dom",
+       "narod piekny miasto dom",
+       6,
+       0,
+       null
+      ],
+      [
+       21,
+       "pos",
+       7,
+       0.8204181220322412,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod miasto szkola piekny",
+       "narod miasto szkola piekny",
+       6,
+       0,
+       null
+      ],
+      [
+       22,
+       "pos",
+       48,
+       0.7595185191827385,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj silny miasto stary",
+       "kraj silny miasto stary",
+       6,
+       0,
+       null
+      ],
+      [
+       23,
+       "pos",
+       31,
+       0.7595185191827384,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod stary miasto silny",
+       "narod stary miasto silny",
+       6,
+       0,
+       null
+      ],
+      [
+       24,
+       "pos",
+       11,
+       0.7187160868897432,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo piekny stary silny",
+       "panstwo piekny stary silny",
+       6,
+       0,
+       null
+      ],
+      [
+       0,
+       "neg",
+       11,
+       0.9180464341926933,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo piekny stary silny",
+       "panstwo piekny stary silny",
+       9,
+       0,
+       null
+      ],
+      [
+       1,
+       "neg",
+       27,
+       0.8165056074194261,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj piekny dobry stary",
+       "kraj piekny dobry stary",
+       9,
+       0,
+       null
+      ],
+      [
+       2,
+       "neg",
+       22,
+       0.7938902307369908,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod zly stary dom",
+       "narod zly stary dom",
+       9,
+       0,
+       null
+      ],
+      [
+       3,
+       "neg",
+       48,
+       0.7836704056943612,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj silny miasto stary",
+       "kraj silny miasto stary",
+       9,
+       0,
+       null
+      ],
+      [
+       4,
+       "neg",
+       31,
+       0.7836704056943611,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod stary miasto silny",
+       "narod stary miasto silny",
+       9,
+       0,
+       null
+      ],
+      [
+       5,
+       "neg",
+       7,
+       0.9706773363211079,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod miasto szkola piekny",
+       "narod miasto szkola piekny",
+       4,
+       0,
+       null
+      ],
+      [
+       6,
+       "neg",
+       1,
+       0.9046324194060422,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod piekny miasto dom",
+       "narod piekny miasto dom",
+       4,
+       0,
+       null
+      ],
+      [
+       7,
+       "neg",
+       34,
+       0.7869673383727285,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod silny piekny szkola",
+       "narod silny piekny szkola",
+       4,
+       0,
+       null
+      ],
+      [
+       8,
+       "neg",
+       48,
+       0.7076507764839209,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj silny miasto stary",
+       "kraj silny miasto stary",
+       4,
+       0,
+       null
+      ],
+      [
+       9,
+       "neg",
+       31,
+       0.7076507764839208,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod stary miasto silny",
+       "narod stary miasto silny",
+       4,
+       0,
+       null
+      ],
+      [
+       10,
+       "neg",
+       44,
+       0.9237352147219393,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo dom maly silny",
+       "panstwo dom maly silny",
+       8,
+       0,
+       null
+      ],
+      [
+       11,
+       "neg",
+       40,
+       0.8149131888342009,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod szkola dobry maly",
+       "narod szkola dobry maly",
+       8,
+       0,
+       null
+      ],
+      [
+       12,
+       "neg",
+       3,
+       0.710587707521772,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj maly nowy silny",
+       "kraj maly nowy silny",
+       8,
+       0,
+       null
+      ],
+      [
+       13,
+       "neg",
+       36,
+       0.584219647068983,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj silny szkola maly",
+       "kraj silny szkola maly",
+       8,
+       0,
+       null
+      ],
+      [
+       14,
+       "neg",
+       14,
+       0.5370029381206862,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo maly zly nowy",
+       "panstwo maly zly nowy",
+       8,
+       0,
+       null
+      ],
+      [
+       15,
+       "neg",
+       39,
+       0.520954928276543,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj piekny silny dobry",
+       "kraj piekny silny dobry",
+       5,
+       0,
+       null
+      ],
+      [
+       16,
+       "neg",
+       26,
+       0.511982865828493,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo maly silny stary",
+       "panstwo maly silny stary",
+       5,
+       0,
+       null
+      ],
+      [
+       17,
+       "neg",
+       16,
+       0.5017899559890805,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod szkola wielki silny",
+       "narod szkola wielki silny",
+       5,
+       0,
+       null
+      ],
+      [
+       18,
+       "neg",
+       44,
+       0.45762299682756363,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo dom maly silny",
+       "panstwo dom maly silny",
+       5,
+       0,
+       null
+      ],
+      [
+       19,
+       "neg",
+       36,
+       0.43505194080668214,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj silny szkola maly",
+       "kraj silny szkola maly",
+       5,
+       0,
+       null
+      ],
+      [
+       20,
+       "neg",
+       17,
+       0.9651037251445479,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo nowy silny dobry",
+       "panstwo nowy silny dobry",
+       1,
+       0,
+       null
+      ],
+      [
+       21,
+       "neg",
+       13,
+       0.827112697032331,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod szkola wielki dobry",
+       "narod szkola wielki dobry",
+       1,
+       0,
+       null
+      ],
+      [
+       22,
+       "neg",
+       35,
+       0.8107421392987972,
+       "panstwo",
+       0,
+       3,
+       0,
+       0,
+       "panstwo wielki nowy silny",
+       "panstwo wielki nowy silny",
+       1,
+       0,
+       null
+      ],
+      [
+       23,
+       "neg",
+       30,
+       0.8067306639349149,
+       "kraj",
+       0,
+       3,
+       0,
+       0,
+       "kraj dobry miasto dom",
+       "kraj dobry miasto dom",
+       1,
+       0,
+       null
+      ],
+      [
+       24,
+       "neg",
+       28,
+       0.7890951430704224,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod szkola dobry zly",
+       "narod szkola dobry zly",
+       1,
+       0,
+       null
+      ]
+     ]
+    },
+    "docs": {
+     "columns": [
+      "doc_id",
+      "alignment_score",
+      "text"
+     ],
+     "rows": [
+      [
+       0,
+       0.5243148605681636,
+       null
+      ],
+      [
+       1,
+       -0.23911845116628222,
+       null
+      ],
+      [
+       2,
+       -0.129960153506656,
+       null
+      ],
+      [
+       3,
+       0.7974289305998638,
+       "kraj maly nowy silny"
+      ],
+      [
+       4,
+       -0.29643689823531294,
+       null
+      ],
+      [
+       5,
+       -0.303061487215853,
+       null
+      ],
+      [
+       6,
+       -0.15784569118827077,
+       null
+      ],
+      [
+       7,
+       -0.21616128177353455,
+       null
+      ],
+      [
+       8,
+       0.35563900440649787,
+       null
+      ],
+      [
+       9,
+       -0.24649666559034578,
+       null
+      ],
+      [
+       10,
+       0.20271076434043478,
+       null
+      ],
+      [
+       11,
+       -0.46680460620038267,
+       null
+      ],
+      [
+       12,
+       0.3937858961663505,
+       null
+      ],
+      [
+       13,
+       0.5004568637240715,
+       null
+      ],
+      [
+       14,
+       0.2816031855770844,
+       null
+      ],
+      [
+       15,
+       0.10305656459016438,
+       null
+      ],
+      [
+       16,
+       0.31633700441630486,
+       null
+      ],
+      [
+       17,
+       0.8349768941787534,
+       "panstwo nowy silny dobry"
+      ],
+      [
+       18,
+       -0.20867333466611307,
+       null
+      ],
+      [
+       19,
+       -0.39100307288709507,
+       null
+      ],
+      [
+       20,
+       0.16162231583487635,
+       null
+      ],
+      [
+       21,
+       0.6374207017823327,
+       null
+      ],
+      [
+       22,
+       -0.536199279643206,
+       "narod zly stary dom"
+      ],
+      [
+       23,
+       -0.28277053351985376,
+       null
+      ],
+      [
+       24,
+       0.372771974362526,
+       null
+      ],
+      [
+       25,
+       -0.333795544462325,
+       null
+      ],
+      [
+       26,
+       -0.30413372701806113,
+       null
+      ],
+      [
+       27,
+       -0.24523294474077106,
+       null
+      ],
+      [
+       28,
+       0.42695284765536273,
+       null
+      ],
+      [
+       29,
+       -0.5482041031515718,
+       "panstwo piekny dom zly"
+      ],
+      [
+       30,
+       0.5341384358123535,
+       null
+      ],
+      [
+       31,
+       -0.2974813798472156,
+       null
+      ],
+      [
+       32,
+       0.5673725630364124,
+       null
+      ],
+      [
+       33,
+       0.3409891613000938,
+       null
+      ],
+      [
+       34,
+       -0.03967921669204222,
+       null
+      ],
+      [
+       35,
+       0.6753927283337154,
+       "panstwo wielki nowy silny"
+      ],
+      [
+       36,
+       0.4362930148106976,
+       null
+      ],
+      [
+       37,
+       0.0213126264468258,
+       null
+      ],
+      [
+       38,
+       -0.25243238515401584,
+       null
+      ],
+      [
+       39,
+       0.28804556215045823,
+       null
+      ],
+      [
+       40,
+       0.619359607023552,
+       null
+      ],
+      [
+       41,
+       -0.25170018338369116,
+       null
+      ],
+      [
+       42,
+       0.43076312685030055,
+       null
+      ],
+      [
+       43,
+       -0.508968938071173,
+       "narod zly silny piekny"
+      ],
+      [
+       44,
+       0.34423443800742404,
+       null
+      ],
+      [
+       45,
+       0.12521531734566826,
+       null
+      ],
+      [
+       46,
+       -0.3337887049173158,
+       null
+      ],
+      [
+       47,
+       0.10732757042442433,
+       null
+      ],
+      [
+       48,
+       -0.2974813798472156,
+       null
+      ],
+      [
+       49,
+       -0.3380941768143195,
+       null
+      ]
+     ]
+    }
+   }
+  }
+ ]
+}

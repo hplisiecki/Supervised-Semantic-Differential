@@ -59,6 +59,9 @@ print("\n══════ Markdown report ══════")
 print(mp.report(top_words={"n": 10}))
 # mp.report(top_words={"n": 10}).save("report_multipls.md")
 
+print("\n══════ Results page ══════")
+mp.save_page("ssd_results_multipls.html", title="Warriner ratings (MultiPLS)")
+
 print("\n══════ Sparse MultiPLS (keep) ══════")
 # keep selects K via the sequential p-value chain at a fixed k; each component
 # keeps only `keep` non-zero weights. rotate="raw" keeps each axis exactly

@@ -35,15 +35,14 @@ def cache_dir() -> Path:
     """The directory pack files are kept in.
 
     Named after the format, not after ssdiff, so any wordpack reader can
-    share one copy of a pack.
+    share one copy of a pack. It is in the home directory on every system,
+    not in the platform's cache directory, because Chromium browsers never
+    let a web page open `~/.cache`, `~/Library` or `%LOCALAPPDATA%`, and a
+    reader running in a browser shares this directory too.
     """
     if os.environ.get("WORDPACK_CACHE"):
         return Path(os.environ["WORDPACK_CACHE"])
-    if sys.platform == "win32":
-        return Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "wordpack"
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Caches" / "wordpack"
-    return Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "wordpack"
+    return Path.home() / ".wordpacks"
 
 
 def _open(url: str):

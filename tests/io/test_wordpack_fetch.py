@@ -217,13 +217,13 @@ def test_a_host_that_keeps_failing_is_asked_three_times(tmp_path, wordpack_path,
     "platform, env, expected",
     [
         ("linux", {"WORDPACK_CACHE": "/somewhere/else"}, "/somewhere/else"),
-        ("linux", {"XDG_CACHE_HOME": "{home}/xdg"}, "{home}/xdg/wordpack"),
-        ("linux", {}, "{home}/.cache/wordpack"),
-        ("darwin", {}, "{home}/Library/Caches/wordpack"),
-        ("win32", {"LOCALAPPDATA": "{home}/AppData/Local"}, "{home}/AppData/Local/wordpack"),
+        ("linux", {"XDG_CACHE_HOME": "{home}/xdg"}, "{home}/.wordpacks"),
+        ("linux", {}, "{home}/.wordpacks"),
+        ("darwin", {}, "{home}/.wordpacks"),
+        ("win32", {"LOCALAPPDATA": "{home}/AppData/Local"}, "{home}/.wordpacks"),
     ],
 )
-def test_the_cache_directory_follows_the_platform_rule(tmp_path, monkeypatch, platform, env, expected):
+def test_the_cache_directory_is_in_home_on_every_platform(tmp_path, monkeypatch, platform, env, expected):
     home = str(tmp_path)
     for name in ("WORDPACK_CACHE", "XDG_CACHE_HOME", "LOCALAPPDATA"):
         monkeypatch.delenv(name, raising=False)

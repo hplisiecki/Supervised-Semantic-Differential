@@ -1,4 +1,4 @@
-"""PCA + OLS demo — sweep mode and fixed-k mode.
+"""PCA regression demo — sweep mode, fixed-k mode, and a covariate.
 
 Lexical-norm setup: y = Warriner valence over 13,396 English words.
 
@@ -37,14 +37,14 @@ RATINGS = os.path.join(HERE, "data", "Ratings_EN.csv")
 emb = Embeddings.load(EMB)
 df = pd.read_csv(RATINGS)
 corpus = Corpus(df["word"].astype(str).str.strip().tolist(), lang="en")
-ssd = SSD(emb, corpus, df["valence"].to_numpy(), use_full_doc=True)
+ssd = SSD(emb, corpus, "valence", use_full_doc=True, data=df)
 
 show("emb", emb)
 show("corpus", corpus)
 show("ssd", ssd)
 
-print("\n══════ PCA + OLS, sweep over k ══════")
-ols = ssd.fit_ols(verbose=True)
+print("\n══════ PCA regression, sweep over k ══════")
+ols = ssd.fit_regression(verbose=True)
 show("ols", ols)
 show("ols.stats", ols.stats)
 show("ols.test", ols.test)
@@ -54,11 +54,20 @@ show("ols.clusters.pos.words", ols.clusters.pos.words)
 show("ols.clusters.neg.words", ols.clusters.neg.words)
 # ols.plot_sweep("sweep_plot.png")
 
-print("\n══════ PCA + OLS, fixed k=20 ══════")
-ols_k20 = ssd.fit_ols(fixed_k=20, verbose=True)
+print("\n══════ PCA regression, fixed k=20 ══════")
+ols_k20 = ssd.fit_regression(fixed_k=20, verbose=True)
 show("ols_k20.stats", ols_k20.stats)
 show("ols_k20.words", ols_k20.words)
+
+print("\n══════ PCA regression controlling for arousal, fixed k=20 ══════")
+adj = ssd.fit_regression("~ arousal", fixed_k=20)
+show("adj.stats", adj.stats)
+print("\n>>> adj.model.summary()")
+adj.model.summary()   # prints the glmm summary
 
 print("\n══════ Markdown report ══════")
 print(ols.report(clusters={"n": 30, "n_words": 10, "n_snippets": 1}))
 # ols.report(clusters={"n": 30, "n_words": 10, "n_snippets": 1}).save("report_ols.md")
+
+print("\n══════ Results page ══════")
+ols.save_page("ssd_results_pcaols.html", title="Warriner valence (PCA+OLS)")

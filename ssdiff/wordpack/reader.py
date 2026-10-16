@@ -14,6 +14,8 @@ import struct
 import threading
 import unicodedata
 import weakref
+from array import array
+from bisect import bisect_left
 from collections.abc import Sequence
 from typing import NamedTuple
 
@@ -24,6 +26,7 @@ FORMAT_VERSION = 1
 # Keys answered from a dict built when a pack opens. Rows are in frequency
 # order, so these are the most frequent keys.
 _TOP_KEYS = 50_000
+_SAMPLE_STEP = 32
 
 
 class WordPackError(ValueError):
@@ -36,8 +39,8 @@ class Vocab(Sequence):
     No dict of all keys is built: for 1.2M keys a Python list plus dict takes
     about 159 MB, the key bytes, offsets and `vocab_order` about 20 MB. The
     first _TOP_KEYS keys go into a dict at load (9 ms, 6 MB for 50k keys).
-    Any other key is found by binary search over UTF-8 bytes (about 16 µs for
-    1.2M keys), so every reader agrees on the order whatever its locale, and
+    Any other key is found by binary search over UTF-8 bytes (about 3 µs for
+    1.3M keys), so every reader agrees on the order whatever its locale, and
     the answer is kept: a text pays one search per distinct rare word.
     """
 
@@ -46,9 +49,12 @@ class Vocab(Sequence):
         # Key r is blob[off[r] : off[r + 1] - 1], without its "\n". int32 holds
         # any vocab under 2 GB and takes half the RAM of int64.
         newlines = np.flatnonzero(np.frombuffer(blob, dtype=np.uint8) == 10)
-        self._off = np.zeros(len(newlines) + 1, dtype=np.int32)
-        self._off[1:] = newlines + 1
-        self._order = np.asarray(order)
+        off = np.zeros(len(newlines) + 1, dtype=np.int32)
+        off[1:] = newlines + 1
+        # array.array, not numpy: the binary search reads one element at a time,
+        # and a numpy scalar read costs several times an array.array read.
+        self._off = array("i", off.tobytes())
+        self._order = array("i", np.ascontiguousarray(order, dtype=np.int32).tobytes())
         if len(self._order) != len(self):
             raise WordPackError(
                 f"vocab has {len(self)} keys but vocab_order has {len(self._order)} entries"
@@ -61,6 +67,10 @@ class Vocab(Sequence):
             raise WordPackError(f"vocab is not valid UTF-8 ({e})") from e
         self._rows = dict(zip(top.split("\n"), range(n)))
         self._prefixes: dict[str, bool] = {}
+        # Every _SAMPLE_STEP-th key in sorted order, as bytes. A search bisects
+        # this list, then the one stretch of _SAMPLE_STEP keys it points to,
+        # so both bisections run in C (about 2 MB for 1.3M keys).
+        self._sample = [self._key_bytes(self._order[i]) for i in range(0, len(self._order), _SAMPLE_STEP)]
 
     def __len__(self) -> int:
         return len(self._off) - 1
@@ -82,14 +92,12 @@ class Vocab(Sequence):
 
     def _search(self, kb: bytes) -> int:
         """Position of the first sorted key >= kb."""
-        lo, hi = 0, len(self._order)
-        while lo < hi:
-            mid = (lo + hi) // 2
-            if self._key_bytes(self._order[mid]) < kb:
-                lo = mid + 1
-            else:
-                hi = mid
-        return lo
+        # sample[j - 1] < kb <= sample[j], so the answer is after sorted
+        # position (j - 1) * step and at most j * step.
+        j = bisect_left(self._sample, kb)
+        lo = (j - 1) * _SAMPLE_STEP + 1 if j else 0
+        hi = min(j * _SAMPLE_STEP, len(self._order))
+        return bisect_left(self._order, kb, lo, hi, key=self._key_bytes)
 
     def row(self, key: str) -> int:
         # No lock: a dict read or insert is atomic in CPython; two threads may
@@ -99,7 +107,7 @@ class Vocab(Sequence):
             kb = key.encode("utf-8")
             i = self._search(kb)
             found = i < len(self._order) and self._key_bytes(self._order[i]) == kb
-            row = int(self._order[i]) if found else -1
+            row = self._order[i] if found else -1
             self._rows[key] = row
         return row
 
@@ -168,6 +176,8 @@ class Chars:
 
     def __init__(self, table: dict):
         letter, digit, space = (_class(table[k]) for k in ("letter", "digit", "space"))
+        # The same set as a plain string, for str.strip.
+        self.spaces = "".join(chr(c) for a, b in table["space"] for c in range(a, b + 1))
         self._lower = {int(k): v for k, v in table["lower"].items()}
         self._upper = {int(k): v for k, v in table["upper"].items()}
         self._fold = {int(k): v for k, v in table["fold"].items()}
@@ -186,7 +196,6 @@ class Chars:
         self.ends_alnum = re.compile(rf"[{letter}{digit}]\Z")
         self.mask_run = re.compile(rf"{L}[{letter}*]*")
         self.word = re.compile(rf"{L}+(?:['\-]{L}+)*")
-        self.lead = re.compile(rf"{S}*")
 
     def lower(self, s: str) -> str:
         return s.translate(self._lower)
@@ -224,6 +233,25 @@ class _Opts(NamedTuple):
     cs: bool
     clitics: tuple
     by_len: dict
+    # Chunk text -> (keys, rows, spans relative to the chunk). A chunk's tokens
+    # depend on nothing but its text and the pack, and most chunks repeat: in
+    # measuring_hate_speech 9% of 985k chunks are distinct, so tokenizing a
+    # corpus mostly reuses earlier answers.
+    chunks: dict
+
+
+# The chunk cache is emptied when it reaches this size. An entry takes about
+# 455 bytes (measured on measuring_hate_speech), so the bound keeps it near
+# 115 MB, which matters under Pyodide's 4 GB; frequent chunks come back within
+# a few texts after a reset.
+_CHUNK_CACHE_MAX = 250_000
+
+
+def _opts(vocab, chars: Chars, case_sensitive: bool, clitics, masked) -> _Opts:
+    by_len: dict[int, list[str]] = {}
+    for w in masked:
+        by_len.setdefault(len(w), []).append(w)
+    return _Opts(vocab, chars, case_sensitive, tuple(clitics), by_len, {})
 
 
 def tokenize(text: str, vocab, chars: Chars, case_sensitive: bool = False, clitics=(), masked=()) -> Tokens:
@@ -231,23 +259,51 @@ def tokenize(text: str, vocab, chars: Chars, case_sensitive: bool = False, cliti
 
     `vocab` needs `row(key)` and `has_prefix(prefix)`; a `Vocab` has both.
     """
+    return _tokenize(text, _opts(vocab, chars, case_sensitive, clitics, masked))
+
+
+def _spaces(m: re.Match) -> str:
+    return " " * len(m.group())
+
+
+def _tokenize(text: str, o: _Opts) -> Tokens:
+    chars, cache = o.chars, o.chunks
     text = _blank_emphasis(chars.fold(unicodedata.normalize("NFC", text)), chars)
-    by_len: dict[int, list[str]] = {}
-    for w in masked:
-        by_len.setdefault(len(w), []).append(w)
-    o = _Opts(vocab, chars, case_sensitive, tuple(clitics), by_len)
     out = Tokens(text, [], [], [], [], [])
+    keys, rows, spans, sent = out.keys, out.rows, out.spans, out.sent
     for si, (a, b) in enumerate(_sentences(text, chars)):
         out.sents.append((a, b))
-        # Blanking skipped spans with spaces keeps every offset valid.
-        s = chars.skip.sub(lambda m: " " * len(m.group()), text[a:b])
+        s = text[a:b]
+        # Blanking skipped spans with spaces keeps every offset valid. Every
+        # skipped span contains "@" or "://", so most sentences need no regex.
+        if "@" in s or "://" in s:
+            s = chars.skip.sub(_spaces, s)
         for chunk in chars.chunk.finditer(s):
-            base = a + chunk.start()
-            for key, row, ts, te in _chunk_tokens(chunk.group(), o):
-                out.keys.append(key)
-                out.rows.append(row)
-                out.spans.append((base + ts, base + te))
-                out.sent.append(si)
+            c = chunk.group()
+            hit = cache.get(c)
+            if hit is None:
+                if len(cache) >= _CHUNK_CACHE_MAX:
+                    cache.clear()
+                toks = list(_chunk_tokens(c, o))
+                # Most chunks are one token: kept as that (key, row, start, end),
+                # appended without the per-field lists of the general case.
+                hit = cache[c] = toks[0] if len(toks) == 1 else (
+                    tuple(t[0] for t in toks),
+                    tuple(t[1] for t in toks),
+                    tuple((t[2], t[3]) for t in toks),
+                )
+            if len(hit) == 4:
+                base = a + chunk.start()
+                keys.append(hit[0])
+                rows.append(hit[1])
+                spans.append((base + hit[2], base + hit[3]))
+                sent.append(si)
+            elif hit[0]:
+                base = a + chunk.start()
+                keys.extend(hit[0])
+                rows.extend(hit[1])
+                spans.extend([(base + ts, base + te) for ts, te in hit[2]])
+                sent.extend([si] * len(hit[0]))
     return out
 
 
@@ -291,8 +347,8 @@ def _sentences(text: str, chars: Chars) -> list[tuple[int, int]]:
 
 def _add_sentence(text: str, a: int, b: int, spans: list, chars: Chars) -> None:
     piece = text[a:b]
-    lead = chars.lead.match(piece).end()
-    end = len(piece) - chars.lead.match(piece[::-1]).end()
+    lead = len(piece) - len(piece.lstrip(chars.spaces))
+    end = len(piece.rstrip(chars.spaces))
     if end > lead:
         spans.append((a + lead, a + end))
 
@@ -549,6 +605,8 @@ class WordPack:
         self.masked = _lines(self._bytes("masked"))
         self.chars = Chars(json.loads(self._bytes("chars")))
         self._selftest = json.loads(self._bytes("selftest"))
+        # One set of options per pack, so the chunk cache lives as long as the pack.
+        self._opts = _opts(self.keys, self.chars, self.meta["case_sensitive"], self.meta["clitics"], self.masked)
 
     def _check_entry(self, name: str, entry) -> None:
         if not isinstance(entry, dict) or not {"dtype", "shape", "data_offsets"} <= entry.keys():
@@ -590,7 +648,7 @@ class WordPack:
         return np.array([self.keys.row(k) for k in keys], dtype=np.int64)
 
     def tokenize(self, text: str) -> Tokens:
-        return tokenize(text, self.keys, self.chars, self.meta["case_sensitive"], self.meta["clitics"], self.masked)
+        return _tokenize(text, self._opts)
 
     def read_rows(self, rows, abtt: int = 1) -> np.ndarray:
         """Float32 rows in the order asked, with ABTT `abtt`.

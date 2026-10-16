@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ssdiff"
-version = "3.2.0"
+version = "3.3.0"
 description = "Supervised Semantic Differential (SSD): interpretable, embedding-based analysis of concept meaning in text."
 readme = "README.md"
 requires-python = ">=3.11,<3.16"
@@ -32,6 +32,7 @@ classifiers = [
 dependencies = [
   "numpy>=1.26.4",
   "plskit>=0.7.0,<0.8.0",
+  "glmm>=0.6.0,<0.7.0",
 ]
 
 [project.optional-dependencies]
@@ -117,3 +118,4 @@ exclude = ["tests*"]
 [tool.setuptools.package-data]
 ssdiff = ["py.typed"]
 "ssdiff.utils" = ["*.txt"]
+"ssdiff.results" = ["*.html"]
