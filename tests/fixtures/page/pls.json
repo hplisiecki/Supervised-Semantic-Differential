@@ -6,7 +6,7 @@
  "software": {
   "package": "ssdiff",
   "language": "python",
-  "version": "3.2.0"
+  "version": "3.3.0"
  },
  "embeddings": {
   "name": null,
@@ -26,9 +26,11 @@
   "sif_a": 0.001,
   "use_full_doc": false,
   "fit": {
+   "formula": null,
    "k": 2,
    "k_max": 5,
-   "keep": null,
+   "ssd_gradients": 1,
+   "rotate": "words",
    "n_splits": 20,
    "random_state": 42,
    "test": true
@@ -83,14 +85,15 @@
     "n_splits",
     "split_mean_r",
     "random_state",
-    "keep",
     "k_min",
     "k_max",
     "k_step",
     "best_k",
     "pca_k_source",
     "formula",
-    "family"
+    "family",
+    "ssd_gradients",
+    "rotate"
    ],
    "rows": [
     [
@@ -107,6 +110,7 @@
      null,
      null,
      null,
+     1,
      null
     ]
    ]

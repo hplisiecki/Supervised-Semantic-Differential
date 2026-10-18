@@ -124,6 +124,27 @@ def _download(full: str, entry: dict, dest: Path) -> None:
     )
 
 
+def entry(index: dict, full: str) -> dict:
+    """The entry of `index.json` (already fetched) for a full name: `file`, `size`, `sha256`, `format_version`.
+
+    ValueError when the index has no such pack or version, or when this ssdiff cannot read its format.
+    """
+    name, version = _FULL_NAME.fullmatch(full).groups()
+    pack = index["packs"].get(name)
+    if pack is None:
+        raise ValueError(f"No wordpack named {full!r}. Tags: {', '.join(WORDPACK_TAGS)}.")
+    found = pack["versions"].get(version)
+    if found is None:
+        versions = ", ".join(sorted(pack["versions"], key=int))
+        raise ValueError(f"No wordpack named {full!r}. Versions of {name}: {versions}.")
+    if found["format_version"] != FORMAT_VERSION:
+        raise ValueError(
+            f"Wordpack {full} has format version {found['format_version']}; "
+            f"this ssdiff reads format version {FORMAT_VERSION}. Upgrade ssdiff."
+        )
+    return found
+
+
 def resolve(full: str) -> str:
     """The path of the cached pack file for a full name, downloading the file when it is missing.
 
@@ -132,19 +153,5 @@ def resolve(full: str) -> str:
     path = cache_dir() / f"{full}.wordpack"
     if path.exists():
         return str(path)
-    index = _index(full)
-    name, version = _FULL_NAME.fullmatch(full).groups()
-    pack = index["packs"].get(name)
-    if pack is None:
-        raise ValueError(f"No wordpack named {full!r}. Tags: {', '.join(WORDPACK_TAGS)}.")
-    entry = pack["versions"].get(version)
-    if entry is None:
-        versions = ", ".join(sorted(pack["versions"], key=int))
-        raise ValueError(f"No wordpack named {full!r}. Versions of {name}: {versions}.")
-    if entry["format_version"] != FORMAT_VERSION:
-        raise ValueError(
-            f"Wordpack {full} has format version {entry['format_version']}; "
-            f"this ssdiff reads format version {FORMAT_VERSION}. Upgrade ssdiff."
-        )
-    _download(full, entry, path)
+    _download(full, entry(_index(full), full), path)
     return str(path)

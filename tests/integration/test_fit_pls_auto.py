@@ -1,8 +1,11 @@
 """fit_pls(k='auto') reports an honest k=1 confirmatory split_exact p-value."""
 from __future__ import annotations
 
+import dataclasses
+
 import numpy as np
 import plskit
+import pytest
 
 from ssdiff.utils.math import standardize
 
@@ -55,3 +58,12 @@ def test_fit_pls_auto_components_match_direct_fit(ssd_instance):
         / max(np.linalg.norm(res.beta) * np.linalg.norm(direct_beta), 1e-12)
     )
     assert cos > 0.95, f"|cos(beta, direct)|={cos:.4f}"
+
+
+def test_k_auto_k_star_zero_raises(ssd_instance, monkeypatch):
+    real = plskit.pls1_find_k_optimal
+    def fake(*a, **kw):
+        return dataclasses.replace(real(*a, **kw), k_star=0)
+    monkeypatch.setattr(plskit, "pls1_find_k_optimal", fake)
+    with pytest.raises(ValueError, match="k_star"):
+        ssd_instance.fit_pls(k="auto", n_splits=10)

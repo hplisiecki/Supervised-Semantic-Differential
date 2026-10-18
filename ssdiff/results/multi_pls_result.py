@@ -3,13 +3,14 @@
 Container of ``_PLSComponentResult`` leaves keyed by ``"dim-1"``,
 ``"dim-2"``, …. Mirrors the ``GroupResult`` / ``PairResult`` pattern: one
 shared ``.test`` on the container, one ``.beta`` / ``.words`` /
-``.outcomes`` / etc. per leaf.
+``.outcomes`` / etc. per leaf. ``PLSResult`` holds the same leaves, without
+``.outcomes``, for ``fit_pls(ssd_gradients=N)``.
 
 Access patterns (canonical):
 - ``res["dim-1"]`` → ``_PLSComponentResult`` for one (rotated) dimension
 - ``res["dim-1"].outcomes`` → outcome loadings on that dimension
 - ``res.test(...)`` → rerun the split_exact LV1 test at the container level
-- ``res.pls_info`` → ``{k, rotate, order, signs, rotation diagnostics}``
+- ``res.pls_info`` → ``{ssd_gradients, rotate, order, signs, rotation diagnostics}``
 
 Power-user shortcuts (same data, different angle):
 - ``res.words["dim-1"]`` → same as ``res["dim-1"].words``; returned by
@@ -24,6 +25,77 @@ from ssdiff.results.core import ScalarView, TestView, View
 from ssdiff.results.multi_container import _MultiContainer
 from ssdiff.results.schema import Outcome
 from ssdiff.results.single_result import _SingleResult
+
+
+def _dim_label(key: str) -> str:
+    """``"dim-2"`` → ``"Dim 2"``: a dimension leaf's heading in reprs, reports and the results page."""
+    if key.startswith("dim-"):
+        return f"Dim {key.split('-', 1)[1]}"
+    return str(key)
+
+
+def _dimension_sections(result, n_words: int | None) -> list:
+    """Report sections of a result's dimension leaves.
+
+    Shared by ``MultiPLSResult`` and a ``PLSResult`` fit with
+    ``ssd_gradients > 1``: rotation diagnostics, one row per dimension, then
+    each dimension's outcome loadings (PLS3 leaves only) and, when
+    ``n_words`` is set and embeddings are attached, its top words per pole.
+    """
+    from ssdiff.results.format import fmt_r
+    from ssdiff.results.report import Section
+
+    pi = next(iter(result.pls_info))
+    sections = [
+        Section(
+            title="Rotation",
+            kind="kv",
+            rows=[
+                ("kaiser_normalized", pi["kaiser_normalized"]),
+                ("sweeps", pi["sweeps"]),
+                ("V_converged", f"{pi['V_converged']:.4f}"),
+            ],
+        ),
+        Section(
+            title="Dimensions",
+            kind="table",
+            headers=["dim", "cov_share", "score_corr"],
+            rows=[
+                [_dim_label(key), fmt_r(leaf.stats.cov_share),
+                 fmt_r(leaf.stats.score_corr, signed=True)]
+                for key, leaf in result._leaves.items()
+            ],
+            numeric=[False, True, True],
+        ),
+    ]
+    for key, leaf in result._leaves.items():
+        heading = _dim_label(key)
+        if hasattr(leaf, "outcomes"):
+            sections.append(Section(
+                title=f"{heading} — outcomes",
+                kind="table",
+                headers=["outcome", "group", "loading"],
+                rows=[
+                    [o.outcome, o.group if o.group is not None else "-",
+                     fmt_r(o.loading, signed=True)]
+                    for o in leaf.outcomes
+                ],
+                numeric=[False, False, True],
+            ))
+        if n_words and result.embeddings is not None:
+            pos = [w for w in leaf.words if w.side == "pos"][:n_words]
+            neg = [w for w in leaf.words if w.side == "neg"][:n_words]
+            sections.append(Section(
+                title=f"{heading} — words",
+                kind="table",
+                headers=["side", "rank", "word", "cos_β"],
+                rows=[
+                    [w.side, w.rank, w.word, fmt_r(w.cos_beta, signed=True)]
+                    for w in pos + neg
+                ],
+                numeric=[False, True, False, True],
+            ))
+    return sections
 
 
 # ---------- OutcomesView ----------
@@ -64,12 +136,13 @@ class PLSComponentStatsView(ScalarView):
 
 
 class _PLSComponentResult(_SingleResult):
-    """One PLS3 dimension. Leaf inside ``MultiPLSResult``.
+    """One rotated dimension: a leaf inside ``MultiPLSResult`` or a ``PLSResult``.
 
-    ``key`` is ``"dim-1"`` / ``"dim-2"`` / …; ``dim_index`` is the 0-based
-    column in the container's ``U_rot`` / ``V_rot``. ``beta`` is that
-    ``U_rot`` column divided by ``X_scale``: the raw doc-vector space that
-    ``fit_pls``'s ``coef / scale`` and the ``"words"`` rotation target use.
+    ``key`` is ``"dim-1"`` / ``"dim-2"`` / …. The container computes the
+    leaf's ``beta``, ``stats`` and, for PLS3 only, ``outcomes`` rows.
+    ``beta`` is the dimension's rotated weight column divided by
+    ``X_scale``: the raw doc-vector space that ``fit_pls``'s ``coef / scale``
+    and the ``"words"`` rotation target use.
 
     Has no independent ``.test`` and no p-value — use ``container.test(...)``.
     """
@@ -77,12 +150,10 @@ class _PLSComponentResult(_SingleResult):
     _access = ("stats", "outcomes", "words", "clusters", "snippets")
     _arrays = ("x", "beta", "gradient", "alignment_scores")
 
-    def __init__(self, *, container, key: str, dim_index: int):
+    def __init__(self, *, container, key: str, beta: np.ndarray,
+                 stats: PLSComponentStatsView, outcomes: OutcomesView | None = None):
         self._container = container
         self._key = key
-        self._dim_index = dim_index
-
-        beta = container._U_rot[:, dim_index] / container._X_scale
 
         super().__init__(
             x=None,
@@ -96,31 +167,11 @@ class _PLSComponentResult(_SingleResult):
         )
         # _x is served lazily through the .x property from the container.
         self._x = None
-
-        sigma2 = container.singular_values ** 2
-        # c_i = (R' Σ² R)_ii — dimension i's squared cross-covariance.
-        c_i = float(container.R[:, dim_index] ** 2 @ sigma2)
-        score_corr = float(np.corrcoef(
-            container.x_scores[:, dim_index], container.y_scores[:, dim_index],
-        )[0, 1])
-        self.stats = PLSComponentStatsView(
-            cov_share=c_i / float(sigma2.sum()), score_corr=score_corr,
-        )
-
-        loadings = container.V_rot[:, dim_index]
-        groups = container.outcome_groups or {}
-        group_of = {name: g for g, members in groups.items() for name in members}
-        rows = [
-            Outcome(outcome=name, group=group_of.get(name), loading=float(v))
-            for name, v in zip(container.outcome_names, loadings)
-        ]
-        by_name = {r.outcome: r.loading for r in rows}
-        rows += [
-            Outcome(outcome=g, group=g,
-                    loading=float(np.mean([by_name[n] for n in members])))
-            for g, members in groups.items()
-        ]
-        self.outcomes = OutcomesView(rows)
+        self.stats = stats
+        if outcomes is None:
+            self._access = ("stats", "words", "clusters", "snippets")
+        else:
+            self.outcomes = outcomes
 
     @property
     def x(self) -> np.ndarray:
@@ -152,17 +203,17 @@ class _PLSComponentResult(_SingleResult):
 # ---------- PLSInfoView ----------
 
 class PLSInfoView(ScalarView):
-    """Scalar view exposing PLS3 fit diagnostics (k, rotation, order, signs)."""
+    """Scalar view exposing the rotation diagnostics of a fit's gradients (count, rotation, order, signs)."""
 
     _name = "pls_info"
     _columns = (
-        "k", "rotate", "order", "signs",
+        "ssd_gradients", "rotate", "order", "signs",
         "kaiser_normalized", "sweeps", "V_converged", "random_state",
     )
 
     def __init__(
         self, *,
-        k: int,
+        ssd_gradients: int,
         rotate: str | None,
         order: np.ndarray,
         signs: np.ndarray,
@@ -171,7 +222,7 @@ class PLSInfoView(ScalarView):
     ):
         super().__init__()
         self._row = {
-            "k": int(k),
+            "ssd_gradients": int(ssd_gradients),
             "rotate": rotate,
             "order": tuple(int(i) for i in order),
             "signs": tuple(float(s) for s in signs),
@@ -191,15 +242,15 @@ class MultiPLSStatsView(ScalarView):
     """Scalar view exposing model-level stats for MultiPLSResult."""
 
     _name = "stats"
-    _columns = ("n", "q", "k", "rotate", "cov_explained", "pvalue")
+    _columns = ("n", "q", "ssd_gradients", "rotate", "cov_explained", "pvalue")
 
-    def __init__(self, *, n: int, q: int, k: int, rotate: str | None,
+    def __init__(self, *, n: int, q: int, ssd_gradients: int, rotate: str | None,
                  cov_explained: float, pvalue: float | None):
         super().__init__()
         self._row = {
             "n": int(n),
             "q": int(q),
-            "k": int(k),
+            "ssd_gradients": int(ssd_gradients),
             "rotate": rotate,
             "cov_explained": float(cov_explained),
             "pvalue": float(pvalue) if pvalue is not None else float("nan"),
@@ -270,7 +321,7 @@ class MultiPLSResult(_MultiContainer):
 
     Typical use::
 
-        res = ssd.fit_multipls(k=2, rotate="outcomes")
+        res = ssd.fit_multipls(ssd_gradients=2, rotate="outcomes")
         res["dim-1"].outcomes      # outcome loadings on dimension 1
         res["dim-1"].words         # top words along dimension 1
         res.test(n_splits=100, n_perm=2000, seed=42)  # rerun the LV1 test
@@ -349,12 +400,12 @@ class MultiPLSResult(_MultiContainer):
 
         pvalue = (test_info or {}).get("pvalue", float("nan"))
         self.stats = MultiPLSStatsView(
-            n=self._x.shape[0], q=self._y_raw.shape[1], k=self.k,
+            n=self._x.shape[0], q=self._y_raw.shape[1], ssd_gradients=self.k,
             rotate=rotate, cov_explained=cov_explained, pvalue=pvalue,
         )
 
         self.pls_info = PLSInfoView(
-            k=self.k,
+            ssd_gradients=self.k,
             rotate=rotate,
             order=order,
             signs=signs,
@@ -381,19 +432,39 @@ class MultiPLSResult(_MultiContainer):
 
     # ------ leaf construction & key formatting ---------------------------
     def _build_leaves(self) -> dict:
+        sigma2 = self.singular_values ** 2
+        groups = self.outcome_groups or {}
+        group_of = {name: g for g, members in groups.items() for name in members}
         leaves: dict = {}
         for i in range(self.k):
+            # c_i = (R' Σ² R)_ii — dimension i's squared cross-covariance.
+            c_i = float(self.R[:, i] ** 2 @ sigma2)
+            stats = PLSComponentStatsView(
+                cov_share=c_i / float(sigma2.sum()),
+                score_corr=float(np.corrcoef(self.x_scores[:, i], self.y_scores[:, i])[0, 1]),
+            )
+            rows = [
+                Outcome(outcome=name, group=group_of.get(name), loading=float(v))
+                for name, v in zip(self.outcome_names, self.V_rot[:, i])
+            ]
+            by_name = {r.outcome: r.loading for r in rows}
+            rows += [
+                Outcome(outcome=g, group=g,
+                        loading=float(np.mean([by_name[n] for n in members])))
+                for g, members in groups.items()
+            ]
             key = f"dim-{i+1}"
-            leaves[key] = _PLSComponentResult(container=self, key=key, dim_index=i)
+            leaves[key] = _PLSComponentResult(
+                container=self, key=key, beta=self._U_rot[:, i] / self._X_scale,
+                stats=stats, outcomes=OutcomesView(rows),
+            )
         return leaves
 
     def _key_to_str(self, key: str) -> str:
         return key.replace("-", "_")
 
     def _key_repr(self, key: str) -> str:
-        if key.startswith("dim-"):
-            return f"Dim {key.split('-', 1)[1]}"
-        return str(key)
+        return _dim_label(key)
 
     def __setstate__(self, state):
         self.__dict__.update(state)
@@ -411,7 +482,7 @@ class MultiPLSResult(_MultiContainer):
         from ssdiff.results.format import fmt_count, fmt_p, fmt_r
         s = self.stats._row
         return (
-            f"MultiPLSResult  k={s['k']}  q={s['q']}  rotate={s['rotate']}  "
+            f"MultiPLSResult  ssd_gradients={s['ssd_gradients']}  q={s['q']}  rotate={s['rotate']}  "
             f"cov_explained={fmt_r(s['cov_explained'])}  "
             f"p={fmt_p(s['pvalue'])}  n={fmt_count(s['n'])}"
         )
@@ -449,72 +520,22 @@ class MultiPLSResult(_MultiContainer):
         tw = _resolve_section(top_words, {"n": 5}, name="top_words")
 
         s = self.stats._row
-        pi = next(iter(self.pls_info))
         stats_rows = [
             ("cov_explained", fmt_r(s["cov_explained"])),
             ("p-value", fmt_p(s["pvalue"])),
             ("n", fmt_count(s["n"])),
             ("q", s["q"]),
-            ("k", s["k"]),
+            ("ssd_gradients", s["ssd_gradients"]),
             ("rotate", s["rotate"]),
         ]
         provenance = _embeddings_row(self.embeddings)
         if provenance is not None:
             stats_rows.append(provenance)
-        sections = [
-            Section(title="Stats", kind="kv", rows=stats_rows),
-            Section(
-                title="Rotation",
-                kind="kv",
-                rows=[
-                    ("kaiser_normalized", pi["kaiser_normalized"]),
-                    ("sweeps", pi["sweeps"]),
-                    ("V_converged", f"{pi['V_converged']:.4f}"),
-                ],
-            ),
-            Section(
-                title="Dimensions",
-                kind="table",
-                headers=["dim", "cov_share", "score_corr"],
-                rows=[
-                    [self._key_repr(key), fmt_r(leaf.stats.cov_share),
-                     fmt_r(leaf.stats.score_corr, signed=True)]
-                    for key, leaf in self._leaves.items()
-                ],
-                numeric=[False, True, True],
-            ),
-        ]
-
-        for key, leaf in self._leaves.items():
-            heading = self._key_repr(key)
-            sections.append(Section(
-                title=f"{heading} — outcomes",
-                kind="table",
-                headers=["outcome", "group", "loading"],
-                rows=[
-                    [o.outcome, o.group if o.group is not None else "-",
-                     fmt_r(o.loading, signed=True)]
-                    for o in leaf.outcomes
-                ],
-                numeric=[False, False, True],
-            ))
-            if tw and self.embeddings is not None:
-                n_tw = tw["n"]
-                pos = [w for w in leaf.words if w.side == "pos"][:n_tw]
-                neg = [w for w in leaf.words if w.side == "neg"][:n_tw]
-                sections.append(Section(
-                    title=f"{heading} — words",
-                    kind="table",
-                    headers=["side", "rank", "word", "cos_β"],
-                    rows=[
-                        [w.side, w.rank, w.word, fmt_r(w.cos_beta, signed=True)]
-                        for w in pos + neg
-                    ],
-                    numeric=[False, True, False, True],
-                ))
+        sections = [Section(title="Stats", kind="kv", rows=stats_rows)]
+        sections += _dimension_sections(self, tw["n"] if tw else None)
 
         return Report(
-            title=f"MultiPLSResult — k={self.k}, rotate={self.rotate}",
+            title=f"MultiPLSResult — ssd_gradients={self.k}, rotate={self.rotate}",
             subtitle=(
                 f"(n = {fmt_count(s['n'])}, q = {s['q']}, "
                 f"cov_explained = {fmt_r(s['cov_explained'])})"

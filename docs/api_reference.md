@@ -25,7 +25,7 @@ ssd = SSD(emb, corpus, y=scores, lexicon=["happy", "sad", "joy", "anger"])
 result = ssd.fit_regression()  # PCA regression
 # result = ssd.fit_pls()       # PLS
 # result = ssd.fit_groups()    # categorical y
-# result = ssd.fit_multipls(k=2)  # several outcomes (y as a DataFrame), PLS3
+# result = ssd.fit_multipls()  # several outcomes (y as a DataFrame), PLS3
 
 print(result.stats)
 print(result.words)
@@ -184,7 +184,7 @@ ssd = SSD(embeddings, corpus, y, lexicon, *,
 | `window` | `int` | `3` | Context window size (tokens) around each seed. |
 | `sif_a` | `float` or `None` | `1e-3` | SIF smoothing. Must be > 0; `None` turns SIF off (plain mean of word vectors). |
 | `use_full_doc` | `bool` | `False` | Use full-document vectors instead of seed-windowed contexts. |
-| `data` | DataFrame or `dict` of 1-D arrays | `None` | One row per corpus document: outcome columns named by `y` and the columns used in `fit_regression` formulas. Must have `len(corpus)` rows. |
+| `data` | DataFrame or `dict` of 1-D arrays | `None` | One row per corpus document: outcome columns named by `y` and the columns used in `fit_regression` and `fit_pls` formulas. Must have `len(corpus)` rows. |
 
 Attributes after construction:
 
@@ -225,7 +225,9 @@ For a Gaussian identity-link fit, `beta` is on the standardized-y scale; for oth
 ssd = SSD(emb, corpus, y="rating", lexicon=lexicon, data=df)
 result = ssd.fit_regression("~ age + gender + (1 | ID)")
 result.stats.pvalue       # likelihood-ratio test of the K components
-result.model.summary()    # covariate coefficients and random effects
+result.covariates         # covariate coefficients, with the components held fixed
+result.summary()          # compact: glmm summary without the _ssd_* rows, plus the text's test
+result.model.summary()    # full glmm summary, component rows included
 ```
 
 `fit_ols(...)` is the old name: it takes the same keyword arguments and warns with `FutureWarning`.
@@ -233,10 +235,12 @@ result.model.summary()    # covariate coefficients and random effects
 ### `fit_pls()` — PLS1
 
 ```python
-result = ssd.fit_pls(*,
+result = ssd.fit_pls(
+    formula=None, *,
     k="auto",
     k_max=5,
-    keep=None,
+    ssd_gradients=1,
+    rotate="words",                  # "words" | None; used when ssd_gradients > 1
     n_splits=50,
     random_state=2137, verbose=False,
 )
@@ -244,16 +248,21 @@ result = ssd.fit_pls(*,
 
 | Argument | Type | Default | Description |
 |---|---|---|---|
+| `formula` | `str \| None` | `None` | Fixed covariates over columns of `data`, e.g. `"~ age + gender"`. y and every column of the document vectors are regressed on them by OLS, and PLS and its test run on the residuals; the test permutes residuals against residuals (Kennedy, 1995) and can run slightly liberal when the covariates use many degrees of freedom relative to n. Random effects raise `ValueError` (use `fit_regression`). With a formula, `r2` is the R² of the residualized y, `docs.residual` has the covariates taken out, and `predict()` is not available. The covariates' own coefficients are not reported; use `fit_regression` for them. |
 | `k` | `int \| "auto"` | `"auto"` | Number of PLS components. `int` fits at exactly that k. `"auto"` calls `plskit.pls1_find_k_optimal` (selector `r2_se`). The p-value is the `split_exact` test (permutation-calibrated split-half) at the fitted `k`; with `k="auto"` it is the k=1 `split_exact` test. `split_nb` is only the diagnostic chain used to pick `k`. |
 | `k_max` | `int` | `5` | Cap for `k="auto"`, clamped to `min(k_max, n-1, D)`. Ignored when `k` is an int. |
-| `keep` | `int \| "auto" \| None` | `None` | Sparse-PLS knob. `None` is dense PLS. An `int` in `[1, D]` gives each component exactly that many non-zero weights. `"auto"` cross-validates the keep-count at the fixed `k` (raises if none is found). Sparse mode needs an explicit integer `k`; `keep` with `k="auto"` raises `ValueError`. |
+| `ssd_gradients` | `int` | `1` | Number of gradients returned, in `[1, min(n-1, D)]`. At 1 the result is the standard fit alone and `rotate` is ignored. At N > 1, an N-component PLS1 fit on the same standardized data gives N weight vectors, one leaf `result["dim-i"]` each. The standard fit (k selection, test, `beta`, `r2`, `docs`, `predict()`) does not depend on it. |
+| `rotate` | `"words" \| None` | `"words"` | With `ssd_gradients > 1`: `"words"` varimax-rotates the weight vectors against the projection of the leading vocabulary rows, orders them by the correlation of their scores with y (highest first) and flips each so that correlation is positive; it needs attached `Embeddings`. `None` keeps NIPALS order and signs; gradients 2…N then have zero covariance with y. Any other value raises `ValueError`. |
 | `n_splits` | `int` | `50` | Random splits for the split-half tests. |
 | `random_state` | `int` | `2137` | Seed. |
 | `verbose` | `bool` | `False` | Print progress. |
 
-With `keep` set, the p-value is the largest p-value in the sequential chain of `k` tests (`result.test.name` is `"split_nb_seq"`). It is a different test from the dense p-value, so do not compare the two. The chain is computed at fit time, so `result.test()` raises `RuntimeError` on a sparse result. To change `n_splits` or the seed, refit. `result.fit_info.keep` holds the keep-count used (`None` for dense fits).
+Returns a `PLSResult`. Re-run the significance test via `result.test(...)` — see [`results.md`](results.md). With `ssd_gradients=N > 1` it also has:
 
-Returns a `PLSResult`. Re-run the significance test on a dense result via `result.test(...)` — see [`results.md`](results.md).
+- `result["dim-1"]`, …, `result["dim-N"]` (`result.keys()`) — one leaf per gradient, with `.stats` (`score_corr`, `cov_share`), `.words`, `.clusters`, `.snippets`, `.beta`, `.gradient`; no p-value
+- `.pls_info` — `ssd_gradients`, `rotate`, `order`, `signs`, `sweeps`, `V_converged`, `kaiser_normalized`, `random_state`
+
+`fit_info.n_components` stays the standard fit's k.
 
 ### `fit_groups()` — categorical outcome
 
@@ -286,7 +295,7 @@ PLS3 takes the SVD of the cross-covariance between document vectors and outcomes
 
 ```python
 result = ssd.fit_multipls(*,
-    k,
+    ssd_gradients=None,              # None means q
     rotate=None,                     # None | "words" | "outcomes"
     outcome_groups=None,             # {"group": ["outcome_a", "outcome_b"], ...}
     n_splits=50, n_perm=1000,
@@ -296,25 +305,25 @@ result = ssd.fit_multipls(*,
 
 | Argument | Type | Default | Description |
 |---|---|---|---|
-| `k` | `int` | — | Number of dimensions. Required, `1 <= k <= min(q, n-1, D)`. At `k = q` every component is kept, so `cov_explained` is 1 by construction. Raises if plskit keeps fewer than `k` components. |
-| `rotate` | `None \| "words" \| "outcomes"` | `None` | `None` keeps the SVD dimensions. `"words"`: varimax against the projection of the leading vocabulary rows (up to 50,000) onto the word-space directions. `"outcomes"`: varimax against the outcome loadings, or the group rows when `outcome_groups` is set; needs `k < q`. |
-| `outcome_groups` | `dict[str, list[str]] \| None` | `None` | Only with `rotate="outcomes"`. Each group is one rotation target row, the mean of its outcomes' loadings. Outcomes in no group keep their own row. An unknown name, an outcome in two groups, or an empty group raises. `k` cannot exceed the number of target rows. |
+| `ssd_gradients` | `int \| None` | `None` | Number of dimensions, in `[1, min(q, n-1, D)]`. `None` means `q`, or with `outcome_groups` the number of rotation target rows. At `q` every component is kept, so `cov_explained` is 1 by construction. Raises if plskit keeps fewer components. |
+| `rotate` | `None \| "words" \| "outcomes"` | `None` | `None` keeps the SVD dimensions. `"words"`: varimax against the projection of the leading vocabulary rows (up to 50,000) onto the word-space directions. `"outcomes"`: varimax against the outcome loadings, or the group rows when `outcome_groups` is set. At `ssd_gradients = q` without groups it takes `R = V'` with no varimax, so each dimension loads 1 on one outcome. |
+| `outcome_groups` | `dict[str, list[str]] \| None` | `None` | Only with `rotate="outcomes"`. Each group is one rotation target row, the mean of its outcomes' loadings. Outcomes in no group keep their own row. An unknown name, an outcome in two groups, or an empty group raises. `ssd_gradients` cannot exceed the number of target rows. |
 | `n_splits` | `int` | `50` | Random splits for the LV1 test. |
 | `n_perm` | `int` | `1000` | Permutations for the LV1 test. |
 | `random_state`, `verbose` | — | `2137`, `False` | Seed and progress output. |
 
 A group's rotation target row and its `.outcomes` group loading are plain means of the group's outcome loadings. Outcomes scored in opposite directions cancel within a group.
 
-Varimax modes reorder the dimensions by their share of the cross-covariance. In every mode, each dimension's sign is set so its largest outcome loading is positive.
+Rotated modes reorder the dimensions by their share of the cross-covariance. In every mode, each dimension's sign is set so its largest outcome loading is positive.
 
 Returns a `MultiPLSResult`:
 
-- `result["dim-1"]`, …, `result["dim-k"]` — one leaf per dimension
+- `result["dim-1"]`, … — one leaf per dimension
 - `result["dim-1"].outcomes` — outcome loadings (`outcome`, `group`, `loading`); with `outcome_groups`, one extra row per group
 - `result["dim-1"].words`, `.clusters`, `.snippets` — neighbours along the dimension
 - `result["dim-1"].stats` — `cov_share`, `score_corr`
-- `.stats` — `n`, `q`, `k`, `rotate`, `cov_explained`, `pvalue`
-- `.pls_info` — `k`, `rotate`, `order`, `signs`, `sweeps`, `V_converged`, `kaiser_normalized`, `random_state`
+- `.stats` — `n`, `q`, `ssd_gradients`, `rotate`, `cov_explained`, `pvalue`
+- `.pls_info` — `ssd_gradients`, `rotate`, `order`, `signs`, `sweeps`, `V_converged`, `kaiser_normalized`, `random_state`
 - `.test` — split_exact PLS3 test at LV1, container level only; rerun with `.test(n_splits=..., n_perm=..., seed=...)`
 - `.report(top_words={"n": 5})` — stats, rotation, per-dimension outcome and words tables
 

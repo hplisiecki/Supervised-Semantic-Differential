@@ -6,7 +6,7 @@
  "software": {
   "package": "ssdiff",
   "language": "python",
-  "version": "3.2.0"
+  "version": "3.3.0"
  },
  "embeddings": {
   "name": null,
@@ -26,7 +26,7 @@
   "sif_a": 0.001,
   "use_full_doc": false,
   "fit": {
-   "k": 2,
+   "ssd_gradients": 2,
    "rotate": null,
    "outcome_groups": null,
    "n_splits": 5,
@@ -47,7 +47,7 @@
    "columns": [
     "n",
     "q",
-    "k",
+    "ssd_gradients",
     "rotate",
     "cov_explained",
     "pvalue"
@@ -65,7 +65,7 @@
   },
   "pls_info": {
    "columns": [
-    "k",
+    "ssd_gradients",
     "rotate",
     "order",
     "signs",
@@ -663,22 +663,6 @@
       [
        2,
        "pos",
-       31,
-       0.6842489291519912,
-       "narod",
-       0,
-       3,
-       0,
-       0,
-       "narod stary miasto silny",
-       "narod stary miasto silny",
-       null,
-       0,
-       null
-      ],
-      [
-       3,
-       "pos",
        48,
        0.6842489291519912,
        "kraj",
@@ -688,6 +672,22 @@
        0,
        "kraj silny miasto stary",
        "kraj silny miasto stary",
+       null,
+       0,
+       null
+      ],
+      [
+       3,
+       "pos",
+       31,
+       0.6842489291519912,
+       "narod",
+       0,
+       3,
+       0,
+       0,
+       "narod stary miasto silny",
+       "narod stary miasto silny",
        null,
        0,
        null

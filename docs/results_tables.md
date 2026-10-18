@@ -79,7 +79,7 @@ Cluster and snippet reruns with different parameters are cached separately — t
 | `beta_norm` |  | internal scale; `iqr_effect` is the interpretable version |
 | `delta` |  | `0.1 · beta_norm · y_std` — engineering quantity |
 | `iqr_effect` | ✓ | interpretable effect size: Q4−Q1 change in `y` |
-| `y_corr_pred` |  | ≈ `√r²` for a linear fit — duplicate signal |
+| `y_corr_pred` |  | ≈ `√r²` for a linear fit without a formula — duplicate signal |
 
 ### `fit_info` — `FitInfoView` (ScalarView)
 
@@ -88,13 +88,14 @@ Cluster and snippet reruns with different parameters are cached separately — t
 | `n_components` | ✓ | defines the fit |
 | `pca_k` | ✓ | meaningful when PCA preprocess / PCA+OLS; `None` otherwise |
 | `p_method` | ✓ | which significance test was used |
-| `keep` |  | sparse keep-count from `fit_pls(keep=...)`; `None` for dense fits |
 | `n_perm` |  | test config — on `.test` |
 | `n_splits` |  | same |
 | `split_mean_r` |  | surfaced as `split_r2` on `.test` |
 | `random_state` | ✓ | reproducibility anchor |
 | `k_min` / `k_max` / `k_step` |  | PCA-sweep config — on `.sweep` |
 | `best_k` |  | PCA-sweep output — on `.sweep` |
+| `ssd_gradients` |  | `fit_pls`: number of gradients returned; `None` for PCA+OLS |
+| `rotate` |  | `fit_pls`: rotation of those gradients; `None` for one gradient |
 
 ### `words` — `WordsView` (tabular)
 
@@ -161,7 +162,7 @@ Same columns + same defaults as `WordsView`. Row cap default = 20 (per side). Us
 | `doc_id` | ✓ | aligns with corpus row index |
 | `y_true` | ✓ | |
 | `y_hat` | ✓ | |
-| `residual` | ✓ | `y_true − y_hat` |
+| `residual` | ✓ | `y_true` minus `model`'s fitted value (`fit_regression`), or the PLS fit's residual on the residualized y (`fit_pls` with a formula), so the covariates are taken out of it while `y_hat` is the text's part only; otherwise `y_true − y_hat` |
 | `alignment_score` | ✓ | cosine along β — complementary to `y_hat` |
 
 Default = full. Nothing to prune.
@@ -170,7 +171,7 @@ Default = full. Nothing to prune.
 
 | column | default | note |
 |---|:---:|---|
-| `name` | ✓ | `"split_exact"`, or `"split_nb_seq"` (sparse fits) |
+| `name` | ✓ | `"split_exact"` |
 | `pvalue` | ✓ | |
 | `split_r2` | ✓ | held-out split statistic |
 | `n_splits` |  | config — reachable via `.params` |
@@ -180,9 +181,26 @@ Default = full. Nothing to prune.
 
 Columns: `name`, `pvalue`. Default = full (rerun is a no-op; the test is analytic).
 
+### `covariates` — `CovariatesView` (PCAOLSResult)
+
+| column | default | note |
+|---|:---:|---|
+| `term` | ✓ | coefficient name in `model`; a factor gives one row per level after the first |
+| `estimate` | ✓ | on y's scale; link scale for a non-Gaussian `fit_regression` model |
+| `se` | ✓ | |
+| `statistic` | ✓ | t or z, as in `model.summary()` |
+| `p_value` | ✓ | |
+| `ci_low`, `ci_high` | ✓ | 95% bounds from `model.confint()` |
+
+One row per coefficient of the formula, with the text held fixed (the PLS score or the K components; their own rows are left out). Empty without a formula.
+
 ### `sweep` — `SweepView` (PCAOLSResult only)
 
 Columns: `k`, `r2`, `r2_adj`, `pvalue`. One row per K tested. Default = full.
+
+### Gradient leaves — `res['dim-1']` (PLSResult, `ssd_gradients > 1`)
+
+`res.pls_info` and the per-leaf `res['dim-1'].stats` have the same columns as on `MultiPLSResult`: see [`pls_info`](#pls_info--plsinfoview-scalarview) and [per-leaf `stats`](#per-leaf-stats--resdim-1stats--plscomponentstatsview-scalarview). A PLS1 leaf has no `outcomes`; its `words`, `clusters` and `snippets` have the columns above.
 
 ---
 
@@ -266,23 +284,25 @@ Every view below has no registered default subset, so the default is the full co
 |---|:---:|---|
 | `n` | ✓ | documents in fit |
 | `q` | ✓ | number of outcomes |
-| `k` | ✓ | number of dimensions |
+| `ssd_gradients` | ✓ | number of dimensions |
 | `rotate` | ✓ | `None`, `"words"` or `"outcomes"` |
-| `cov_explained` | ✓ | share of squared cross-covariance captured by the `k` dimensions; the same for every `rotate` |
+| `cov_explained` | ✓ | share of squared cross-covariance captured by the dimensions; the same for every `rotate` |
 | `pvalue` | ✓ | LV1 test p-value; `NaN` if no test info |
 
 ### `pls_info` — `PLSInfoView` (ScalarView)
 
+On `MultiPLSResult`, and on a `PLSResult` from `fit_pls(ssd_gradients=N)` with N > 1.
+
 | column | default | note |
 |---|:---:|---|
-| `k` | ✓ | |
+| `ssd_gradients` | ✓ | number of dimensions |
 | `rotate` | ✓ | |
-| `order` | ✓ | dimension permutation from the varimax reordering (identity when `rotate=None`) |
-| `signs` | ✓ | per-dimension sign flip (largest outcome loading made positive) |
+| `order` | ✓ | dimension permutation from the reordering after rotation (identity when `rotate=None`) |
+| `signs` | ✓ | per-dimension sign flip: largest outcome loading made positive (PLS3), score correlation with y made positive (PLS1) |
 | `kaiser_normalized` | ✓ | varimax Kaiser row-normalisation flag |
-| `sweeps` | ✓ | varimax pairwise-sweep count |
+| `sweeps` | ✓ | varimax pairwise-sweep count; 0 without varimax |
 | `V_converged` | ✓ | final varimax criterion value |
-| `random_state` | ✓ | seed for the LV1 test |
+| `random_state` | ✓ | the fit's seed |
 
 ### `test` — `MultiPLSTestView` (ScalarView)
 
@@ -311,8 +331,8 @@ With `outcome_groups`, one extra row per group follows the per-outcome rows.
 
 | column | default | note |
 |---|:---:|---|
-| `cov_share` | ✓ | this dimension's share of the `k`-dimension cross-covariance; sums to 1 over the dimensions |
-| `score_corr` | ✓ | in-sample correlation of the word-side and outcome-side scores |
+| `cov_share` | ✓ | this dimension's share of the squared cross-covariance of all dimensions (with y, for PLS1); sums to 1 over the dimensions |
+| `score_corr` | ✓ | in-sample correlation of the word-side and outcome-side scores; for PLS1, of the dimension's score with y |
 
 ---
 

@@ -84,7 +84,7 @@ for w in result.words.pos:
 
 Returned by `fit_pls()`.
 
-**Scalar views** — `.stats`, `.fit_info`, `.test`
+**Scalar views** — `.stats`, `.fit_info`, `.test`; `.pls_info` with `ssd_gradients > 1` (see [Gradient leaves](#gradient-leaves--fit_plsssd_gradientsn))
 
 **Arrays** (numpy):
 
@@ -96,7 +96,7 @@ Returned by `fit_pls()`.
 | `.gradient` | `(D,)` | Unit-length β — the semantic gradient |
 | `.alignment_scores` | `(n_kept,)` | `x @ gradient` |
 | `.component_scores`, `.component_weights` | `(n_kept, A)`, `(D, A)` | PLS1 T, W |
-| `.cv_result`, `.cv_scores`, `.perm_null` | — | CV + permutation diagnostics (may be `None`) |
+| `.find_k_result`, `.cv_scores` | — | `k="auto"` selection diagnostics (`None` for an int `k`) |
 
 **Tabular views:**
 
@@ -109,15 +109,33 @@ Returned by `fit_pls()`.
 | `.snippets` | `top_per_side=30` | `.pos`, `.neg` for sides |
 | `.docs` | preview | See below |
 
+`.summary()` prints and returns a header and the Text block: the text's test and its R² (partial R² with a formula).
+
 **`.docs` accessors:**
 
 ```python
 result.docs.pos(10)                          # 10 most β-pos-aligned
 result.docs.neg(10)                          # β-neg
 result.docs.misdiagnosed(5)                  # largest |residual|
-result.docs.misdiagnosed(5, direction="over")   # y_hat > y_true
+result.docs.misdiagnosed(5, direction="over")   # residual < 0
 result.docs.id(42)                           # full detail view; needs attached corpus
 ```
+
+### Gradient leaves — `fit_pls(ssd_gradients=N)`
+
+With `ssd_gradients=N > 1`, a `PLSResult` also holds N leaves keyed `"dim-1"`, …, `"dim-N"`, one per rotated gradient. Everything above describes the standard fit and stays the same as with `ssd_gradients=1`.
+
+```python
+res = ssd.fit_pls(ssd_gradients=3)
+
+res.keys()                 # ['dim-1', 'dim-2', 'dim-3']
+res["dim-1"].stats         # score_corr, cov_share
+res["dim-1"].words         # top neighbors along gradient 1
+res["dim-1"].beta          # the gradient's direction in doc-vector space
+res.pls_info               # ssd_gradients, rotate, order, signs, rotation diagnostics
+```
+
+Leaves are the same `_PLSComponentResult` class as `MultiPLSResult` leaves, without `.outcomes`. They have `.stats`, `.words`, `.clusters`, `.snippets`, `.beta`, `.gradient`, `.alignment_scores`, and no p-value. `report()` adds the rotation, a row per gradient and each gradient's words after the standard sections; the results page lists the gradients in its "Dimension" menu after β.
 
 ---
 
@@ -127,7 +145,9 @@ Everything on `PLSResult`, plus:
 
 - `.stats` adds `r2_adj`
 - `.pca_k`, `.pca_components`, `.pca_weights` — PCA basis and the components' regression coefficients
-- `.model` — the `glmm` fit of y on the formula and the K component scores (`_ssd_pca_1` … `_ssd_pca_K`; response `_ssd_y`): covariate coefficients, random effects, `.summary()`
+- `.model` — the `glmm` fit of y on the formula and the K component scores (`_ssd_pca_1` … `_ssd_pca_K`; response `_ssd_y`): covariate coefficients, random effects, `.summary()`. `.covariates` lists its covariate rows, with the components held fixed; empty without a formula.
+- `.summary()` — glmm's summary of `.model` without the `_ssd_*` rows (fixed effects and their correlations), with an SSD effects row below the fixed effects that holds the text's ΔR² and p. The other blocks describe the full model, components included. `.model.summary()` prints the full glmm summary.
+- `.test` — columns `name` (`"f_test"` or `"lrt"`), `pvalue`, `statistic` (F or χ²), `df` (the number of components), `df_resid` (the F-test's residual df; `None` for a likelihood-ratio test) and `r2_delta` (the R² the components add; NaN unless the model is OLS)
 - `.sweep_result`, `.sweep` — full sweep diagnostics (`None` if `fixed_k` was set)
 - `.plot_sweep(path=None, dpi=300)` — dual-axis chart of interpretability vs β-change. Returns the matplotlib `Figure`; writes to `path` when given, otherwise calls `plt.show()`. Needs matplotlib.
 
@@ -196,12 +216,12 @@ gr.cluster_snippets(
 
 ## `MultiPLSResult`
 
-Returned by `fit_multipls()` (PLS3, several outcomes). A container of per-dimension leaves keyed `"dim-1"`, …, `"dim-k"`. Mirrors the `GroupResult` / `PairResult` pattern. Runnable example: [`../examples/demo_multipls.py`](../examples/demo_multipls.py).
+Returned by `fit_multipls()` (PLS3, several outcomes). A container of per-dimension leaves keyed `"dim-1"`, `"dim-2"`, …. Mirrors the `GroupResult` / `PairResult` pattern. Runnable example: [`../examples/demo_multipls.py`](../examples/demo_multipls.py).
 
 **Scalar views** (whole model):
 
-- `.stats` — `n`, `q`, `k`, `rotate`, `cov_explained`, `pvalue`
-- `.pls_info` — `k`, `rotate`, `order`, `signs`, `sweeps`, `V_converged`, `kaiser_normalized`, `random_state`
+- `.stats` — `n`, `q`, `ssd_gradients`, `rotate`, `cov_explained`, `pvalue`
+- `.pls_info` — `ssd_gradients`, `rotate`, `order`, `signs`, `sweeps`, `V_converged`, `kaiser_normalized`, `random_state`
 - `.test` — split_exact PLS3 test at LV1
 
 **Other attributes:** `.outcome_names`, `.outcome_groups`.
@@ -213,7 +233,7 @@ Returned by `fit_multipls()` (PLS3, several outcomes). A container of per-dimens
 Each leaf is a `_PLSComponentResult` (a `_SingleResult`), so its interpretation views mirror `PLSResult`:
 
 ```python
-res = ssd.fit_multipls(k=2, rotate="outcomes")
+res = ssd.fit_multipls(ssd_gradients=2, rotate="outcomes")
 
 res["dim-1"].outcomes       # outcome loadings on dimension 1
 res["dim-1"].stats          # cov_share, score_corr
@@ -340,8 +360,6 @@ result.test.pvalue         # current p-value
 result.test.name           # "split_exact"
 ```
 
-A sparse fit (`fit_pls(k=..., keep=...)`) cannot be rerun: its p-value comes from a sequential chain computed at fit time, and `result.test(...)` raises `RuntimeError`. Refit to change `n_splits` or the seed.
-
 **Several outcomes:**
 ```python
 res.test(n_splits=100, n_perm=2000, seed=42)   # LV1, split_exact
@@ -367,7 +385,7 @@ result.attach(corpus=my_corpus, embeddings=my_embeddings)
 result.words   # works now
 ```
 
-`attach()` returns `self`, so it chains: `pickle.load(f).attach(corpus=c, embeddings=e)`.
+`attach()` returns `self`, so it chains: `pickle.load(f).attach(corpus=c, embeddings=e)`. On a result with leaves (`GroupResult`, `MultiPLSResult`, or `fit_pls(ssd_gradients=N)`), it re-wires every leaf too.
 
 ---
 
@@ -422,6 +440,8 @@ result.report(misdiagnosed=False)
 # Minimal — Stats + Fit info + Clusters only
 result.report(top_words=False, extreme_docs=False, misdiagnosed=False)
 ```
+
+A `fit_pls(ssd_gradients=N)` result with N > 1 adds, after these sections, a Rotation block, a Dimensions table (`cov_share`, `score_corr` per gradient) and each gradient's top words; `top_words` sets those too.
 
 **Groups:**
 ```python

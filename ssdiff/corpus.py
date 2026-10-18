@@ -84,6 +84,7 @@ class Corpus:
     >>> corpus.docs        # list[list[str]] — tokens per document
     >>> corpus.pre_docs    # list[PreprocessedDoc] — for snippets
     >>> corpus.tokenizer   # "spacy:<model>", "wordpack:<name>-<version>" or None
+    >>> corpus.name        # column name when texts is a pandas Series, else None
     """
 
     def __init__(
@@ -148,6 +149,9 @@ class Corpus:
         if isinstance(texts, str):
             # Iterating a str would make one document per character.
             raise TypeError("texts is a single string; pass a list of texts, e.g. [text].")
+        # The column name of a pandas Series; result summaries name the text by it.
+        name = getattr(texts, "name", None)
+        self.name: str | None = None if name is None else str(name)
         if embeddings is not None:
             if lang is not None or model is not None or nlp is not None or pretokenized:
                 raise ValueError(

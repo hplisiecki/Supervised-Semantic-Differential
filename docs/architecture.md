@@ -12,12 +12,14 @@ For the results surface see [`results.md`](results.md).
 ```
 SSD                           — driver; prepares PCVs, dispatches to backends
   ├── .fit_pls()      → PLSResult        (ContinuousResult → _SingleResult → Result)
+  │                         └── dict[str, _PLSComponentResult]  (ssd_gradients > 1 only,
+  │                                                              keys "dim-1" … "dim-N")
   ├── .fit_regression() → PCAOLSResult  (ContinuousResult → _SingleResult → Result)
   ├── .fit_groups()   → GroupResult      (_MultiContainer → Result)
   │                         └── dict[(g1, g2), PairResult]       (_SingleResult leaves)
   └── .fit_multipls() → MultiPLSResult   (_MultiContainer → Result)   — PLS3, several outcomes
                             └── dict[str, _PLSComponentResult]  (_SingleResult leaves,
-                                                                 keys "dim-1" … "dim-k")
+                                                                 keys "dim-1" … "dim-N")
 
 Embeddings                    — word-vector store + normalization, no gensim dep
 Corpus                        — spaCy tokenize/lemmatize + lexicon helpers
@@ -40,7 +42,7 @@ ssdiff/
 ├── lang_config.py     — wordpack tags, and the language → spaCy model mapping (20 languages)
 ├── py.typed           — PEP 561 marker
 ├── backends/
-│   ├── pls.py         — pls3_rotate — PLS3 varimax rotation, dimension reordering, sign convention
+│   ├── pls.py         — pls1_rotate, pls3_rotate, word_target — varimax rotation of PLS1 / PLS3 weights, dimension reordering, sign convention
 │   ├── pca_sweep.py   — PCA + OLS; joint interpretability/stability sweep
 │   ├── _sweep_math.py — sweep scoring primitives
 │   └── group.py       — unified permutation test (omnibus + pairwise)
@@ -52,7 +54,7 @@ ssdiff/
 │   ├── schema.py         — frozen dataclasses: Word, Cluster, ClusterWord, Snippet, Doc, Pair, Outcome, Suggestion, Stats, FitInfo, Summary
 │   ├── continuous_result.py  — ContinuousResult (_SingleResult subclass), PLSResult, PCAOLSResult, and their views
 │   ├── group_result.py       — GroupResult (_MultiContainer), PairResult (_SingleResult leaf), PairsListView, GroupStatsView, GroupTestView
-│   ├── multi_pls_result.py   — MultiPLSResult (_MultiContainer), _PLSComponentResult (leaf), MultiPLSStatsView, PLSInfoView, OutcomesView, MultiPLSTestView
+│   ├── multi_pls_result.py   — MultiPLSResult (_MultiContainer), _PLSComponentResult (leaf, shared with PLSResult), MultiPLSStatsView, PLSInfoView, OutcomesView, MultiPLSTestView
 │   ├── paired_view.py        — ``_paired_save`` helper: unified multi-key save dispatch used by ``_ShimView``
 │   ├── lexicon_result.py     — LexiconResult + lexicon views
 │   ├── report.py             — Report / Section builders + text/md/html/tex/docx/json renderers
@@ -101,6 +103,8 @@ No fitting runs at construction — just doc-vector preparation.
 ```
 ssd.x (n × D), ssd.y (n)
         │
+        ├─ formula → residualize y and each column of X on its fixed effects
+        │    (one glmm OLS fit per column); everything below runs on the residuals
         ├─ standardize X  (columns, ddof=0)
         ├─ k="auto" → K-selection (plskit.pls1_find_k_optimal):
         │    selector "r2_se" picks K*, with a split_nb diagnostic chain
@@ -111,16 +115,19 @@ ssd.x (n × D), ssd.y (n)
         │      p = X't / t't    (loading)
         │      q = y't / t't    (y-loading)
         │      deflate X and y
-        ├─ keep set → sparse branch instead of pls1_fit:
-        │    keep="auto" → plskit.spls1_find_keep_optimal at fixed k
-        │    plskit.spls1_fit(k, keep)
         ├─ β = W (P'W)⁻¹ Q
         ├─ unscale: β / X_scale
         ├─ orient β: flip if corr(ŷ, y) < 0
-        └─ p-value:
-             dense → plskit.pls1_confirmatory_test(split_exact) at the fitted k
-             (k="auto": at k=1)
-             keep set     → spls1_find_k_sequence (split_nb); p = nanmax over the chain
+        ├─ p-value: plskit.pls1_confirmatory_test(split_exact) at the fitted k
+        │    (k="auto": at k=1)
+        └─ ssd_gradients = N > 1 → N gradients, independent of everything above:
+             plskit.pls1_fit(Xs, ys, k=N) → W (D × N, orthonormal)
+             backends.pls.pls1_rotate(W, Xs, ys, rotate, L):
+               rotate="words" → varimax against L = projection of the leading
+                                50,000 vocabulary rows onto W; reorder by
+                                |corr(Xs W_rot_i, ys)|, descending; flip so it is positive
+               rotate=None    → W in NIPALS order and signs
+             leaves "dim-1", …, "dim-N": β_i = W_rot[:, i] / X_scale
                                 │
                                 ▼
                           PLSResult
@@ -160,16 +167,17 @@ ssd.x (n × D), ssd.y (n)
 ssd.x (n × D), ssd.y (n × q), ssd.embeddings
         │
         ├─ standardize X and Y
-        ├─ plskit.pls3_fit(Xs, Ys, k) → U (D × k), V (q × k), σ (k)
+        ├─ plskit.pls3_fit(Xs, Ys, k=ssd_gradients) → U (D × k), V (q × k), σ (k)
         │    (raise if plskit keeps fewer than k components)
         ├─ rotation target L:
         │    rotate="words"    → L = projection of the leading 50,000 vocabulary rows onto U
         │    rotate="outcomes" → L = V, or one row per outcome group (mean of the
         │                        group's V rows) plus one row per ungrouped outcome
         ├─ backends.pls.pls3_rotate(U, V, σ, rotate, L):
-        │    plskit.rotate("varimax", L) → one k × k orthogonal R   (identity if rotate=None)
+        │    plskit.rotate("varimax", L) → one k × k orthogonal R   (identity if rotate=None;
+        │    R = V' without varimax for rotate="outcomes" at k = q with no groups)
         │    U_rot = U R,  V_rot = V R
-        │    varimax modes: reorder dimensions by c_i = (R' Σ² R)_ii, descending
+        │    rotated modes: reorder dimensions by c_i = (R' Σ² R)_ii, descending
         │    every mode: flip signs so the largest |V_rot| entry per dimension is positive
         ├─ cov_explained = Σσ² / ‖Xs'Ys‖²_F
         ├─ LV1 p-value: plskit.pls3_confirmatory_test(split_exact) on Xs, Ys
@@ -236,17 +244,18 @@ Every result is either a **leaf** (one direction in embedding space + its interp
 Result                                          (core.py)
  ├─ _SingleResult                               (single_result.py)   — leaf base
  │   ├─ ContinuousResult                        (continuous_result.py)
- │   │   ├─ PLSResult
+ │   │   ├─ PLSResult                             — with ssd_gradients > 1 also holds
+ │   │   │      self._leaves : dict[str, _PLSComponentResult]   # "dim-1", …, "dim-N"
  │   │   └─ PCAOLSResult
  │   ├─ PairResult                              (group_result.py — leaf inside GroupResult)
- │   └─ _PLSComponentResult                     (multi_pls_result.py — leaf inside MultiPLSResult)
+ │   └─ _PLSComponentResult                     (multi_pls_result.py — leaf inside MultiPLSResult or PLSResult)
  │
  └─ _MultiContainer                             (multi_container.py) — container base
      ├─ GroupResult                             (group_result.py)
      │   └─ self._leaves : dict[(g1, g2), PairResult]
      └─ MultiPLSResult                          (multi_pls_result.py)
          └─ self._leaves : dict[str, _PLSComponentResult]
-                           # keys "dim-1", …, "dim-k"
+                           # keys "dim-1", …, "dim-N"
 ```
 
 #### `_SingleResult` — the leaf (in `single_result.py`)
@@ -400,9 +409,11 @@ The backend box covers all four fit methods — each has its own file in `backen
 
 `plskit.pls1_confirmatory_test` with `test_method="split_exact"`: repeated train/test splits, calibrated against a permutation null. It runs at the fitted `k` (at k=1 when `k="auto"`). `split_nb` is used only in the diagnostic chain that picks `k`.
 
+With a formula the test sees the residualized y and X, so it permutes residuals against residuals (Kennedy, 1995). The residualized arrays are kept in the result's raw diagnostics (`x_resid`, `y_resid`) so a rerun tests the same data.
+
 `result.test(n_splits=..., seed=...)` reruns it; `PLSTestView` accepts only `split_exact` and raises `TypeError` for other names. `result.stats.pvalue` is propagated by the `_on_rerun` hook.
 
-With `keep` set, `fit_pls()` instead reports the path-max of the `spls1_find_k_sequence` chain (`result.test.name` is `"split_nb_seq"`). That chain is fixed at fit time, so `result.test()` raises rather than rerunning.
+The `ssd_gradients` leaves carry no p-value; the test is the standard fit's.
 
 ### `fit_multipls()` — split_exact at LV1
 

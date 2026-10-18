@@ -44,7 +44,7 @@ def main() -> None:
         "pls": _ssd(docs50, y50).fit_pls(k=2, n_splits=20, random_state=42),
         "pca_ols": _ssd(docs50, y50).fit_regression(fixed_k=None, k_min=2, k_max=6, k_step=1),
         "groups": _ssd(docs60, groups60).fit_groups(n_perm=50, random_state=42),
-        "multipls": _ssd(docs50, y3).fit_multipls(k=2, n_perm=19, n_splits=5, random_state=0),
+        "multipls": _ssd(docs50, y3).fit_multipls(ssd_gradients=2, n_perm=19, n_splits=5, random_state=0),
     }
     for kind, result in fits.items():
         # Small limits keep the committed files small; the shape is the same at any limit.

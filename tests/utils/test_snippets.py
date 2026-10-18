@@ -281,6 +281,21 @@ class TestSnippetsAlongBeta:
             cosines = [r["cosine"] for r in neg]
             assert cosines == sorted(cosines, reverse=True)
 
+    def test_one_job_equals_thread_pool(self, sample_preprocessed_docs, tiny_kv):
+        """n_jobs=1 runs without threads (the Pyodide path) and finds the same snippets."""
+        gradient = tiny_kv.get_vector("kraj", norm=True)
+        ssd = _FakeSSD(tiny_kv, gradient, lexicon=["kraj", "narod", "panstwo"])
+        kwargs = dict(pre_docs=sample_preprocessed_docs, ssd=ssd, token_window=2, top_per_side=200)
+        serial = snippets_along_beta(n_jobs=1, **kwargs)
+        pooled = snippets_along_beta(n_jobs=-1, **kwargs)
+
+        def rows(side):
+            # Tied cosines may come out of the pool in either order.
+            return sorted(repr(sorted(r.items())) for r in side)
+
+        assert serial["pos"] and rows(serial["pos"]) == rows(pooled["pos"])
+        assert rows(serial["neg"]) == rows(pooled["neg"])
+
     def test_pos_neg_cosines_are_negatives_of_each_other(self, sample_preprocessed_docs, tiny_kv):
         """Invariant 3: for same occurrence, pos_cosine == -neg_cosine."""
         gradient = tiny_kv.get_vector("kraj", norm=True)

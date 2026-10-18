@@ -293,11 +293,81 @@ class SSD:
             "f_pvalue": f_pvalue,
         }
 
+    def _formula_rhs(self, formula: str | None, method: str) -> str:
+        """The right side of *formula* (``"1"`` for None), after the checks every formula fit shares."""
+        rhs = "1"
+        if formula is not None:
+            if self.data is None:
+                raise ValueError(
+                    f"{method}() got a formula but this SSD has no data. "
+                    "Construct it with SSD(..., data=df)."
+                )
+            lhs, _, rhs = formula.rpartition("~")
+            lhs, rhs = lhs.strip(), rhs.strip() or "1"
+            if lhs not in ("", "y", self._y_name):
+                raise ValueError(
+                    f"The formula's left side is {lhs!r}, but the outcome is y"
+                    + (f" ({self._y_name!r})" if self._y_name else "")
+                    + ". Give the right side only, e.g. '~ age + gender'."
+                )
+        if self.data is not None:
+            columns = self.data.columns if hasattr(self.data, "iloc") else self.data.keys()
+            clash = sorted(str(c) for c in columns if str(c).startswith("_ssd_"))
+            if clash:
+                raise ValueError(
+                    f"data columns {clash} start with '_ssd_', which {method}() "
+                    "reserves for its own columns. Rename them."
+                )
+        return rhs
+
+    def _data_with(self, **cols):
+        """``self.data`` with *cols* added; only *cols* when there is no data."""
+        if hasattr(self.data, "iloc"):
+            return self.data.assign(**cols)
+        if self.data is not None:
+            return {**self.data, **cols}
+        return cols
+
+    def _check_nobs(self, fit) -> None:
+        """Raise if glmm dropped kept documents for missing values in the formula's columns."""
+        if fit.nobs != self.n_kept:
+            raise ValueError(
+                f"The formula's columns have missing values in "
+                f"{self.n_kept - fit.nobs} of the {self.n_kept} kept documents. "
+                "Fill or drop those rows before building the SSD."
+            )
+
+    def _residualize(self, rhs: str) -> tuple[np.ndarray, np.ndarray]:
+        """The document vectors and y with the formula's fixed effects regressed out by OLS.
+
+        One glmm fit per column of x: glmm builds the design from the formula
+        (factors, interactions) but exposes no design matrix to project with.
+        """
+        import glmm
+
+        # Every random-effect term, (1 | g) or (x || g), has a bar.
+        if "|" in rhs:
+            raise ValueError(
+                "fit_pls() takes fixed covariates only, but the formula has random "
+                "effects. Use fit_regression() for random effects."
+            )
+        fit = glmm.fit(self._data_with(_ssd_y=self.y), f"_ssd_y ~ {rhs}")
+        self._check_nobs(fit)
+        y_res = np.asarray(fit.residuals(), dtype=float)
+        x_res = np.column_stack([
+            np.asarray(
+                glmm.fit(self._data_with(_ssd_x=self.x[:, j]), f"_ssd_x ~ {rhs}").residuals(),
+                dtype=float,
+            )
+            for j in range(self.x.shape[1])
+        ])
+        return x_res, y_res
+
     def _orient_beta(
-        self, beta: np.ndarray, ys: np.ndarray,
+        self, beta: np.ndarray, ys: np.ndarray, x: np.ndarray | None = None,
     ) -> np.ndarray:
-        """Orient beta so higher alignment → higher outcome."""
-        yhat_std = (self.x @ beta).ravel()
+        """Orient beta so higher alignment → higher outcome (alignment on *x*, default ``self.x``)."""
+        yhat_std = ((self.x if x is None else x) @ beta).ravel()
         if float(np.std(yhat_std)) > 0:
             c = float(np.corrcoef(ys, yhat_std)[0, 1])
             corr = c if np.isfinite(c) else 0.0
@@ -334,16 +404,24 @@ class SSD:
 
     def fit_pls(
         self,
+        formula: str | None = None,
         *,
         k: int | Literal["auto"] = "auto",
         k_max: int = 5,
-        keep: int | Literal["auto"] | None = None,
+        ssd_gradients: int = 1,
+        rotate: Literal["words"] | None = "words",
         n_splits: int = 50,
         random_state: int = 2137,
         test: bool = True,
         verbose: bool = False,
     ):
         """Fit PLS1 NIPALS and return PLSResult.
+
+        The standard fit (k selection, the test, ``beta``, ``r2``, ``docs``,
+        ``predict()``) is the same for every ``ssd_gradients``. With
+        ``ssd_gradients=N > 1`` the result also holds N rotated gradients,
+        ``result["dim-1"]`` … ``result["dim-N"]``, from a separate N-component
+        PLS1 fit on the same standardized data.
 
         Significance is always tested with the split_exact method
         (permutation-calibrated split-half test; Lenartowicz, 2026). The
@@ -352,8 +430,24 @@ class SSD:
         confirmatory** test — independent of the ``find_k_optimal``
         selection that picks ``k_star`` for the actual fit.
 
+        With a formula, y and every column of the document vectors are first
+        regressed on the formula's fixed effects by OLS, and PLS runs on the
+        residuals (Frisch–Waugh–Lovell). The test permutes the residualized
+        y against the residualized vectors (Kennedy, 1995); it can run
+        slightly liberal when the covariates use many degrees of freedom
+        relative to n.
+
         Parameters
         ----------
+        formula : str or None
+            Fixed covariates over columns of ``data``, e.g.
+            ``"~ age + gender"``; a left side, if given, must name y. Random
+            effects such as ``(1 | ID)`` raise ``ValueError``: use
+            :meth:`fit_regression` for them. With a formula, ``r2`` is the R²
+            of the residualized y, ``docs.residual`` has the covariates
+            taken out, and ``predict()`` is not available. The covariates'
+            own coefficients are not reported: use :meth:`fit_regression`
+            for them.
         k : int or ``"auto"``, default ``"auto"``
             Number of PLS components.
 
@@ -365,39 +459,57 @@ class SSD:
         k_max : int, default 5
             Cap for ``k="auto"``. Further clamped to ``min(k_max, n-1, D)``.
             Ignored when ``k`` is an int.
-        keep : int, ``"auto"``, or None, default None
-            Sparse-PLS knob. ``None`` gives dense PLS1. ``"auto"`` tunes the
-            keep-count at the fixed ``k`` via ``spls1_find_keep_optimal``
-            (raises if it returns 0). An ``int`` fixes the keep-count in
-            ``[1, n_features]``. Sparse mode requires an explicit integer
-            ``k``; ``keep`` with ``k="auto"`` raises ``ValueError``.
+        ssd_gradients : int, default 1
+            Number of gradients returned, in ``[1, min(n - 1, D)]``. At 1
+            the result is the standard fit alone and ``rotate`` is ignored.
+            At N > 1, ``plskit.pls1_fit(k=N)`` gives N orthonormal weight
+            vectors W; each leaf ``"dim-i"`` has ``beta = W_rot[:, i] /
+            X_scale``, its ``stats`` (``score_corr``, ``cov_share``),
+            ``words``, ``clusters`` and ``snippets``, and no p-value.
+            ``fit_info.n_components`` stays the standard fit's k.
+        rotate : {"words", None}, default "words"
+            Rotation of the N gradients.
 
-            In sparse mode the p-value is the path-max of the sequential
-            chain (``nanmax`` over ``spls1_find_k_sequence``, split_nb),
-            not a single confirmatory test at k as in the dense path;
-            ``result.test.name`` is ``"split_nb_seq"`` and ``.test()`` cannot rerun it.
+            - ``"words"`` — varimax against the projection of the leading
+              vocabulary rows onto W, then dimensions ordered by
+              ``|corr(score, y)|``, descending, each flipped so that
+              correlation is positive.
+            - ``None`` — W in NIPALS order and signs. Dimensions 2…N then
+              have zero covariance with y (NIPALS gives ``w_1 ∝ X'y``), so
+              their ``score_corr`` and ``cov_share`` are 0.
         n_splits : int, default 50
             Random splits for the split-half tests.
         random_state : int, default 2137
             Random seed.
         test : bool, default True
-            ``False`` skips the significance test (the confirmatory test in
-            dense mode, the sequential chain in sparse mode): ``pvalue`` is
-            ``NaN`` and ``result.test`` is left not run. Choosing k for
-            ``k="auto"`` and tuning ``keep="auto"`` still run. In dense mode
-            ``result.test(n_splits=..., seed=...)`` runs the skipped test
-            later; with no arguments it uses 50 splits and no seed, not
-            this fit's ``n_splits`` and ``random_state``.
+            ``False`` skips the confirmatory test: ``pvalue`` is ``NaN`` and
+            ``result.test`` is left not run. Choosing k for ``k="auto"``
+            still runs. ``result.test(n_splits=..., seed=...)`` runs the
+            skipped test later; with no arguments it uses 50 splits and no
+            seed, not this fit's ``n_splits`` and ``random_state``.
         verbose : bool
 
         Returns
         -------
         PLSResult
+
+        Raises
+        ------
+        ValueError
+            On 2-D or categorical y, constant y, an invalid ``k`` or
+            ``ssd_gradients``, a ``rotate`` other than ``"words"`` or
+            ``None`` with ``ssd_gradients > 1``, or when plskit returns
+            fewer than ``ssd_gradients`` weight vectors.
+        RuntimeError
+            ``rotate="words"`` with ``ssd_gradients > 1`` and no embeddings
+            attached.
         """
-        fit_args = {"k": k, "k_max": k_max, "keep": keep, "n_splits": n_splits,
-                    "random_state": random_state, "test": test}
+        fit_args = {"formula": formula, "k": k, "k_max": k_max,
+                    "ssd_gradients": ssd_gradients, "rotate": rotate,
+                    "n_splits": n_splits, "random_state": random_state, "test": test}
         import plskit
 
+        from ssdiff.backends.pls import pls1_rotate, word_target
         from ssdiff.results.continuous_result import PLSResult
 
         self._require_1d_y("fit_pls")
@@ -406,6 +518,25 @@ class SSD:
                 "fit_pls() requires numeric y. This SSD was constructed with "
                 "categorical labels — use fit_groups() instead."
             )
+        n_kept, D = self.x.shape
+        g_max = min(n_kept - 1, D)
+        if not isinstance(ssd_gradients, int) or not 1 <= ssd_gradients <= g_max:
+            raise ValueError(
+                f"ssd_gradients must be an int in [1, {g_max}] (min(n - 1, D) = "
+                f"min({n_kept - 1}, {D})); got {ssd_gradients!r}"
+            )
+        if ssd_gradients > 1:
+            if rotate not in (None, "words"):
+                raise ValueError(
+                    f"fit_pls() rotate must be 'words' or None; got {rotate!r}. "
+                    "One outcome gives no outcome loadings to rotate against."
+                )
+            if rotate == "words" and self.embeddings is None:
+                raise RuntimeError(
+                    "fit_pls(rotate='words') requires Embeddings (the rotation "
+                    "target is the vocabulary); none attached. Re-construct SSD "
+                    "with embeddings, or pass rotate=None."
+                )
 
         y_std = float(np.std(self.y))
         if y_std <= 1e-12:
@@ -414,21 +545,26 @@ class SSD:
                 "PLS1 is undefined when y is constant."
             )
 
-        ys_2d, _y_mean, _y_scale = standardize(self.y.reshape(-1, 1))
+        x_fit, y_fit = self.x, self.y
+        if formula is not None:
+            rhs = self._formula_rhs(formula, "fit_pls")
+            x_fit, y_fit = self._residualize(rhs)
+            if float(np.std(y_fit)) <= 1e-8 * y_std:
+                raise ValueError(
+                    "The formula's covariates explain y fully, so no variance "
+                    "is left for the text."
+                )
+
+        ys_2d, _y_mean, _y_scale = standardize(y_fit.reshape(-1, 1))
         ys = ys_2d.ravel()
-        Xs, X_mean, X_scale = standardize(self.x)
-
-        n_kept, D = Xs.shape
-
-        if keep is not None and k == "auto":
-            raise ValueError(
-                "keep= requires an explicit integer k (sparse PLS tunes "
-                "the keep-count at a fixed k); got k='auto'."
-            )
+        Xs, X_mean, X_scale = standardize(x_fit)
+        if formula is not None:
+            # Residuals have mean 0. docs.y_hat centers on y's own mean and on
+            # the raw vectors' mean; _y_scale stays the residual sd, the unit
+            # beta was fit in.
+            _y_mean, X_mean = np.atleast_1d(np.mean(self.y)), self.x.mean(axis=0)
 
         find_k_raw = None
-        seq = None
-        keep_star = None
         test_name = "split_exact"
         pvalue = float("nan")
         if k == "auto":
@@ -496,74 +632,23 @@ class SSD:
                     f"Cannot fit PLS: need at least 2 samples and 1 feature, "
                     f"got n={n_kept}, features={D}, requested k={k}"
                 )
-            if keep is None:
-                if test:
-                    r = plskit.pls1_confirmatory_test(
-                        Xs, ys, n_comp,
-                        test_method="split_exact",
-                        args={"n_splits": int(n_splits)},
-                        pre_standardized=True,
-                        seed=random_state,
-                        verbose=verbose,
-                    )
-                    pvalue = float(r.pvalue)
-                p_at_k = n_comp
-            else:
-                if keep == "auto":
-                    keep_star = int(plskit.spls1_find_keep_optimal(
-                        Xs, ys, n_comp, seed=random_state, verbose=verbose,
-                    ).keep_star)
-                    if keep_star < 1:
-                        raise ValueError(
-                            "fit_pls(keep='auto'): plskit found no keep-count "
-                            "(keep_star = 0); y carries no signal above the "
-                            "truncation floor."
-                        )
-                else:
-                    keep_star = int(keep)
-                    if not (1 <= keep_star <= D):
-                        raise ValueError(
-                            f"keep must be in [1, {D}] (n_features), got {keep_star}"
-                        )
-                if test:
-                    seq = plskit.spls1_find_k_sequence(
-                        Xs, ys, n_comp, keep_star,
-                        test_method="split_nb", args={"n_splits": int(n_splits)},
-                        pre_standardized=True, seed=random_state, verbose=verbose,
-                    )
-                    chain_pvalues = np.asarray(seq.pvalues[:n_comp], dtype=float)
-                    pvalue = (
-                        float(np.nanmax(chain_pvalues))
-                        if np.isfinite(chain_pvalues).any() else float("nan")
-                    )
-                p_at_k = n_comp
-                test_name = "split_nb_seq"
+            if test:
+                r = plskit.pls1_confirmatory_test(
+                    Xs, ys, n_comp,
+                    test_method="split_exact",
+                    args={"n_splits": int(n_splits)},
+                    pre_standardized=True,
+                    seed=random_state,
+                    verbose=verbose,
+                )
+                pvalue = float(r.pvalue)
+            p_at_k = n_comp
         else:
             raise ValueError(f"k must be int or 'auto', got {k!r}")
 
-        if keep is None:
-            m = plskit.pls1_fit(
-                Xs, ys, k=n_comp, pre_standardized=True, seed=random_state,
-            )
-        else:
-            try:
-                m = plskit.spls1_fit(
-                    Xs, ys, n_comp, keep_star, pre_standardized=True,
-                )
-            except plskit.PlsKitError as exc:
-                raise ValueError(
-                    f"plskit fit rejected n_components={n_comp}, "
-                    f"keep={keep_star}: {exc}. Reduce n_components/keep or "
-                    f"check for near-duplicate rows / near-zero variance "
-                    f"columns in X."
-                ) from exc
-            if m.W.shape[1] < n_comp:
-                raise ValueError(
-                    f"plskit.spls1_fit returned {m.W.shape[1]} components but "
-                    f"n_components={n_comp} was requested (NIPALS deflation "
-                    f"collapsed). Reduce n_components or check for "
-                    f"near-duplicate rows / near-zero variance columns in X."
-                )
+        m = plskit.pls1_fit(
+            Xs, ys, k=n_comp, pre_standardized=True, seed=random_state,
+        )
         T, P, W, Q, coef = m.T, m.P, m.W, m.Q, m.coef
 
         y_pred = Xs @ coef
@@ -571,12 +656,46 @@ class SSD:
 
         scale = np.where(X_scale > 1e-12, X_scale, 1.0)
         beta = coef / scale
-        beta = self._orient_beta(beta, ys)
+        beta = self._orient_beta(beta, ys, x_fit)
+
+        dims = None
+        if ssd_gradients > 1:
+            # NIPALS weights don't depend on how many components are fitted,
+            # so W's leading columns are reused when the main fit has enough.
+            W_g = (W[:, :ssd_gradients] if ssd_gradients <= W.shape[1] else
+                   plskit.pls1_fit(Xs, ys, k=ssd_gradients, pre_standardized=True,
+                                   seed=random_state).W)
+            if W_g.shape[1] < ssd_gradients:
+                raise ValueError(
+                    f"plskit.pls1_fit returned {W_g.shape[1]} weight vectors but "
+                    f"ssd_gradients={ssd_gradients} was requested (NIPALS deflation "
+                    f"collapsed). Reduce ssd_gradients."
+                )
+            L = (word_target(self.embeddings.vectors, W_g, X_mean, X_scale)
+                 if rotate == "words" else None)
+            dims = pls1_rotate(W_g, Xs, ys, rotate=rotate, L=L)
+            dims["beta"] = dims["W_rot"] / X_scale[:, None]
+            dims["rotate"] = rotate
 
         kwargs = self._base_result_kwargs()
         kwargs["_y_mean"] = _y_mean
         kwargs["_y_scale"] = _y_scale
         kwargs["_x_mean"] = X_mean
+
+        raw_diagnostics = {
+            "find_k_result": find_k_raw,
+            "component_scores": T,
+            "component_weights": W,
+        }
+        if formula is not None:
+            # .test() reruns on these, not on the raw x and y.
+            raw_diagnostics["x_resid"] = x_fit
+            raw_diagnostics["y_resid"] = y_fit
+            # The PLS fit's own residual on the residualized y, so the
+            # covariates are taken out of docs.residual too. No glmm fit of
+            # the covariates with the text score: beta was fitted to the same
+            # y, so that fit's SEs and p-values come out too small at D ≈ n.
+            kwargs["residuals"] = (ys - y_pred) * float(_y_scale[0])
 
         if test:
             test_info = {
@@ -596,19 +715,18 @@ class SSD:
                 "p_at_k": p_at_k,
                 "n_splits": int(n_splits),
                 "random_state": random_state,
-                "keep": keep_star,
+                "formula": formula,
+                "ssd_gradients": ssd_gradients,
+                "rotate": rotate if ssd_gradients > 1 else None,
             },
-            raw_diagnostics={
-                (
-                    "find_k_result" if keep is None else "find_k_sequence_result"
-                ): find_k_raw if keep is None else seq,
-                "component_scores": T,
-                "component_weights": W,
-            },
+            raw_diagnostics=raw_diagnostics,
             test_name=test_name,
             test_info=test_info,
+            dims=dims,
             **kwargs,
         )
+        result._y_name = self._y_name
+        result._text_name = getattr(self.corpus, "name", None)
         result.fit_args = fit_args
         return result
 
@@ -617,7 +735,7 @@ class SSD:
     def fit_multipls(
         self,
         *,
-        k: int,
+        ssd_gradients: int | None = None,
         rotate: Literal["words", "outcomes"] | None = None,
         outcome_groups: dict[str, list[str]] | None = None,
         n_splits: int = 50,
@@ -638,10 +756,11 @@ class SSD:
 
         Parameters
         ----------
-        k : int
-            Number of dimensions, ``1 <= k <= min(q, n - 1, D)``. Required:
-            at ``k = q`` every component is kept and ``cov_explained`` is 1
-            by construction.
+        ssd_gradients : int or None, default None
+            Number of dimensions, in ``[1, min(q, n - 1, D)]``. ``None``
+            means ``q``, or with ``outcome_groups`` the number of rotation
+            target rows. At ``q`` every component is kept and
+            ``cov_explained`` is 1 by construction.
         rotate : {None, "words", "outcomes"}, default None
             One orthogonal ``R`` applied to both sides (``U_rot = U @ R``,
             ``V_rot = V @ R``).
@@ -650,16 +769,18 @@ class SSD:
             - ``"words"`` — varimax against the projection of the leading
               vocabulary rows onto ``U``.
             - ``"outcomes"`` — varimax against the outcome loadings ``V``
-              (or the group rows from ``outcome_groups``). Needs ``k < q``.
+              (or the group rows from ``outcome_groups``). At
+              ``ssd_gradients = q`` without groups, ``R = V'`` directly:
+              each dimension loads 1 on one outcome.
 
-            Varimax modes reorder dimensions by squared cross-covariance.
+            Rotated modes reorder dimensions by squared cross-covariance.
             Every mode flips signs so the largest-magnitude outcome loading
             of each dimension is positive.
         outcome_groups : dict of str to list of str, optional
             Only with ``rotate="outcomes"``. Each group becomes one rotation
             target row, the mean of its outcomes' loadings; outcomes in no
             group keep their own row. Names refer to ``outcome_names``.
-            ``k`` must not exceed the number of target rows.
+            ``ssd_gradients`` must not exceed the number of target rows.
         n_splits : int, default 50
             Random splits for the split_exact test.
         n_perm : int, default 1000
@@ -676,17 +797,17 @@ class SSD:
         ------
         ValueError
             On 1-D ``y``, fewer than two outcomes, a constant outcome, an
-            invalid ``rotate`` / ``outcome_groups`` / ``k``, or when plskit
-            keeps fewer than ``k`` components (``k_used < k``).
+            invalid ``rotate`` / ``outcome_groups`` / ``ssd_gradients``, or
+            when plskit keeps fewer than ``ssd_gradients`` components.
         RuntimeError
             If no embeddings are attached.
         """
-        fit_args = {"k": k, "rotate": rotate, "outcome_groups": outcome_groups, "n_splits": n_splits,
+        fit_args = {"ssd_gradients": ssd_gradients, "rotate": rotate,
+                    "outcome_groups": outcome_groups, "n_splits": n_splits,
                     "n_perm": n_perm, "random_state": random_state}
         import plskit
 
-        from ssdiff.backends.pca_sweep import _RESTRICT_VOCAB
-        from ssdiff.backends.pls import pls3_rotate
+        from ssdiff.backends.pls import pls3_rotate, word_target
         from ssdiff.results.multi_pls_result import MultiPLSResult
 
         if self.y.ndim != 2 or self.y.shape[1] < 2:
@@ -738,65 +859,54 @@ class SSD:
                         )
                     grouped[name] = g
 
+        # One rotation target row per group plus one per ungrouped outcome.
+        n_rows = len(outcome_groups) + q - len(grouped) if outcome_groups else q
+        default_note = (" (the default: one per outcome, or per group with "
+                        "outcome_groups)" if ssd_gradients is None else "")
+        if ssd_gradients is None:
+            ssd_gradients = n_rows
         k_max = min(q, n_kept - 1, D)
-        if not isinstance(k, int) or not 1 <= k <= k_max:
+        if not isinstance(ssd_gradients, int) or not 1 <= ssd_gradients <= k_max:
             raise ValueError(
-                f"k must be an int in [1, {k_max}] (min(q, n - 1, D) = "
-                f"min({q}, {n_kept - 1}, {D})); got {k!r}"
+                f"ssd_gradients must be an int in [1, {k_max}] (min(q, n - 1, D) = "
+                f"min({q}, {n_kept - 1}, {D})); got {ssd_gradients!r}{default_note}"
             )
-        if rotate == "outcomes":
-            if k >= q:
-                raise ValueError(
-                    f"rotate='outcomes' needs k < q = {q}; got k={k}. At k = q "
-                    "varimax only permutes and flips the outcome axes."
-                )
-            n_rows = len(outcome_groups) + q - len(grouped) if outcome_groups else q
-            if k > n_rows:
-                raise ValueError(
-                    f"rotate='outcomes' needs k <= the number of rotation target "
-                    f"rows ({n_rows}: one per group plus one per ungrouped "
-                    f"outcome); got k={k}"
-                )
+        if ssd_gradients > n_rows:
+            raise ValueError(
+                f"rotate='outcomes' needs ssd_gradients <= the number of rotation "
+                f"target rows ({n_rows}: one per group plus one per ungrouped "
+                f"outcome); got ssd_gradients={ssd_gradients}"
+            )
 
         Xs, X_mean, X_scale = standardize(self.x)
         Ys, _, _ = standardize(self.y)
         try:
             m = plskit.pls3_fit(
-                Xs, Ys, k=k, pre_standardized_X=True, pre_standardized_Y=True,
+                Xs, Ys, k=ssd_gradients, pre_standardized_X=True, pre_standardized_Y=True,
             )
         except plskit.PlsKitError as exc:
-            raise ValueError(f"plskit.pls3_fit rejected k={k}: {exc}") from exc
-        if m.k_used < k:
             raise ValueError(
-                f"plskit.pls3_fit kept k_used={m.k_used} of k={k} components; "
-                f"the rest fall below its truncation floor (e.g. collinear "
-                f"outcomes). Refit with k <= {m.k_used}."
+                f"plskit.pls3_fit rejected ssd_gradients={ssd_gradients}: {exc}"
+            ) from exc
+        if m.k_used < ssd_gradients:
+            raise ValueError(
+                f"plskit.pls3_fit kept k_used={m.k_used} components of "
+                f"ssd_gradients={ssd_gradients}{default_note}; the rest fall below its truncation floor (e.g. collinear "
+                f"outcomes). Refit with ssd_gradients <= {m.k_used}."
             )
         U, V, sigma = m.U, m.V, m.singular_values  # (D, k), (q, k), (k,)
 
+        # rotate="outcomes" without groups leaves L=None: pls3_rotate targets V itself.
         L = None
         if rotate == "words":
-            emb = self.embeddings.vectors
-            emb_dtype = emb.dtype
-            X_mean_v = X_mean.astype(emb_dtype, copy=False)
-            scale_v = X_scale.astype(emb_dtype, copy=False)
-            n_rot = min(_RESTRICT_VOCAB, int(emb.shape[0]))
-            # Fold standardisation into the matmul instead of materialising a
-            # standardised (n_rot, D) copy of the vocabulary.
-            M = (U / scale_v[:, None]).astype(emb_dtype, copy=False)
-            L = emb[:n_rot] @ M
-            L -= X_mean_v @ M
-            L = L.astype(np.float64, copy=False)
-        elif rotate == "outcomes":
-            if outcome_groups is None:
-                L = V
-            else:
-                col = {name: j for j, name in enumerate(names)}
-                L = np.vstack(
-                    [V[[col[n] for n in members]].mean(axis=0)
-                     for members in outcome_groups.values()]
-                    + [V[j] for j, name in enumerate(names) if name not in grouped]
-                )
+            L = word_target(self.embeddings.vectors, U, X_mean, X_scale)
+        elif rotate == "outcomes" and outcome_groups is not None:
+            col = {name: j for j, name in enumerate(names)}
+            L = np.vstack(
+                [V[[col[n] for n in members]].mean(axis=0)
+                 for members in outcome_groups.values()]
+                + [V[j] for j, name in enumerate(names) if name not in grouped]
+            )
 
         rot = pls3_rotate(U, V, sigma, rotate=rotate, L=L)
         U_rot, V_rot = rot["U_rot"], rot["V_rot"]
@@ -919,7 +1029,9 @@ class SSD:
         -------
         PCAOLSResult
             ``.model`` is the glmm fit with the components: covariate
-            coefficients, random effects, ``.summary()``. ``beta`` is on the
+            coefficients, random effects, ``.summary()``. ``.covariates``
+            lists its covariate rows, with the components held fixed.
+            ``beta`` is on the
             standardized-y scale for a Gaussian identity-link fit, else on
             the link scale (e.g. log-odds). With a formula, ``r2`` is the
             whole model's R², covariates included; it is NaN for GLMs and
@@ -947,29 +1059,7 @@ class SSD:
                 "categorical labels — use fit_groups() instead."
             )
 
-        rhs = "1"
-        if formula is not None:
-            if self.data is None:
-                raise ValueError(
-                    "fit_regression() got a formula but this SSD has no data. "
-                    "Construct it with SSD(..., data=df)."
-                )
-            lhs, _, rhs = formula.rpartition("~")
-            lhs, rhs = lhs.strip(), rhs.strip() or "1"
-            if lhs not in ("", "y", self._y_name):
-                raise ValueError(
-                    f"The formula's left side is {lhs!r}, but the outcome is y"
-                    + (f" ({self._y_name!r})" if self._y_name else "")
-                    + ". Give the right side only, e.g. '~ age + (1 | ID)'."
-                )
-        if self.data is not None:
-            columns = self.data.columns if hasattr(self.data, "iloc") else self.data.keys()
-            clash = sorted(str(c) for c in columns if str(c).startswith("_ssd_"))
-            if clash:
-                raise ValueError(
-                    f"data columns {clash} start with '_ssd_', which fit_regression() "
-                    "reserves for its own columns. Rename them."
-                )
+        rhs = self._formula_rhs(formula, "fit_regression")
 
         ys = standardize(self.y.reshape(-1, 1))[0].ravel()
 
@@ -1012,25 +1102,25 @@ class SSD:
         z, components, _ = pca_fit_transform(Xs, max_comp)
 
         pcs = [f"_ssd_pca_{i}" for i in range(1, max_comp + 1)]
-        cols = {"_ssd_y": self.y, **{c: z[:, i] for i, c in enumerate(pcs)}}
-        if hasattr(self.data, "iloc"):
-            cols = self.data.assign(**cols)
-        elif self.data is not None:
-            cols = {**self.data, **cols}
+        cols = self._data_with(_ssd_y=self.y, **{c: z[:, i] for i, c in enumerate(pcs)})
         h0 = f"_ssd_y ~ {rhs}"
         h1 = h0 + " + " + " + ".join(pcs)
         cmp = glmm.compare(cols, h0, h1, family=family, link=link)
         fit = cmp.fit1
-        if fit.nobs != self.n_kept:
-            raise ValueError(
-                f"The formula's columns have missing values in "
-                f"{self.n_kept - fit.nobs} of the {self.n_kept} kept documents. "
-                "Fill or drop those rows before building the SSD."
-            )
+        self._check_nobs(fit)
 
         p_col = "Pr(>F)" if "Pr(>F)" in cmp.table else "Pr(>Chisq)"
         pvalue = float(cmp.table[p_col][1])
         test_name = "f_test" if p_col == "Pr(>F)" else "lrt"
+        f_test = test_name == "f_test"
+        test_info = {
+            "pvalue": pvalue,
+            "statistic": float(cmp.table["F" if f_test else "Chisq"][1]),
+            "df": int(cmp.table["Df"][1]),
+            "df_resid": int(cmp.table["Res.Df"][1]) if f_test else None,
+            # glmm reports r_squared for OLS only; NaN otherwise.
+            "r2_delta": float(cmp.fit1.r_squared - cmp.fit0.r_squared),
+        }
 
         names = list(fit.names)
         w_reg = np.array([fit.beta[names.index(c)] for c in pcs])
@@ -1054,6 +1144,7 @@ class SSD:
         kwargs["_y_mean"] = _y_mean
         kwargs["_y_scale"] = _y_scale
         kwargs["_x_mean"] = X_mean
+        kwargs["model"] = fit
 
         _sweep_rows = None
         if sweep_result is not None:
@@ -1084,10 +1175,11 @@ class SSD:
             },
             sweep=_sweep_rows,
             test_name=test_name,
-            test_info={"pvalue": pvalue},
+            test_info=test_info,
             **kwargs,
         )
-        result.model = fit
+        result._y_name = self._y_name
+        result._text_name = getattr(self.corpus, "name", None)
         result.fit_args = fit_args
         return result
 

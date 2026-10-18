@@ -55,9 +55,9 @@ class FitInfoView(ScalarView):
     _name = "fit_info"
     _columns = (
         "n_components", "pca_k", "p_at_k", "n_splits",
-        "split_mean_r", "random_state", "keep",
+        "split_mean_r", "random_state",
         "k_min", "k_max", "k_step", "best_k", "pca_k_source",
-        "formula", "family",
+        "formula", "family", "ssd_gradients", "rotate",
     )
 
     def __init__(self, info: FitInfo):
@@ -968,8 +968,8 @@ class DocsView(View[Doc]):
 
         ``direction`` selects the residual sign:
           * ``"both"``  — largest |residual| (default)
-          * ``"over"``  — model over-predicts (y_hat > y_true, residual < 0)
-          * ``"under"`` — model under-predicts (y_hat < y_true, residual > 0)
+          * ``"over"``  — model over-predicts (residual < 0)
+          * ``"under"`` — model under-predicts (residual > 0)
         """
         if direction == "both":
             rows = sorted(self._rows, key=lambda d: -abs(d.residual))[:k]
@@ -1128,6 +1128,40 @@ class SweepView(View[SweepRow]):
         return self._rows[i]
 
 
+# ---------- Covariates ----------
+@dataclass(frozen=True, slots=True)
+class CovariateRow:
+    """One fixed-effect coefficient of the formula, as in ``model.summary()``.
+
+    ``statistic`` is a t or z value, whichever the summary tests with;
+    ``ci_low`` / ``ci_high`` are the 95% bounds of ``model.confint()``.
+    """
+    term: str
+    estimate: float
+    se: float
+    statistic: float
+    p_value: float
+    ci_low: float
+    ci_high: float
+
+
+class CovariatesView(View[CovariateRow]):
+    _name = "covariates"
+    _columns = ("term", "estimate", "se", "statistic", "p_value", "ci_low", "ci_high")
+
+    def __init__(self, rows, *, _no_trunc: bool = False):
+        super().__init__(_no_trunc=_no_trunc)
+        self._rows = rows
+
+    def __iter__(self): return iter(self._rows)
+    def __len__(self): return len(self._rows)
+
+    def __getitem__(self, i):
+        if isinstance(i, slice):
+            return CovariatesView(self._rows[i], _no_trunc=True)
+        return self._rows[i]
+
+
 class PLSTestView(TestView):
     """`.test` for PLSResult — split_exact confirmatory test at the fitted k."""
 
@@ -1142,12 +1176,6 @@ class PLSTestView(TestView):
         """Dispatch to plskit and return ('split_exact', info_dict)."""
         import plskit
 
-        if self._parent.fit_info.keep is not None:
-            raise RuntimeError(
-                "sparse PLS p-values are computed by "
-                "spls1_find_k_sequence at fit time and cannot be rerun via "
-                ".test(); re-fit with a different n_splits/seed to change them."
-            )
         if name is not None and name != "split_exact":
             raise TypeError(
                 f"PLSTestView only supports method='split_exact' "
@@ -1157,9 +1185,11 @@ class PLSTestView(TestView):
         merged = {**self._DEFAULTS["split_exact"], **params}
         parent = self._parent
         n_comp = parent.fit_info.p_at_k or parent.fit_info.n_components or 1
+        # A fit with a formula is tested on its residualized x and y.
+        diag = parent._raw_diagnostics
         r = plskit.pls1_confirmatory_test(
-            parent.x.astype(float, copy=False),
-            parent.y.astype(float, copy=False),
+            diag.get("x_resid", parent.x).astype(float, copy=False),
+            diag.get("y_resid", parent.y).astype(float, copy=False),
             int(n_comp),
             test_method="split_exact",
             args={"n_splits": int(merged["n_splits"])},
@@ -1180,16 +1210,14 @@ class PLSTestView(TestView):
         """Propagate the updated p-value back to parent stats after a rerun."""
         self._parent._refresh_stats_pvalue(self.pvalue)
 
-    def _rerun_hint(self) -> str | None:
-        if self._parent.fit_info.keep is not None:
-            return None
+    def _rerun_hint(self) -> str:
         return "Rerun: .test(n_splits=..., seed=...)"
 
 
 class PCAOLSTestView(TestView):
     """`.test` for PCAOLSResult — the fit's own test: ``"f_test"`` or ``"lrt"``."""
 
-    _columns = ("name", "pvalue")
+    _columns = ("name", "pvalue", "statistic", "df", "df_resid", "r2_delta")
     _default_name = "f_test"
 
     def _run(self, name, params):
@@ -1199,8 +1227,8 @@ class PCAOLSTestView(TestView):
                 f"Unknown test {name!r} for this fit. Available: ({self._test_name!r},)"
             )
         # The test is analytic and computed at fit. Rerun is a no-op;
-        # we return the current stored value so repeated calls stay consistent.
-        return name, {"pvalue": self.pvalue}
+        # we return the current stored values so repeated calls stay consistent.
+        return name, dict(self._info)
 
     def _on_rerun(self):
         # No state to refresh — pvalue is unchanged.
@@ -1255,6 +1283,8 @@ class ContinuousResult(_SingleResult):
         use_full_doc: bool = False,
         fit_info: FitInfo | dict | None = None,
         raw_diagnostics: dict | None = None,
+        model=None,
+        residuals: np.ndarray | None = None,
     ):
         """Construct a continuous result from backend outputs.
 
@@ -1312,6 +1342,14 @@ class ContinuousResult(_SingleResult):
         raw_diagnostics : dict or None
             Backend-specific extra outputs (PLS X-scores, PCA components, etc.)
             forwarded to the subclass.
+        model : glmm.Fit or None
+            The glmm fit of y on the formula and the text. When given,
+            ``docs.residual`` is its response residual, so the covariates
+            are taken out of it.
+        residuals : ndarray of shape (n,) or None
+            ``docs.residual``, in y's units, when the backend computes it
+            itself; takes precedence over ``model``. ``None`` gives
+            ``y − y_hat``, or ``model``'s residual when a model is given.
         """
         super().__init__(
             x=x, beta=beta,
@@ -1333,8 +1371,10 @@ class ContinuousResult(_SingleResult):
         self.fit_info = FitInfoView(fit_info)
         self._raw_diagnostics = dict(raw_diagnostics or {})
 
-        y_mean = float(_y_mean[0])
-        y_std = float(_y_scale[0])
+        # Stats describes the input y. The effect sizes stay in _y_scale, the
+        # unit beta was fit in: the residualized y's SD after fit_pls(formula),
+        # 1 on a non-Gaussian link scale.
+        y_scale = float(_y_scale[0])
         x_norms = np.sqrt(np.einsum("ij,ij->i", x, x))[:, None]
         x_norms = np.maximum(x_norms, 1e-12)
         cos_align = ((x / x_norms) @ self.gradient).ravel()
@@ -1345,20 +1385,22 @@ class ContinuousResult(_SingleResult):
         corr = float(np.corrcoef(y, yhat_std)[0, 1]) if denom > 0 else 0.0
         if not np.isfinite(corr):
             corr = 0.0
-        delta = 0.10 * self.beta_norm * y_std
+        delta = 0.10 * self.beta_norm * y_scale
         q75, q25 = np.percentile(cos_align, [75, 25])
-        iqr_effect = float(q75 - q25) * self.beta_norm * y_std
+        iqr_effect = float(q75 - q25) * self.beta_norm * y_scale
 
         stats_row = Stats(
             backend=backend, r2=r2, r2_adj=r2_adj, pvalue=pvalue,
             n_raw=n_raw, n_kept=n_kept, n_dropped=n_dropped,
-            y_mean=y_mean, y_std=y_std, beta_norm=self.beta_norm,
+            y_mean=float(np.mean(y)), y_std=float(np.std(y)), beta_norm=self.beta_norm,
             delta=delta, iqr_effect=iqr_effect, y_corr_pred=abs(corr),
         )
         self.stats = self._stats_view_cls(stats_row)
 
         keep_idx = np.where(keep_mask)[0] if keep_mask is not None else np.arange(len(y))
-        residuals = y - yhat_raw
+        self.model = model
+        if residuals is None:
+            residuals = y - yhat_raw if model is None else np.asarray(model.residuals(), dtype=float)
         self.docs = DocsView(
             [
                 Doc(doc_id=int(keep_idx[i]),
@@ -1385,6 +1427,102 @@ class ContinuousResult(_SingleResult):
             return
         new_stats = _replace(self.stats._stats, pvalue=float(new_pvalue))
         self.stats = self._stats_view_cls(new_stats)
+
+    @property
+    def covariates(self) -> CovariatesView:
+        """The formula's coefficients in ``model``, with the text held fixed.
+
+        One row per coefficient (a factor gives one per level after the
+        first), on y's scale, or on the link scale for a non-Gaussian
+        ``fit_regression`` model. The text's own rows (``_ssd_*``) are left
+        out: ``test`` tests the text. Empty without a formula.
+        """
+        if self.model is None or self.fit_info.formula is None:
+            return CovariatesView([])
+        s = self.model.summary_object()
+        ci = self.model.confint()
+        return CovariatesView([
+            CovariateRow(
+                term=term, estimate=float(s.estimate[i]), se=float(s.std_error[i]),
+                statistic=float(s.statistic[i]), p_value=float(s.p_value[i]),
+                ci_low=float(ci[i, 0]), ci_high=float(ci[i, 1]),
+            )
+            for i, term in enumerate(s.coef_names) if not term.startswith("_ssd_")
+        ])
+
+    def summary(self) -> str:
+        """Print the compact model summary and return it as text.
+
+        glmm's summary of ``model`` without the text's own rows (``_ssd_*``)
+        in the fixed effects and their correlations, with an SSD effects
+        row for the text's test below the fixed-effects rows. The other
+        blocks (fit criteria, residuals, random effects, R²) describe the
+        full model, text included. ``model.summary()`` prints the full glmm
+        summary. Without a model (``fit_pls``), a header and the Text block
+        only.
+        """
+        if self.model is None:
+            text = (f"{self.stats.backend} fit [ssdiff]\nNumber of obs: {self.stats.n_kept}"
+                    "\n\n" + self._text_block())
+        else:
+            from glmm.summary import stars
+
+            s = self._model_summary_without_text()
+            lines = s.text().rstrip("\n").split("\n")
+            # Column widths and the closing "---" mirror the fixed-effects
+            # table of glmm's Summary.text() (glmm 0.6.0) - change together.
+            # The label column also fits the text's own label.
+            label = self._text_name or "text"
+            name_w = max(12, len(label), max((len(n) for n in s.coef_names), default=4))
+            widths = [12, 12] + ([10] if s.coef_df is not None else []) + [10, 10]
+            blank = [""] * (len(widths) - 2)
+            r2_label, r2, p = self._effect_cells()
+            header = [r2_label, *blank, "p"]
+            row = [r2, *blank, "not run" if p is None else fmt_p(p)]
+            end = lines.index("---")
+            lines[end:end] = [
+                "",
+                "SSD effects:",
+                f"{'':<{name_w}} " + " ".join(f"{h:>{w}}" for h, w in zip(header, widths)),
+                f"{label:<{name_w}} "
+                + " ".join(f"{c:>{w}}" for c, w in zip(row, widths))
+                + ("" if p is None else f" {stars(p)}"),
+            ]
+            text = "\n".join(lines)
+        print(text)
+        return text
+
+    def _model_summary_without_text(self):
+        """``model.summary_object()`` without the ``_ssd_*`` coefficients.
+
+        Relies on the field names of glmm's ``Summary`` dataclass (glmm 0.6.0).
+        """
+        import re
+        from dataclasses import replace
+
+        s = self.model.summary_object()
+        keep = np.array([not n.startswith("_ssd_") for n in s.coef_names])
+        idx = np.flatnonzero(keep)
+        aliased = np.asarray(s.aliased)[keep]
+        corr = None
+        if s.corr_fixed is not None and len(idx) >= 2:
+            corr = np.asarray(s.corr_fixed)[np.ix_(idx, idx)]
+        # The _ssd_* terms come last in the formula fit_regression builds.
+        rhs = re.sub(r"\s*\+\s*_ssd_\w+", "", s.formula.split("~", 1)[1])
+        formula = f"{self._y_name or 'y'} ~{rhs} + {self._text_name or 'text'}"
+        return replace(
+            s,
+            formula=formula,
+            coef_names=[s.coef_names[i] for i in idx],
+            estimate=np.asarray(s.estimate)[keep],
+            std_error=np.asarray(s.std_error)[keep],
+            statistic=np.asarray(s.statistic)[keep],
+            p_value=np.asarray(s.p_value)[keep],
+            aliased=aliased,
+            coef_df=None if s.coef_df is None else np.asarray(s.coef_df)[keep],
+            corr_fixed=corr,
+            n_aliased=int(aliased.sum()),
+        )
 
     def _predict_x(self, x: np.ndarray) -> np.ndarray:
         """Outcome, in original units, for document vectors *x* of shape (n, D)."""
@@ -1423,18 +1561,19 @@ class ContinuousResult(_SingleResult):
         ValueError
             A ``Corpus`` tokenized for other embeddings.
         NotImplementedError
-            A ``fit_regression`` fit with a formula or a model other than
-            Gaussian identity-link. Its prediction needs the covariates and
-            random effects of the new documents, or the model's intercept
-            and inverse link, which the result does not apply.
+            A fit with a formula, or a ``fit_regression`` fit with a model
+            other than Gaussian identity-link. Its prediction needs the
+            covariates and random effects of the new documents, or the
+            model's intercept and inverse link, which the result does not
+            apply.
         """
         from ssdiff.corpus import Corpus, _check_tokenizer
         from ssdiff.utils.vectors import build_and_normalize_doc_vectors
 
-        if self.stats.backend == "PCA+GLMM":
+        if self.stats.backend == "PCA+GLMM" or self.fit_info.formula is not None:
             raise NotImplementedError(
-                "predict() works only for fit_regression() without a formula and "
-                "with the Gaussian family; this fit used a formula or another family."
+                "predict() works only for fits without a formula, and for "
+                "fit_regression() only with the Gaussian family."
             )
         self._require_resource("embeddings", "predict()")
         if isinstance(texts, Corpus):
@@ -1460,8 +1599,13 @@ class ContinuousResult(_SingleResult):
             out[keep] = self._predict_x(X)
         return out
 
+    model = None
+    # The column names y and the texts were given as; the compact summary shows them.
+    _y_name = None
+    _text_name = None
     _access = (
         "stats", "fit_info", "words", "clusters", "snippets", "docs", "test",
+        "summary()",
         "report()", "save_page(...)", "test(...)", "predict(...)", "attach(...)",
     )
     _arrays = ("x", "y", "beta", "gradient", "alignment_scores")
@@ -1562,6 +1706,10 @@ class ContinuousResult(_SingleResult):
             fit_rows.append(("pca_k_source", fi.pca_k_source))
         if fi.random_state is not None:
             fit_rows.append(("random_state", fi.random_state))
+        if fi.ssd_gradients is not None:
+            fit_rows.append(("ssd_gradients", fi.ssd_gradients))
+        if fi.rotate is not None:
+            fit_rows.append(("rotate", fi.rotate))
         if fit_rows:
             sections.append(Section(title="Fit info", kind="kv", rows=fit_rows))
 
@@ -1692,6 +1840,10 @@ class PLSResult(ContinuousResult):
     cv_scores : dict | None
         Flat ``{k: cv_score}`` dict — convenience copy of
         ``find_k_result.cv_scores`` (None when ``k`` was an int).
+    pls_info : PLSInfoView | None
+        Rotation diagnostics of the gradients of ``fit_pls(ssd_gradients=N)``
+        with N > 1; ``None`` for one gradient. The gradients themselves are
+        the leaves ``result["dim-1"]`` … ``result["dim-N"]``.
     """
 
     _arrays = (
@@ -1700,7 +1852,7 @@ class PLSResult(ContinuousResult):
     )
 
     def __init__(self, *, test_name: str | None = None,
-                 test_info: dict | None = None, **kw):
+                 test_info: dict | None = None, dims: dict | None = None, **kw):
         """Construct a PLS result, pulling extra PLS diagnostics from ``raw_diagnostics``.
 
         Parameters
@@ -1709,14 +1861,43 @@ class PLSResult(ContinuousResult):
             Name of the initial test (if one was run at fit time).
         test_info : dict or None
             Info dict from the initial test run (must contain ``"pvalue"``).
+        dims : dict or None
+            The rotated gradients of ``fit_pls(ssd_gradients=N)``, N > 1:
+            ``"beta"`` (D, N) in raw doc-vector space, ``"score_corr"`` and
+            ``"cov_share"`` (N,), and ``"rotate"``, ``"order"``, ``"signs"``,
+            ``"rotation_meta"`` as in ``PLSInfoView``. ``None`` for one gradient.
         **kw
             All remaining arguments forwarded to ``ContinuousResult.__init__``.
         """
+        from ssdiff.results.multi_pls_result import (
+            PLSComponentStatsView,
+            PLSInfoView,
+            _PLSComponentResult,
+        )
+
         kw.setdefault("backend", "PLS")
         super().__init__(**kw)
         self.test = PLSTestView(
             parent=self, name=test_name, info=test_info,
         )
+        self.pls_info = None
+        self._leaves = {}
+        if dims is not None:
+            n_dims = dims["beta"].shape[1]
+            self.pls_info = PLSInfoView(
+                ssd_gradients=n_dims, rotate=dims["rotate"], order=dims["order"],
+                signs=dims["signs"], rotation_meta=dims["rotation_meta"],
+                random_state=self.fit_info.random_state,
+            )
+            for i in range(n_dims):
+                key = f"dim-{i + 1}"
+                self._leaves[key] = _PLSComponentResult(
+                    container=self, key=key, beta=dims["beta"][:, i],
+                    stats=PLSComponentStatsView(
+                        cov_share=dims["cov_share"][i], score_corr=dims["score_corr"][i],
+                    ),
+                )
+            self._access = (*self._access[:2], "pls_info", *self._access[2:], "keys()")
         raw = self._raw_diagnostics
         self.find_k_result = raw.get("find_k_result")
         self.cv_scores = (
@@ -1728,6 +1909,70 @@ class PLSResult(ContinuousResult):
         self.n_components = int(self.fit_info.n_components or 0)
         self.component_scores = raw.get("component_scores")
         self.component_weights = raw.get("component_weights")
+
+    # ------ gradient leaves (fit_pls(ssd_gradients=N), N > 1) ------------
+    def __getitem__(self, key):
+        return self._leaves[key]
+
+    def keys(self) -> list:
+        return list(self._leaves.keys())
+
+    def attach(self, corpus=None, embeddings=None):
+        """``Result.attach``, then the same corpus and embeddings on every gradient leaf."""
+        super().attach(corpus=corpus, embeddings=embeddings)
+        for leaf in self._leaves.values():
+            leaf.corpus = self.corpus
+            leaf.embeddings = self.embeddings
+        return self
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        # A pickle of an older PLSResult has neither attribute.
+        self.__dict__.setdefault("_leaves", {})
+        self.__dict__.setdefault("pls_info", None)
+        for leaf in self._leaves.values():
+            leaf._container = self
+
+    def _key_repr(self, key: str) -> str:
+        from ssdiff.results.multi_pls_result import _dim_label
+        return _dim_label(key)
+
+    def _access_hint(self) -> str:
+        hint = super()._access_hint()
+        if not self._leaves:
+            return hint
+        return hint + "\n  dims:    " + "  ".join(f"[{k!r}]" for k in self._leaves)
+
+    def report(self, *, clusters=True, top_words=True, extreme_docs=True,
+               misdiagnosed=True) -> Report:
+        """``ContinuousResult.report``; with gradient leaves, their rotation, stats and words follow.
+
+        ``top_words`` also sets the words listed per dimension.
+        """
+        from ssdiff.results.multi_pls_result import _dimension_sections
+
+        rep = super().report(clusters=clusters, top_words=top_words,
+                             extreme_docs=extreme_docs, misdiagnosed=misdiagnosed)
+        if self._leaves:
+            tw = _resolve_section(top_words, {"n": 5}, name="top_words")
+            rep.sections += _dimension_sections(self, tw["n"] if tw else None)
+        return rep
+
+    def _text_block(self) -> str:
+        fi, t = self.fit_info, self.test
+        formula = fi.formula is not None
+        head = f"PLS, k = {fi.n_components}" + (" (on the residuals of the formula)" if formula else "")
+        if t.pvalue is None:
+            test = "test not run"
+        else:
+            at_k = f", k = {fi.p_at_k}" if fi.p_at_k not in (None, fi.n_components) else ""
+            test = f"split-half permutation test ({t.name}{at_k}): p = {fmt_p(t.pvalue)}"
+        r2 = f"{'partial R²' if formula else 'R²'} = {fmt_r(self.stats.r2, digits=3)}"
+        return f"Text:  {head}\n       {test}\n       {r2}"
+
+    def _effect_cells(self) -> tuple[str, str, float | None]:
+        """R² label, R² and p of the text for the SSD effects row of ``summary()``."""
+        return "partial R²", fmt_r(self.stats.r2, digits=3), self.test.pvalue
 
 
 # ---------- PCAOLSResult ----------
@@ -1754,11 +1999,10 @@ class PCAOLSResult(ContinuousResult):
         ``β = V_K w_K / x_scale``.
     """
 
-    model = None
     _stats_view_cls = OLSStatsView
     _access = (
         "stats", "fit_info", "words", "clusters", "snippets", "docs", "sweep",
-        "test", "model", "report()", "save_page(...)", "test(...)", "predict(...)", "attach(...)",
+        "test", "covariates", "model", "summary()", "report()", "save_page(...)", "test(...)", "predict(...)", "attach(...)",
     )
     _arrays = (
         "x", "y", "beta", "gradient", "alignment_scores",
@@ -1814,6 +2058,19 @@ class PCAOLSResult(ContinuousResult):
         self.test = PCAOLSTestView(
             parent=self, name=test_name or "f_test", info=default_info,
         )
+
+    def _text_block(self) -> str:
+        t = self.test
+        test = "test not run" if t.pvalue is None else f"{t.name}: p = {fmt_p(t.pvalue)}"
+        return (f"Text:  PCA+OLS, K = {self.fit_info.n_components}\n       {test}\n"
+                f"       R² = {fmt_r(self.stats.r2, digits=3)}")
+
+    def _effect_cells(self) -> tuple[str, str, float | None]:
+        """R² label, R² and p of the text for the SSD effects row of ``summary()``."""
+        r2_delta = self.test.params.get("r2_delta")
+        if r2_delta is None or not np.isfinite(r2_delta):
+            return "", "", self.test.pvalue
+        return "ΔR²", fmt_r(r2_delta, digits=3), self.test.pvalue
 
     def _save_hint(self) -> str:
         return (

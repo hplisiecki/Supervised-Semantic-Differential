@@ -59,6 +59,16 @@ print("\n══════ PLS, k=2 (fixed) ══════")
 pls_k2 = ssd.fit_pls(k=2, verbose=True)
 show("pls_k2.stats", pls_k2.stats)
 
+print("\n══════ PLS, ssd_gradients=3 (three rotated gradients) ══════")
+# The standard fit (p-value, beta, r2) is the same as pls above; the result
+# also holds three word-rotated gradients from a k=3 PLS1 fit.
+pls_g3 = ssd.fit_pls(ssd_gradients=3, verbose=True)
+show("pls_g3", pls_g3)
+show("pls_g3.pls_info", pls_g3.pls_info)
+for key in pls_g3.keys():
+    show(f'pls_g3["{key}"].stats', pls_g3[key].stats)
+    show(f'pls_g3["{key}"].words', pls_g3[key].words)
+
 print("\n══════ Rerun split-half test ══════")
 pls.test(n_splits=30)
 show("pls.test", pls.test)

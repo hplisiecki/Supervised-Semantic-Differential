@@ -7,6 +7,7 @@ Mathematical logic is identical.
 """
 from __future__ import annotations
 
+import sys
 from collections.abc import Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
@@ -261,6 +262,11 @@ class _DL_proxy(_DocLike):
 
 
 # ---------- parallel driver ----------
+def _serial(n_jobs) -> bool:
+    """Whether to run without a thread pool: asked for one job, or under Pyodide, which cannot start threads."""
+    return n_jobs == 1 or sys.platform == "emscripten"
+
+
 def _precompute_all_docs(
     pre_docs: list[PreprocessedDoc],
     embeddings,
@@ -274,6 +280,12 @@ def _precompute_all_docs(
     Returns list of per-doc dicts with precomputed arrays.
     """
     doclikes = list(_iter_doclikes(pre_docs))
+    if _serial(n_jobs):
+        results = [
+            _precompute_doc_arrays(embeddings, D, sif_a, global_wc, total_tokens)
+            for D in doclikes
+        ]
+        return [r for r in results if r.get("N", 0) > 0]
     # Threaded precompute (BLAS inside get_vector won't block; read-only embeddings is safe)
     results: list[dict[str, Any] | None] = [None] * len(doclikes)
     with ThreadPoolExecutor(
@@ -303,6 +315,8 @@ def _parallel_collect(
 
     iterator = _progress(items, verbose=verbose, total=len(items), desc=desc)
 
+    if _serial(n_jobs):
+        return [r for item in iterator if (r := worker(item)) is not None]
     with ThreadPoolExecutor(
         max_workers=(None if n_jobs in (-1, 0, None) else int(n_jobs))
     ) as ex:

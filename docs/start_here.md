@@ -53,7 +53,7 @@ ssd    = SSD(emb, corpus, y=scores, lexicon=["happy", "sad", "joy"])
 result = ssd.fit_regression()   # PCA regression, F-test p-value
 # result = ssd.fit_pls()        # PLS with split-half test
 # result = ssd.fit_groups()     # categorical outcome, permutation test
-# result = ssd.fit_multipls(k=2)  # several outcomes (y as a DataFrame), PLS3
+# result = ssd.fit_multipls()   # several outcomes (y as a DataFrame), PLS3
 
 print(result.stats)             # headline r², p, n_kept, iqr_effect
 print(result.words.pos)         # top 20 β-pos neighbors

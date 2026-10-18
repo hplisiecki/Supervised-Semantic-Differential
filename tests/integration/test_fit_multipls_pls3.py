@@ -51,7 +51,7 @@ def planted(tiny_kv_large, lexicon):
 def fits(planted):
     ssd = planted["ssd"]
     return {
-        mode: ssd.fit_multipls(k=2, rotate=mode, n_perm=99, n_splits=10)
+        mode: ssd.fit_multipls(ssd_gradients=2, rotate=mode, n_perm=99, n_splits=10)
         for mode in MODES
     }
 
@@ -101,7 +101,7 @@ def test_cov_share(fits, planted, mode):
 
 def test_outcome_groups_rows(planted):
     res = planted["ssd"].fit_multipls(
-        k=2, rotate="outcomes", outcome_groups={"g1": ["y1", "y2"]},
+        ssd_gradients=2, rotate="outcomes", outcome_groups={"g1": ["y1", "y2"]},
         n_perm=19, n_splits=5,
     )
     rows = list(res["dim-1"].outcomes)
@@ -123,29 +123,28 @@ def test_guard_1d_y(planted):
     y = planted["make"](planted["Y"][:, :1]).ravel()
     ssd = SSD(planted["emb"], planted["corpus"], y, planted["lexicon"])
     with pytest.raises(ValueError, match="fit_pls"):
-        ssd.fit_multipls(k=1)
+        ssd.fit_multipls(ssd_gradients=1)
 
 
 def test_guard_single_column_2d_y(planted):
     with pytest.raises(ValueError, match="fit_pls"):
-        _ssd_with(planted, planted["Y"][:, :1]).fit_multipls(k=1)
+        _ssd_with(planted, planted["Y"][:, :1]).fit_multipls(ssd_gradients=1)
 
 
 @pytest.mark.parametrize("kwargs, match", [
-    (dict(k=0), r"\[1, 4\]"),
-    (dict(k=5), r"\[1, 4\]"),
-    (dict(k=4, rotate="outcomes"), "k < q"),
-    (dict(k=3, rotate="outcomes",
+    (dict(ssd_gradients=0), r"\[1, 4\]"),
+    (dict(ssd_gradients=5), r"\[1, 4\]"),
+    (dict(ssd_gradients=3, rotate="outcomes",
           outcome_groups={"a": ["y1", "y2"], "b": ["y3", "y4"]}), "target rows"),
-    (dict(k=2, outcome_groups={"a": ["y1", "y2"]}), "requires rotate='outcomes'"),
-    (dict(k=2, rotate="words", outcome_groups={"a": ["y1", "y2"]}),
+    (dict(ssd_gradients=2, outcome_groups={"a": ["y1", "y2"]}), "requires rotate='outcomes'"),
+    (dict(ssd_gradients=2, rotate="words", outcome_groups={"a": ["y1", "y2"]}),
      "requires rotate='outcomes'"),
-    (dict(k=2, rotate="outcomes", outcome_groups={"a": ["y1", "nope"]}),
+    (dict(ssd_gradients=2, rotate="outcomes", outcome_groups={"a": ["y1", "nope"]}),
      "unknown outcome"),
-    (dict(k=2, rotate="outcomes", outcome_groups={"a": ["y1"], "b": ["y1", "y2"]}),
+    (dict(ssd_gradients=2, rotate="outcomes", outcome_groups={"a": ["y1"], "b": ["y1", "y2"]}),
      "two groups"),
-    (dict(k=2, rotate="outcomes", outcome_groups={"a": []}), "empty"),
-    (dict(k=2, rotate="varimax"), "rotate must be"),
+    (dict(ssd_gradients=2, rotate="outcomes", outcome_groups={"a": []}), "empty"),
+    (dict(ssd_gradients=2, rotate="varimax"), "rotate must be"),
 ])
 def test_guards_value_error(planted, kwargs, match):
     with pytest.raises(ValueError, match=match):
@@ -156,26 +155,39 @@ def test_guard_constant_column(planted):
     Y = planted["Y"].copy()
     Y[:, 2] = 3.0
     with pytest.raises(ValueError, match="y3"):
-        _ssd_with(planted, Y).fit_multipls(k=2)
+        _ssd_with(planted, Y).fit_multipls(ssd_gradients=2)
 
 
-def test_guard_k_required(planted):
-    with pytest.raises(TypeError):
-        planted["ssd"].fit_multipls()
+def test_default_ssd_gradients(planted):
+    res = planted["ssd"].fit_multipls(n_perm=19, n_splits=5)
+    assert res.keys() == ["dim-1", "dim-2", "dim-3", "dim-4"]
+    # With groups the default is the number of rotation target rows: g1 + y3 + y4.
+    grouped = planted["ssd"].fit_multipls(
+        rotate="outcomes", outcome_groups={"g1": ["y1", "y2"]}, n_perm=19, n_splits=5,
+    )
+    assert len(grouped.keys()) == 3
+
+
+def test_outcomes_rotation_at_q_loads_each_dim_on_one_outcome(planted):
+    V_rot = planted["ssd"].fit_multipls(rotate="outcomes", n_perm=19, n_splits=5).V_rot
+    # A signed permutation of the identity: one ±1 per column, in distinct rows.
+    np.testing.assert_allclose(np.abs(V_rot).max(axis=0), 1.0, atol=1e-10)
+    np.testing.assert_allclose(np.abs(V_rot).sum(axis=0), 1.0, atol=1e-10)
+    assert sorted(np.argmax(np.abs(V_rot), axis=0)) == [0, 1, 2, 3]
 
 
 def test_guard_no_embeddings(planted):
     ssd = copy.copy(planted["ssd"])
     ssd.embeddings = None
     with pytest.raises(RuntimeError):
-        ssd.fit_multipls(k=2)
+        ssd.fit_multipls(ssd_gradients=2)
 
 
 def test_guard_k_used_below_k(planted):
     Y = planted["Y"]
     Y5 = np.column_stack([Y, Y[:, 0] + Y[:, 2]])
     with pytest.raises(ValueError, match="k_used"):
-        _ssd_with(planted, Y5).fit_multipls(k=5)
+        _ssd_with(planted, Y5).fit_multipls(ssd_gradients=5)
 
 
 # ---------------------------------------------------------------------------
@@ -185,7 +197,7 @@ def test_guard_k_used_below_k(planted):
 def test_outcome_scale_invariance(planted, fits):
     Y2 = planted["Y"].copy()
     Y2[:, 0] *= 1000
-    res = _ssd_with(planted, Y2).fit_multipls(k=2, n_perm=99, n_splits=10)
+    res = _ssd_with(planted, Y2).fit_multipls(ssd_gradients=2, n_perm=99, n_splits=10)
     ref = fits[None]
     assert res.stats.cov_explained == pytest.approx(ref.stats.cov_explained, rel=1e-6)
     np.testing.assert_allclose(np.abs(res.U_rot), np.abs(ref.U_rot), rtol=1e-6)
@@ -197,7 +209,7 @@ def test_dataframe_integer_column_names(planted):
     ssd = SSD(planted["emb"], planted["corpus"], df, planted["lexicon"])
     assert ssd.outcome_names == ["0", "1", "2", "3"]
     res = ssd.fit_multipls(
-        k=2, rotate="outcomes", outcome_groups={"g": ["0", "1"]},
+        ssd_gradients=2, rotate="outcomes", outcome_groups={"g": ["0", "1"]},
         n_perm=19, n_splits=5,
     )
     assert "0" in [r.outcome for r in res["dim-1"].outcomes]
@@ -208,12 +220,12 @@ def test_nan_outcome_row_dropped(planted):
     assert np.isfinite(Y_full[3]).all()
     Y_full[3, 1] = np.nan
     ssd = SSD(planted["emb"], planted["corpus"], Y_full, planted["lexicon"])
-    res = ssd.fit_multipls(k=2, n_perm=19, n_splits=5)
+    res = ssd.fit_multipls(ssd_gradients=2, n_perm=19, n_splits=5)
     assert res.stats.n == planted["ssd"].n_kept - 1
 
 
 def test_test_rerun_updates_pvalue(planted):
-    res = planted["ssd"].fit_multipls(k=2, n_perm=19, n_splits=5)
+    res = planted["ssd"].fit_multipls(ssd_gradients=2, n_perm=19, n_splits=5)
     res.test(n_splits=5, n_perm=49, seed=1)
     assert res.test.name == "split_exact"
     assert res.test.n_perm == 49
@@ -234,5 +246,5 @@ def test_words_rotation_on_a_partial_wordpack(wordpack_path, monkeypatch):
     ]
     corpus = Corpus(docs, lang="en", pretokenized=True)
     ssd = SSD(emb, corpus, rng.normal(size=(60, 3)), lexicon=set(seeds))
-    res = ssd.fit_multipls(k=2, rotate="words", n_perm=19, n_splits=5)
+    res = ssd.fit_multipls(ssd_gradients=2, rotate="words", n_perm=19, n_splits=5)
     assert res.U_rot.shape == (16, 2)

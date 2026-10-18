@@ -125,17 +125,6 @@ dl.kv dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywher
 .chip { background: var(--bg); border: 1px solid var(--border-2); border-radius: var(--r); padding: 0 6px; }
 .link { background: none; border: 0; color: var(--accent); padding: 0; text-decoration: underline; }
 
-/* dialog */
-.overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 50; display: flex; align-items: center; justify-content: center; padding: max(16px, env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) max(16px, env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px)); }
-.dialog { background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r); width: min(760px, 100%); max-height: 100%; display: flex; flex-direction: column; }
-.dialog header { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border-2); }
-.dialog header h2 { margin: 0; font-size: 15px; flex: 1; }
-.dialog .body { padding: 12px 14px; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
-.dialog pre { background: var(--bg); border-radius: var(--r); padding: 10px; margin: 0; font: 12px/1.45 var(--mono); overflow: auto; max-height: 50vh; white-space: pre; }
-.dialog footer { display: flex; gap: 8px; justify-content: flex-end; padding: 10px 14px; border-top: 1px solid var(--border-2); flex-wrap: wrap; }
-.guide h4 { margin: 4px 0; font-size: 13px; }
-.guide p { margin: 0; color: var(--fg-2); }
-.guide code { font-family: var(--mono); font-size: 12px; }
 .err { padding: 24px; font-size: 15px; }
 </style>
 </head>
@@ -412,6 +401,16 @@ const REPORT_FORMAT = 1;
 const { h, render, createContext } = preact;
 const { useState, useMemo, useContext, useEffect, useRef } = preactHooks;
 const html = htm.bind(h);
+// The browser app shows this page in a frame with data-embedded on <html>. It puts
+// the report's Export button in its own toolbar and calls window.ssdReport.export.
+const EMBEDDED = document.documentElement.hasAttribute("data-embedded");
+const REPORT_EXTS = ["html", "md", "txt", "tex", "json"];
+// The page as loaded, before rendering: the .html export writes this file again.
+const PAGE = (() => {
+  const root = document.documentElement.cloneNode(true);
+  root.removeAttribute("data-embedded");
+  return "<!doctype html>\n" + root.outerHTML;
+})();
 
 // ---------------------------------------------------------------- formatting
 const MINUS = "\u2212", DASH = "\u2014";
@@ -557,7 +556,7 @@ function ExportMenu({ spec, report }) {
     document.addEventListener("keydown", esc);
     return () => { document.removeEventListener("mousedown", close); document.removeEventListener("keydown", esc); };
   }, [open]);
-  const exts = report ? ["md", "txt", "tex", "json"] : ["csv", "json", "md", "txt", "tex"];
+  const exts = report ? REPORT_EXTS : ["csv", "json", "md", "txt", "tex"];
   const pick = ext => {
     setOpen(false);
     download(report ? reportFile(store, ext) : tableFile(spec, store.views[spec.id] || DEFAULT_VIEW, ext));
@@ -570,8 +569,6 @@ function ExportMenu({ spec, report }) {
       ${exts.map((ext, i) => html`
         ${!report && i === 2 ? html`<hr /><div class="hint">As shown on screen</div>` : null}
         <button role="menuitem" onClick=${() => pick(ext)}>.${ext}</button>`)}
-      <hr />
-      <button role="menuitem" onClick=${() => { setOpen(false); store.showGuide(report ? null : spec); }}>Other formats\u2026</button>
     </div>` : null}
   </div>`;
 }
@@ -593,44 +590,6 @@ function download(file) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-function Dialog({ title, onClose, children }) {
-  useEffect(() => {
-    const esc = e => { if (e.key === "Escape") onClose(); };
-    document.addEventListener("keydown", esc);
-    return () => document.removeEventListener("keydown", esc);
-  }, []);
-  return html`<div class="overlay" onClick=${e => { if (e.target === e.currentTarget) onClose(); }}>
-    <div class="dialog" role="dialog" aria-modal="true" aria-label=${title}>
-      <header><h2>${title}</h2><button class="btn small" onClick=${onClose} aria-label="Close">\u2715</button></header>
-      ${children}
-    </div>
-  </div>`;
-}
-
-// Code shown for formats the page does not write, in the language that made the file.
-function GuideDialog({ data, spec, onClose }) {
-  const lang = data.software.language;
-  const py = spec && spec.py;
-  return html`<${Dialog} title="Other formats" onClose=${onClose}>
-    <div class="body guide">
-      <p>This page writes .csv, .json, .md, .txt and .tex. For other formats, use the package that made this file, or convert one of those files.</p>
-      ${lang === "python" ? html`
-        <h4>Word and Excel, from Python</h4>
-        ${py ? html`<pre>${`${py}.save("${spec.file}.xlsx")\n${py}.save("${spec.file}.docx")`}</pre>` : null}
-        <pre>${`result.report().save("ssd_report.docx")   # whole report; also .html .tex .json .md .txt`}</pre>
-        <p>Every table on this page is a view of the result object, and every view's <code>.save()</code> picks the format from the file extension: .csv .json .xlsx .md .txt .html .tex .docx.</p>
-      ` : null}
-      <h4>PDF</h4>
-      <p>Open this file in a browser and print it to PDF, or convert a .md export: <code>pandoc ssd_report.md -o ssd_report.pdf</code> (needs a LaTeX installation).</p>
-      <h4>Spreadsheets without Python</h4>
-      <p>Excel, LibreOffice and Google Sheets open the .csv export directly.</p>
-      <h4>Anything else</h4>
-      <p>Pandoc converts the .md export to most document formats, for example <code>pandoc ssd_report.md -o ssd_report.docx</code> or <code>-o ssd_report.odt</code>.</p>
-    </div>
-    <footer><button class="btn" onClick=${onClose}>Close</button></footer>
-  <//>`;
-}
-
 // ---------------------------------------------------------------- table specs
 // One place defines every table of every tab: the tabs render from these specs
 // and the whole-report export walks them, so both always agree.
@@ -641,12 +600,14 @@ function buildSpecs(data, unit, ui) {
   const T = unit.tables, kind = data.kind, specs = {};
   const add = (tab, s) => { if (s.rows) specs[s.id] = { tab, srcCols: s.srcCols, ...s }; };
   const sideName = side => side === "pos" ? unit.pos_label : unit.neg_label;
+  // dim: a MultiPLS dimension, or one of the extra gradients of a PLS fit (every PLS unit but "main")
+  const dim = kind === "multipls" || (kind === "pls" && unit.key !== "main");
   const pyUnit = kind === "groups" ? `result[(${unit.key.split("_").map(g => JSON.stringify(g)).join(", ")})]`
-    : kind === "multipls" ? `result[${JSON.stringify(unit.key)}]` : "result";
-  const continuous = kind === "pls" || kind === "pca_ols";
-  // groups: each side is named by its group; MultiPLS: by the sign of the dimension
+    : dim ? `result[${JSON.stringify(unit.key)}]` : "result";
+  const continuous = (kind === "pls" || kind === "pca_ols") && !dim;
+  // groups: each side is named by its group; dimensions: by their sign
   const sideSub = side => continuous ? (side === "pos" ? "higher outcome" : "lower outcome")
-    : kind === "multipls" ? (side === "pos" ? "positive end" : "negative end") : null;
+    : dim ? (side === "pos" ? "positive end" : "negative end") : null;
 
   // Cluster Overview
   const clusters = objs(T.clusters), cwords = objs(T.cluster_words);
@@ -688,13 +649,13 @@ function buildSpecs(data, unit, ui) {
   const docs = objs(T.docs);
   if (docs) {
     const scoreCols = kind === "groups" ? [C("doc_id", "Doc #", "int"), C("group", "Group", "text"), C("alignment_score", "Cosine", "num")]
-      : kind === "multipls" ? [C("doc_id", "Doc #", "int"), C("alignment_score", "Cosine", "num")]
+      : dim ? [C("doc_id", "Doc #", "int"), C("alignment_score", "Cosine", "num")]
       : [C("doc_id", "Doc #", "int"), C("alignment_score", "Cosine", "num"), C("y_hat", "Predicted", "num")];
     const pyDocs = continuous ? "result.docs" : null;
     add("scores", { id: "docs", title: "Documents", file: "docs", rows: docs, srcCols: T.docs.columns, py: pyDocs, cols: scoreCols });
 
     const byScore = docs.slice().sort((a, b) => b.alignment_score - a.alignment_score);
-    const last = kind === "groups" ? C("group", "Group", "text") : kind === "multipls" ? null : C("y_true", "Actual Y", "num");
+    const last = kind === "groups" ? C("group", "Group", "text") : dim ? null : C("y_true", "Actual Y", "num");
     const extCols = [C("rank", "Rank", "int"), C("text", "Document Text", "text", { wide: true }), C("alignment_score", "Score", "num"), last].filter(Boolean);
     const rank = rows => rows.map((r, i) => ({ ...r, rank: i + 1 }));
     add("extreme", { id: "extreme_high", title: "Highest scores", fixed: true, file: "extreme_high", rows: rank(byScore.slice(0, 5)), srcCols: T.docs.columns, py: pyDocs, cols: extCols });
@@ -702,13 +663,17 @@ function buildSpecs(data, unit, ui) {
 
     if (continuous) {
       const byRes = docs.slice().sort((a, b) => a.residual - b.residual);
-      const misCols = [C("rank", "Rank", "int"), C("text", "Document Text", "text", { wide: true }), C("y_true", "Actual Y", "num"), C("y_hat", "Predicted Y", "num"), C("residual", "Residual", "num")];
+      // With a formula, residual has the covariates taken out but y_hat is the text's part only,
+      // so y_hat could contradict the over/under-predicted labels.
+      const formula = one(data.tables.fit_info).formula;
+      const misCols = [C("rank", "Rank", "int"), C("text", "Document Text", "text", { wide: true }), C("y_true", "Actual Y", "num"),
+        formula ? null : C("y_hat", "Predicted Y", "num"), C("residual", "Residual", "num")].filter(Boolean);
       add("mis", { id: "mis_over", title: "Over-predicted", subtitle: "predicted higher than observed", fixed: true, file: "misdiagnosed_over", rows: rank(byRes.slice(0, 5)), srcCols: T.docs.columns, py: pyDocs, cols: misCols });
       add("mis", { id: "mis_under", title: "Under-predicted", subtitle: "predicted lower than observed", fixed: true, file: "misdiagnosed_under", rows: rank(byRes.slice(-5).reverse()), srcCols: T.docs.columns, py: pyDocs, cols: misCols });
     }
   }
 
-  // Details: pair tests (groups), outcome loadings (MultiPLS); PCA Sweep table
+  // Details: pair tests (groups), outcome loadings (MultiPLS); Covariates (formula fits); PCA Sweep table
   if (data.tables.pairs) {
     // the pairs table holds canonical g1, g2; the units carry the original group names
     const names = Object.fromEntries(data.units.map(u => [u.key, [u.pos_label, u.neg_label]]));
@@ -721,6 +686,10 @@ function buildSpecs(data, unit, ui) {
   if (T.outcomes) add("details", { id: "outcomes", title: `Outcome loadings \u2014 ${unit.label}`, file: "outcomes_" + unit.key,
     rows: objs(T.outcomes), srcCols: T.outcomes.columns, py: `${pyUnit}.outcomes`, fixed: true,
     cols: [C("outcome", "Outcome", "text"), C("group", "Group", "text"), C("loading", "Loading", "num")] });
+  if (data.tables.covariates) add("covariates", { id: "covariates", title: "Covariates", subtitle: "text held fixed",
+    file: "covariates", rows: objs(data.tables.covariates), srcCols: data.tables.covariates.columns, py: "result.covariates", fixed: true,
+    cols: [C("term", "Term", "text"), C("estimate", "Estimate", "num"), C("se", "SE", "num"), C("statistic", "t / z", "num"),
+           C("p_value", "p", "p"), C("ci_low", "95% CI low", "num"), C("ci_high", "95% CI high", "num")] });
   if (data.tables.sweep) add("sweep", { id: "sweep", title: "Sweep", file: "pca_sweep", rows: objs(data.tables.sweep),
     srcCols: data.tables.sweep.columns, py: "result.sweep", fixed: true,
     cols: data.tables.sweep.columns.map(c => C(c, c, c === "k" || c === "n_clusters" || c === "total_size" ? "int" : "num")) });
@@ -729,13 +698,14 @@ function buildSpecs(data, unit, ui) {
 
 function tabsFor(data, specs) {
   const k = data.kind, t = [["overview", "Cluster Overview"], ["details", "Details"]];
+  if (specs.covariates) t.push(["covariates", "Covariates"]);
   if (k === "pca_ols" && data.tables.sweep) t.push(["sweep", "PCA Sweep"]);
   if (Object.values(specs).some(s => s.tab === "snippets")) t.push(["snippets", k === "groups" ? "Contrast Snippets" : "Beta Snippets"]);
   t.push(["poles", "Semantic Poles"]);
   // results pickled before doc_ids existed carry no docs table for groups and MultiPLS
   if (specs.docs) {
     t.push(["scores", "Document Scores"], ["extreme", "Extreme Documents"]);
-    if (k === "pls" || k === "pca_ols") t.push(["mis", "Misdiagnosed"]);
+    if (specs.mis_over) t.push(["mis", "Misdiagnosed"]);
   }
   return t;
 }
@@ -743,6 +713,12 @@ function tabsFor(data, specs) {
 // ---------------------------------------------------------------- summary cards
 function cardsFor(data, unit) {
   const s = one(data.tables.stats), k = data.kind;
+  if (k === "pls" && unit.key !== "main") {
+    const u = one(unit.tables.stats);  // a gradient of fit_pls(ssd_gradients=N): the last two follow it
+    return [["R\u00B2", fmtNum(s.r2)], ["p", fmtP(s.pvalue)], ["Docs", fmtInt(s.n_kept)],
+            ["Gradients", fmtInt(one(data.tables.pls_info).ssd_gradients)], ["Cov. share", fmtNum(u.cov_share)],
+            ["Score corr.", fmtNum(u.score_corr)]];
+  }
   if (k === "pls") return [
     ["R\u00B2", fmtNum(s.r2)], ["p", fmtP(s.pvalue)], ["\u2016\u03b2\u2016", fmtNum(s.beta_norm)],
     ["\u0394y / +0.10 cos", fmtNum(s.delta)], ["Docs", fmtInt(s.n_kept)], ["IQR Effect", fmtNum(s.iqr_effect)],
@@ -761,7 +737,7 @@ function cardsFor(data, unit) {
   }
   const u = one(unit.tables.stats);  // multipls: the last two follow the selected dimension
   return [["Cov. explained", fmtNum(s.cov_explained)], ["p", fmtP(s.pvalue)], ["Docs", fmtInt(s.n)],
-          ["Outcomes", fmtInt(s.q)], ["Dimensions", fmtInt(s.k)], ["Cov. share", fmtNum(u.cov_share)],
+          ["Outcomes", fmtInt(s.q)], ["Dimensions", fmtInt(s.ssd_gradients)], ["Cov. share", fmtNum(u.cov_share)],
           ["Score corr.", fmtNum(u.score_corr)]];
 }
 
@@ -777,6 +753,7 @@ function reportParts(store) {
   };
 }
 function reportFile(store, ext) {
+  if (ext === "html") return { name: "ssd_report.html", mime: "text/html", text: PAGE };
   if (ext === "json") return { name: "ssd_report.json", mime: "application/json", text: JSON.stringify(store.data, null, 2) + "\n" };
   const p = reportParts(store), view = id => store.views[id] || DEFAULT_VIEW;
   const cardCols = p.cards.map(([n], i) => C(String(i), n, "text"));
@@ -867,7 +844,7 @@ function PolesTab({ specs }) {
   </div>`;
 }
 
-function ScoresTab({ specs, kind }) {
+function ScoresTab({ specs }) {
   const [doc, setDoc] = useState(null);
   return html`<div class="grid2">
     <div class="box"><${DataTable} spec=${specs.docs} selectable rowKey=${r => r.doc_id} selectedKey=${doc && doc.doc_id} onSelect=${setDoc} /></div>
@@ -880,7 +857,7 @@ function ScoresTab({ specs, kind }) {
           ${"group" in doc ? html`<dt>Group</dt><dd>${doc.group}</dd>` : null}
         </dl>
         <div class="kv-group"><h4>Text</h4>${doc.text != null ? html`<p class="quote">${doc.text}</p>`
-          : html`<p class="muted">This file does not hold this document's text. Text is stored for the documents with the highest and lowest scores${kind === "pls" || kind === "pca_ols" ? " and the largest prediction errors" : ""}.</p>`}</div>`}
+          : html`<p class="muted">This file does not hold this document's text. Text is stored for the documents with the highest and lowest scores${specs.mis_over ? " and the largest prediction errors" : ""}.</p>`}</div>`}
     </div>
   </div>`;
 }
@@ -941,6 +918,7 @@ const STAT_LABELS = {
   k: "k", k_max: "k max", k_min: "k min", topn: "Words clustered", min_cluster_size: "Min. cluster size",
   G: "Groups", n_perm: "Permutations", correction: "Correction", omnibus_T: "Omnibus T", omnibus_p: "Omnibus p",
   n: "Documents", q: "Outcomes", rotate: "Rotation", cov_explained: "Cov. explained", statistic: "Statistic",
+  df: "df", df_resid: "Residual df", r2_delta: "\u0394R\u00B2", ssd_gradients: "Gradients",
 };
 const fmtAny = (k, v) => v == null ? DASH : typeof v === "boolean" ? (v ? "yes" : "no") : ["pvalue", "p_at_k", "omnibus_p"].includes(k) ? fmtP(v)
   : Number.isInteger(v) ? fmtInt(v) : isNum(v) ? fmtNum(v) : Array.isArray(v) ? v.join(", ") : String(v);
@@ -963,6 +941,7 @@ function DetailsTab({ data, specs }) {
         <${KV} title="Data retention" obj=${pick(["n_raw", "n_kept", "n_dropped"])} />`
       : html`<${KV} title="Summary" obj=${st} />`}
       <${KV} title="Fit" obj=${one(data.tables.fit_info || data.tables.pls_info)} skipNull />
+      ${data.tables.fit_info && data.tables.pls_info ? html`<${KV} title="Gradients" obj=${one(data.tables.pls_info)} skipNull />` : null}
       <${KV} title="Test" obj=${one(data.tables.test)} skipNull />
       ${specs.pairs ? html`<${DataTable} spec=${specs.pairs} />` : null}
       ${specs.outcomes ? html`<${DataTable} spec=${specs.outcomes} />` : null}
@@ -982,26 +961,28 @@ function DetailsTab({ data, specs }) {
 // ---------------------------------------------------------------- app
 function App({ data }) {
   const [unitIdx, setUnitIdx] = useState(0);
-  const [tab, setTab] = useState("overview");
+  const [chosenTab, setTab] = useState("overview");
   const [views, setViews] = useState({});
   const [ui, setUiState] = useState({ topWords: 5, nSnips: 20, cluster: null, snipSide: "pos" });
-  const [dialog, setDialog] = useState(null);
   const unit = data.units[unitIdx];
   const specs = useMemo(() => buildSpecs(data, unit, ui), [unit, ui]);
   const tabs = tabsFor(data, specs);
+  // Units can have different tabs (a PLS gradient has no Misdiagnosed tab): fall back to the first one.
+  const tab = tabs.some(([k]) => k === chosenTab) ? chosenTab : tabs[0][0];
   const setUi = patch => setUiState(u => ({ ...u, ...patch }));
   const store = {
     data, specs, tabs, views, unit,
     setView: (id, v) => setViews(vs => ({ ...vs, [id]: v })),
-    showGuide: spec => setDialog({ kind: "guide", spec }),
   };
+  window.ssdReport = { formats: REPORT_EXTS, export: ext => download(reportFile(store, ext)) };
   const body = {
     overview: html`<${OverviewTab} unit=${unit} specs=${specs} ui=${ui} setUi=${setUi} />`,
     details: html`<${DetailsTab} data=${data} specs=${specs} />`,
+    covariates: html`<${PairTablesTab} specs=${specs} tab="covariates" />`,
     sweep: html`<${SweepTab} data=${data} specs=${specs} />`,
     snippets: html`<${SnippetsTab} unit=${unit} specs=${specs} ui=${ui} setUi=${setUi} />`,
     poles: html`<${PolesTab} specs=${specs} />`,
-    scores: html`<${ScoresTab} specs=${specs} kind=${data.kind} />`,
+    scores: html`<${ScoresTab} specs=${specs} />`,
     extreme: html`<${PairTablesTab} specs=${specs} tab="extreme" />`,
     mis: html`<${PairTablesTab} specs=${specs} tab="mis" />`,
   }[tab];
@@ -1010,7 +991,7 @@ function App({ data }) {
       <h1>${data.title || "SSD results"}</h1>
       <span class=${"badge " + data.kind}>${KIND_LABEL[data.kind]}</span>
       <span class="spacer"></span>
-      <${ExportMenu} report />
+      ${EMBEDDED ? null : html`<${ExportMenu} report />`}
     </header>
     <div class="meta">
       <span>Embedding <b>${embLabel(data.embeddings)}</b></span>
@@ -1023,7 +1004,6 @@ function App({ data }) {
     <section class="cards" aria-label="Summary">${cardsFor(data, unit).map(([n, v]) => html`<div class="card"><div class="v">${v}</div><div class="n">${n}</div></div>`)}</section>
     <nav class="tabs" role="tablist">${tabs.map(([k, label]) => html`<button class="tab" role="tab" aria-selected=${tab === k} onClick=${() => setTab(k)}>${label}</button>`)}</nav>
     <section class="tabpanel" role="tabpanel">${body}</section>
-    ${dialog && dialog.kind === "guide" ? html`<${GuideDialog} data=${data} spec=${dialog.spec} onClose=${() => setDialog(null)} />` : null}
   <//>`;
 }
 

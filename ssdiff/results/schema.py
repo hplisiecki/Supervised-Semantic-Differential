@@ -351,15 +351,16 @@ class FitInfo:
     n_splits: int | None = None
     split_mean_r: float | None = None
     random_state: int | None = None
-    keep: int | None = None          # sparse PLS1 keep-count; None for dense
     # PCA+OLS specific
     k_min: int | None = None
     k_max: int | None = None
     k_step: int | None = None
     best_k: int | None = None
     pca_k_source: str | None = None  # "sweep" | "fixed" | None (PLS)
-    formula: str | None = None       # fit_regression formula as given
+    formula: str | None = None       # fit_regression / fit_pls formula as given
     family: str | None = None        # glmm family of fit_regression
+    ssd_gradients: int | None = None  # fit_pls: number of gradients returned
+    rotate: str | None = None        # fit_pls rotation of those gradients; None for one
 
     __setstate__ = _setstate_filling_defaults
 

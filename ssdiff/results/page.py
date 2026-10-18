@@ -156,6 +156,9 @@ def _continuous(result, kind, sps, spc, doc_texts):
               "test": _view_table(result.test)}
     if kind == "pca_ols" and len(result.sweep):
         tables["sweep"] = _view_table(result.sweep)
+    covariates = result.covariates
+    if len(covariates):
+        tables["covariates"] = _view_table(covariates)
     unit = _unit_tables(result, sps, spc)
     cols = list(result.docs._columns)
     rows = [_row_to_dict(d) for d in result.docs]
@@ -163,7 +166,21 @@ def _continuous(result, kind, sps, spc, doc_texts):
         result, cols, rows,
         [[r["alignment_score"] for r in rows], [r["residual"] for r in rows]], doc_texts,
     )
-    units = [{"key": "main", "label": "", "pos_label": "+β", "neg_label": "−β", "tables": unit}]
+    leaves = result.keys() if kind == "pls" else []
+    units = [{"key": "main", "label": "β" if leaves else "", "pos_label": "+β", "neg_label": "−β",
+              "tables": unit}]
+    if leaves:
+        # fit_pls(ssd_gradients=N): one more unit per rotated gradient, laid out as MultiPLS dimensions.
+        tables["pls_info"] = _view_table(result.pls_info)
+        doc_ids = [r["doc_id"] for r in rows]
+        for key in leaves:
+            leaf = result[key]
+            dim = {"stats": _view_table(leaf.stats), **_unit_tables(leaf, sps, spc)}
+            scores = np.asarray(leaf.alignment_scores)
+            dim_rows = [{"doc_id": i, "alignment_score": s} for i, s in zip(doc_ids, scores)]
+            dim["docs"] = _docs_table(leaf, ["doc_id", "alignment_score"], dim_rows, [scores], doc_texts)
+            units.append({"key": key, "label": result._key_repr(key), "pos_label": "+", "neg_label": "−",
+                          "tables": dim})
     return tables, units, result
 
 

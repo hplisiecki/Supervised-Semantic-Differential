@@ -1,4 +1,4 @@
-"""SSD.fit_regression: PCA regression with covariates and mixed models via glmm."""
+"""Covariates: SSD.fit_regression (PCA regression, mixed models via glmm) and SSD.fit_pls(formula=...)."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from ssdiff.corpus import Corpus
+from ssdiff.results.format import fmt_p, fmt_r
 from ssdiff.ssd import SSD
 from ssdiff.utils.math import f_sf, pca_fit_transform, standardize
 
@@ -159,6 +160,13 @@ def test_mixed_model(tiny_kv, large_docs, lexicon, frame):
     assert res.fit_info.formula == "~ age + (1 | ID)"
     assert res.fit_info.family == "gaussian"
     assert res.test().name == "lrt"
+    assert [r.term for r in res.covariates] == ["(Intercept)", "age"]
+    text = res.summary()
+    assert "Random effects:" in text
+    assert "_ssd_" not in text
+    header, row = _block(text, "SSD effects:")
+    assert header.split() == ["p"]
+    assert row.split()[:2] == ["text", fmt_p(res.test.pvalue)]
 
 
 def test_missing_covariate_raises(tiny_kv, large_docs, lexicon, frame):
@@ -187,8 +195,165 @@ def test_binomial(tiny_kv, large_docs, large_y, lexicon):
     np.testing.assert_allclose(res.pca_weights, w)
 
 
-def test_predict_refused_after_formula(tiny_kv, large_docs, lexicon, frame):
+@pytest.mark.parametrize("fit", [
+    lambda ssd: ssd.fit_regression("~ age", fixed_k=3),
+    lambda ssd: ssd.fit_pls(formula="~ age", k=1, test=False),
+])
+def test_predict_refused_after_formula(tiny_kv, large_docs, lexicon, frame, fit):
     ssd = _ssd(tiny_kv, large_docs, "rating", lexicon, data=frame)
-    res = ssd.fit_regression("~ age", fixed_k=3)
+    res = fit(ssd)
     with pytest.raises(NotImplementedError):
         res.predict(ssd.corpus)
+
+
+# --- fit_pls with a formula ------------------------------------------------
+
+def test_pls_formula_matches_residualized_pls(tiny_kv, large_docs, lexicon, frame):
+    """PLS1 and its split_exact test on y and X with age and arousal regressed out."""
+    import plskit
+
+    ssd = _ssd(tiny_kv, large_docs, "rating", lexicon, data=frame)
+    res = ssd.fit_pls(formula="~ age + arousal", k=1, n_splits=20)
+
+    z = np.column_stack([np.ones(ssd.n_kept), frame["age"], frame["arousal"]])
+    resid = lambda a: a - z @ np.linalg.lstsq(z, a, rcond=None)[0]  # noqa: E731
+    x_res, y_res = resid(ssd.x), resid(ssd.y)
+    Xs, _, X_scale = standardize(x_res)
+    ys = standardize(y_res.reshape(-1, 1))[0].ravel()
+    m = plskit.pls1_fit(Xs, ys, k=1, pre_standardized=True, seed=2137)
+    beta = m.coef / X_scale
+    if np.corrcoef(ys, x_res @ beta)[0, 1] < 0:
+        beta = -beta
+    p = plskit.pls1_confirmatory_test(
+        Xs, ys, 1, test_method="split_exact", args={"n_splits": 20},
+        pre_standardized=True, seed=2137,
+    ).pvalue
+
+    np.testing.assert_allclose(res.beta, beta, rtol=1e-6, atol=1e-10)
+    assert res.stats.pvalue == pytest.approx(p)
+    assert res.fit_info.formula == "~ age + arousal"
+    # A rerun tests the residualized data too, not the raw y and X.
+    assert res.test(n_splits=20, seed=2137).pvalue == pytest.approx(p)
+
+
+@pytest.mark.parametrize("fit", [
+    lambda ssd: ssd.fit_regression("~ age + arousal", fixed_k=3),
+    lambda ssd: ssd.fit_pls(formula="~ age + arousal", k=1, test=False),
+])
+def test_formula_stats_and_residuals_describe_y(tiny_kv, large_docs, lexicon, frame, fit):
+    """stats.y_std is y's own SD; docs.residual has the covariates taken out (OLS residuals are orthogonal to them)."""
+    ssd = _ssd(tiny_kv, large_docs, "rating", lexicon, data=frame)
+    res = fit(ssd)
+    assert res.stats.y_mean == pytest.approx(np.mean(ssd.y))
+    assert res.stats.y_std == pytest.approx(np.std(ssd.y))
+    resid = res.docs.to_df(cols="all")["residual"].to_numpy()
+    for c in ("age", "arousal"):
+        assert abs(np.corrcoef(resid, frame[c])[0, 1]) < 1e-8
+
+
+def test_pls_formula_random_effects_raise(tiny_kv, large_docs, lexicon, frame):
+    ssd = _ssd(tiny_kv, large_docs, "rating", lexicon, data=frame)
+    with pytest.raises(ValueError, match="random effects"):
+        ssd.fit_pls(formula="~ age + (1 | ID)", k=1)
+
+
+def test_pls_formula_covariate_explains_y_raises(tiny_kv, large_docs, lexicon, frame):
+    ssd = _ssd(tiny_kv, large_docs, "rating", lexicon, data=frame.assign(copy=frame["rating"]))
+    with pytest.raises(ValueError, match="explain"):
+        ssd.fit_pls(formula="~ copy", k=1)
+
+
+# --- covariate effects -----------------------------------------------------
+
+def _ols(z, y):
+    """OLS coefficients and standard errors."""
+    coef, rss = np.linalg.lstsq(z, y, rcond=None)[:2]
+    cov = rss[0] / (len(y) - z.shape[1]) * np.linalg.inv(z.T @ z)
+    return coef, np.sqrt(np.diag(cov))
+
+
+def test_regression_covariates_hold_components_fixed(tiny_kv, large_docs, lexicon, frame):
+    ssd = _ssd(tiny_kv, large_docs, "rating", lexicon, data=frame)
+    res = ssd.fit_regression("~ age", fixed_k=3)
+    z_pca = pca_fit_transform(standardize(ssd.x)[0], 3)[0]
+    coef, se = _ols(np.column_stack([np.ones(ssd.n_kept), frame["age"], z_pca]), ssd.y)
+    cov = res.covariates
+    assert [r.term for r in cov] == ["(Intercept)", "age"]
+    np.testing.assert_allclose([r.estimate for r in cov], coef[:2], rtol=1e-6)
+    np.testing.assert_allclose([r.se for r in cov], se[:2], rtol=1e-6)
+
+
+@pytest.mark.parametrize("fit", [
+    lambda ssd: ssd.fit_regression(fixed_k=3),
+    lambda ssd: ssd.fit_pls(k=1, test=False),
+    lambda ssd: ssd.fit_pls("~ age", k=1, test=False),
+])
+def test_no_covariates_without_model(tiny_kv, large_docs, lexicon, frame, fit):
+    ssd = _ssd(tiny_kv, large_docs, "rating", lexicon, data=frame)
+    assert len(fit(ssd).covariates) == 0
+
+
+# --- compact summary -------------------------------------------------------
+
+def _block(text, title):
+    """The lines of one summary block: after ``title``, up to the next blank or ``---`` line."""
+    lines = text.splitlines()
+    start = lines.index(title) + 1
+    end = next(i for i in range(start, len(lines)) if lines[i] in ("", "---"))
+    return lines[start:end]
+
+
+def test_summary_drops_text_terms(tiny_kv, large_docs, lexicon, frame):
+    ssd = _ssd(tiny_kv, large_docs, "rating", lexicon, data=frame)
+    res = ssd.fit_regression("~ age", fixed_k=3)
+    text = res.summary()
+    assert "_ssd_" not in text
+    assert "Formula: rating ~ age + text" in text
+    rows = [line.split() for line in _block(text, "Fixed effects:")[1:]]
+    assert [r[0] for r in rows] == ["(Intercept)", "age"]
+    np.testing.assert_allclose([float(r[1]) for r in rows],
+                               [c.estimate for c in res.covariates], rtol=1e-3)
+    corr = _block(text, "Correlation of Fixed Effects:")
+    assert corr[0].split() == ["(Intercept)"]
+    assert [line.split()[0] for line in corr[1:]] == ["age"]
+    header, row = _block(text, "SSD effects:")
+    assert fmt_p(res.test.pvalue) in row.split()
+    # The p value ends where the Pr(>|t|) column of the fixed effects ends.
+    pr_end = _block(text, "Fixed effects:")[0].index("Pr(>|t|)") + len("Pr(>|t|)")
+    assert row[:pr_end].endswith(fmt_p(res.test.pvalue))
+
+
+def test_summary_names_text_by_series_name(tiny_kv, large_docs, lexicon, frame):
+    corpus = Corpus(pd.Series(large_docs, name="essay"), pretokenized=True, lang="pl")
+    text = SSD(tiny_kv, corpus, "rating", lexicon, data=frame).fit_regression("~ age", fixed_k=3).summary()
+    assert "Formula: rating ~ age + essay" in text
+    assert _block(text, "SSD effects:")[1].split()[0] == "essay"
+
+
+def test_regression_summary_f_test(tiny_kv, large_docs, lexicon, frame):
+    """F statistic and ΔR² from the RSS of y ~ age with and without the components."""
+    ssd = _ssd(tiny_kv, large_docs, "rating", lexicon, data=frame)
+    res = ssd.fit_regression("~ age", fixed_k=3)
+    n, k = ssd.n_kept, 3
+    z0 = np.column_stack([np.ones(n), frame["age"]])
+    z1 = np.column_stack([z0, pca_fit_transform(standardize(ssd.x)[0], k)[0]])
+    rss0, rss1 = (np.linalg.lstsq(z, ssd.y, rcond=None)[1][0] for z in (z0, z1))
+    df_resid = n - z1.shape[1]
+    f = (rss0 - rss1) / k / (rss1 / df_resid)
+    tss = np.sum((ssd.y - ssd.y.mean()) ** 2)
+    res.test()
+    params = res.test.params
+    assert params["df"] == k and params["df_resid"] == df_resid
+    assert params["statistic"] == pytest.approx(f, rel=1e-6)
+    assert params["r2_delta"] == pytest.approx((rss0 - rss1) / tss, rel=1e-6)
+    header, row = _block(res.summary(), "SSD effects:")
+    assert header.split() == ["ΔR²", "p"]
+    assert row.split()[:3] == ["text", fmt_r(params["r2_delta"], digits=3), fmt_p(res.test.pvalue)]
+
+
+def test_pls_summary_without_formula(tiny_kv, large_docs, large_y, lexicon):
+    res = _ssd(tiny_kv, large_docs, large_y, lexicon).fit_pls(k=1)
+    text = res.summary()
+    assert "Fixed effects" not in text
+    assert "Text:  PLS, k = 1\n" in text
+    assert f"(split_exact): p = {fmt_p(res.test.pvalue)}" in text

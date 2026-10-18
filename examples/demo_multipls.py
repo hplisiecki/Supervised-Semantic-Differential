@@ -1,4 +1,4 @@
-"""MultiPLS demo — k=3 varimax-rotated supervised dimensions from valence.
+"""MultiPLS demo — 3 word-rotated supervised dimensions from valence, arousal and dominance.
 
 INTERACTIVE USE
 ───────────────
@@ -35,24 +35,24 @@ RATINGS = os.path.join(HERE, "data", "Ratings_EN.csv")
 emb = Embeddings.load(EMB)
 df = pd.read_csv(RATINGS)
 corpus = Corpus(df["word"].astype(str).str.strip().tolist(), lang="en")
-ssd = SSD(emb, corpus, df["valence"].to_numpy(), use_full_doc=True)
+ssd = SSD(emb, corpus, ["valence", "arousal", "dominance"], use_full_doc=True, data=df)
 
 show("emb", emb)
 show("corpus", corpus)
 show("ssd", ssd)
 
-print("\n══════ MultiPLS, k=3, varimax rotation ══════")
-mp = ssd.fit_multipls(k=3, rotate="varimax", verbose=True)
+print("\n══════ MultiPLS, 3 dimensions, words rotation ══════")
+mp = ssd.fit_multipls(ssd_gradients=3, rotate="words", verbose=True)
 show("mp", mp)
 show("mp.stats", mp.stats)
 show("mp.test", mp.test)
 show("mp.words", mp.words)
 
 print("\n══════ Per-dim leaves ══════")
-for i in range(mp.n_components):
-    key = f"dim-{i+1}"
+for key in mp.keys():
     show(f'mp["{key}"]', mp[key])
     show(f'mp["{key}"].words', mp[key].words)
+    show(f'mp["{key}"].outcomes', mp[key].outcomes)
     show(f'mp["{key}"].clusters', mp[key].clusters)
 
 print("\n══════ Markdown report ══════")
@@ -61,13 +61,3 @@ print(mp.report(top_words={"n": 10}))
 
 print("\n══════ Results page ══════")
 mp.save_page("ssd_results_multipls.html", title="Warriner ratings (MultiPLS)")
-
-print("\n══════ Sparse MultiPLS (keep) ══════")
-# keep selects K via the sequential p-value chain at a fixed k; each component
-# keeps only `keep` non-zero weights. rotate="raw" keeps each axis exactly
-# sparse (varimax mixes them). keep="auto" cross-validates the keep-count.
-sp = ssd.fit_multipls(k=3, keep=30, rotate="raw", verbose=True)
-show("sp", sp)
-show("sp.pls_info", sp.pls_info)  # keep=30, pvalue_source="split_nb_seq"
-# sp.stats.pvalue is the path-max of the chain (FWER "all k real"), so the
-# chain is fixed at fit time and sp.test(...) raises — re-fit to change it.

@@ -503,5 +503,5 @@ def test_group_and_multipls_reports_name_the_wordpack(wordpack_path):
     gr = SSD(emb, corpus, groups, use_full_doc=True).fit_groups(n_perm=49)
     assert "en-fixture-1" in gr.report(clusters=False, top_words=False).to_text()
     y2 = np.column_stack([y, np.random.default_rng(0).normal(size=len(y))])
-    mp = SSD(emb, corpus, y2, use_full_doc=True).fit_multipls(k=1, n_perm=19, n_splits=5)
+    mp = SSD(emb, corpus, y2, use_full_doc=True).fit_multipls(ssd_gradients=1, n_perm=19, n_splits=5)
     assert "en-fixture-1" in mp.report(top_words=False).to_text()

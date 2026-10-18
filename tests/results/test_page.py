@@ -40,16 +40,17 @@ def multipls_result(tiny_kv, large_docs, lexicon):
     corpus = Corpus(texts, nlp=FakeNlp(), lang="pl", stopwords=[])
     y = np.random.default_rng(3).normal(size=(len(texts), 3))
     ssd = SSD(tiny_kv, corpus, y, lexicon)
-    return ssd.fit_multipls(k=2, n_perm=19, n_splits=5, random_state=0)
+    return ssd.fit_multipls(ssd_gradients=2, n_perm=19, n_splits=5, random_state=0)
 
 
 def test_fit_args_recorded(pls_result, pcaols_result, group_result_2g, multipls_result):
-    assert pls_result.fit_args == {"k": 2, "k_max": 5, "keep": None, "n_splits": 20,
-                                   "random_state": 42, "test": True}
+    assert pls_result.fit_args == {"formula": None, "k": 2, "k_max": 5, "ssd_gradients": 1,
+                                   "rotate": "words", "n_splits": 20, "random_state": 42,
+                                   "test": True}
     assert pcaols_result.fit_args["fixed_k"] == 3
     assert group_result_2g.fit_args == {"median_split": False, "n_perm": 50,
                                         "correction": "holm", "random_state": 42}
-    assert multipls_result.fit_args["k"] == 2
+    assert multipls_result.fit_args["ssd_gradients"] == 2
     assert "verbose" not in pls_result.fit_args
 
 
@@ -86,6 +87,20 @@ def test_pls_page_data(pls_result):
     assert len(t["docs"]["rows"]) == len(list(pls_result.docs))
 
 
+def test_pls_gradients_page_data(ssd_instance):
+    res = ssd_instance.fit_pls(k=2, ssd_gradients=2, n_splits=20, random_state=42)
+    d = page_data(res)
+    json.dumps(d, allow_nan=False)
+    assert set(d["tables"]) == {"stats", "fit_info", "test", "pls_info"}
+    assert d["tables"]["pls_info"]["columns"] == _cols(res.pls_info)
+    assert [(u["key"], u["label"]) for u in d["units"]] == [("main", "β"), ("dim-1", "Dim 1"), ("dim-2", "Dim 2")]
+    t = d["units"][1]["tables"]
+    assert set(t) == {"stats", "words", "clusters", "cluster_words", "snippets", "cluster_snippets", "docs"}
+    assert t["stats"]["columns"] == ["cov_share", "score_corr"]
+    assert t["docs"]["columns"] == ["doc_id", "alignment_score", "text"]
+    assert [r[0] for r in t["docs"]["rows"]] == [doc.doc_id for doc in res.docs]
+
+
 @pytest.mark.parametrize("doc_texts, expect", [(0, "none"), (1, "some"), (None, "all")])
 def test_doc_texts(pls_result, doc_texts, expect):
     rows = page_data(pls_result, doc_texts=doc_texts)["units"][0]["tables"]["docs"]["rows"]
@@ -97,6 +112,18 @@ def test_doc_texts(pls_result, doc_texts, expect):
     else:
         # 1 highest + 1 lowest by alignment, 1 most over- + 1 most under-predicted
         assert 2 <= n_text <= 4
+
+
+def test_covariates_table(tiny_kv, large_docs, large_y, lexicon):
+    import pandas as pd
+
+    from ssdiff.ssd import SSD
+    data = pd.DataFrame({"age": np.random.default_rng(0).normal(size=len(large_y))})
+    ssd = SSD(tiny_kv, Corpus(large_docs, pretokenized=True, lang="pl"), large_y, lexicon, data=data)
+    res = ssd.fit_regression("~ age", fixed_k=3)
+    t = page_data(res)["tables"]["covariates"]
+    assert t["columns"] == _cols(res.covariates)
+    assert [r[0] for r in t["rows"]] == ["(Intercept)", "age"]
 
 
 def test_no_raw_text_leaves_out_snippets(pcaols_result_sweep):
