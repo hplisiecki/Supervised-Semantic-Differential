@@ -54,7 +54,7 @@ def _build_cluster_section(
     n_words: int,
     n_snippets: int,
     snippet_provider,
-) -> "Section":
+) -> Section:
     """Build a Section with No./Size/Top Words/Representative Excerpt columns.
 
     ``clusters_view`` is a ``ClustersViewSided`` exposing ``_words_rows``.

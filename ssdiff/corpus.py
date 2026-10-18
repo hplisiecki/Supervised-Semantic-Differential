@@ -19,7 +19,7 @@ from ssdiff.utils.text import (
 )
 
 
-def _resolve_spacy_model(model: str, auto_download: bool | None) -> "object":
+def _resolve_spacy_model(model: str, auto_download: bool | None) -> object:
     """Load *model*, optionally downloading if missing.
 
     ``auto_download=True`` downloads without prompting; ``False`` re-raises
@@ -268,13 +268,15 @@ class Corpus:
             If *y* is ``None`` without *seeds* (ranking needs an outcome);
             if *seeds* is empty; if only one of *seeds* and *embeddings* is
             given; if a seed is not a key of *embeddings*; if the corpus was
-            not tokenized for *embeddings*.
+            not tokenized for *embeddings*; if *top_k* is None or negative.
         """
         from ssdiff.results.lexicon_result import LexiconResult
         from ssdiff.results.schema import Suggestion
 
         from .utils.lexicon import _filter_y, _rank_tokens, _seed_neighbours, _token_sets
 
+        if top_k is None or top_k < 0:
+            raise ValueError(f"top_k must be >= 0, got {top_k!r}")
         if seeds is None:
             if embeddings is not None:
                 raise ValueError("embeddings= is only used with seeds=.")
@@ -428,9 +430,9 @@ class Corpus:
             ))
 
         if y_clean is None:
-            rows.sort(key=lambda r: -r["freq"])
+            rows.sort(key=lambda r: (-r["freq"], r["token"]))
         else:
-            rows.sort(key=lambda r: (-r["rank"], -r["cov_bal"], -r["freq"]))
+            rows.sort(key=lambda r: (-r["rank"], -r["cov_bal"], -r["freq"], r["token"]))
         return rows
 
     def coverage_summary(

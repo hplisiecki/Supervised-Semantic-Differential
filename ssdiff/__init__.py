@@ -8,10 +8,10 @@ without knowing the internal module structure.
 from ssdiff.corpus import Corpus
 from ssdiff.embeddings import Embeddings
 from ssdiff.results import (
-    ClusterWordsView,
-    ClusterWordsViewSided,
     ClustersView,
     ClustersViewSided,
+    ClusterWordsView,
+    ClusterWordsViewSided,
     GroupResult,
     LexiconResult,
     PCAOLSResult,

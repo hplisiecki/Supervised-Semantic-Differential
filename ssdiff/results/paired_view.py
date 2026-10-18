@@ -20,17 +20,16 @@ from pathlib import Path
 from ssdiff.results.core import (
     _check_ext,
     _get_ext,
+    _json_default,
     _project,
     _render_csv,
     _render_md_table,
     _render_tex_table,
+    _require,
     _row_to_dict,
     _validate_cols,
     _warn,
-    _json_default,
-    _require,
 )
-
 
 # ---------------------------------------------------------------------------
 # Multi-sheet xlsx helper

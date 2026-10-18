@@ -6,24 +6,25 @@ import math
 
 import numpy as np
 import pytest
-from scipy.spatial.distance import squareform, pdist
-from scipy.stats import f as sp_f, t as sp_t, chi2 as sp_chi2
-from sklearn.metrics import silhouette_score as sk_silhouette
+from scipy.spatial.distance import pdist, squareform
+from scipy.stats import chi2 as sp_chi2
+from scipy.stats import f as sp_f
+from scipy.stats import t as sp_t
 from sklearn.decomposition import PCA
+from sklearn.metrics import silhouette_score as sk_silhouette
 
 from ssdiff.utils.math import (
-    standardize,
-    unit_vector,
-    l2_normalize_rows_inplace,
-    pca_fit_transform,
-    kmeans,
-    silhouette_score,
-    pairwise_euclidean,
-    t_sf,
-    f_sf,
     chi2_sf,
+    f_sf,
+    kmeans,
+    l2_normalize_rows_inplace,
+    pairwise_euclidean,
+    pca_fit_transform,
+    silhouette_score,
+    standardize,
+    t_sf,
+    unit_vector,
 )
-
 
 # ---------------------------------------------------------------------------
 # standardize

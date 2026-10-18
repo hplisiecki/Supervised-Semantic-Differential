@@ -111,7 +111,7 @@ def _cluster_from_indices(
         centroid = unit_vector(Wc.mean(axis=0))
         clusters.append({
             "side": side,
-            "size": int(len(idx)),
+            "size": len(idx),
             "centroid_cos_beta": float(centroid @ beta_unit),
             "coherence": float(np.mean((Wc @ centroid).astype(float))),
         })

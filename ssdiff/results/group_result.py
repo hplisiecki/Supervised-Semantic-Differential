@@ -24,7 +24,7 @@ from dataclasses import replace
 
 import numpy as np
 
-from ssdiff.results.core import Result, ScalarView, TestView, View
+from ssdiff.results.core import ScalarView, TestView, View
 from ssdiff.results.format import fmt_count, fmt_d, fmt_p, fmt_r
 from ssdiff.results.multi_container import _MultiContainer
 from ssdiff.results.report import (
@@ -35,14 +35,9 @@ from ssdiff.results.report import (
     _resolve_section,
 )
 from ssdiff.results.schema import (
-    Cluster,
-    ClusterWord,
     Pair,
-    Snippet,
-    Word,
 )
 from ssdiff.results.single_result import _SingleResult
-
 
 # ---------- Canonical pair helpers ----------
 

@@ -429,8 +429,11 @@ def _qualifies(cand: str, chars: Chars) -> bool:
 
 
 def _masked_match(c: str, us: int, o: _Opts):
-    run = o.chars.mask_run.match(c, us).group()
-    if "*" not in run:
+    # No masked word is longer than the longest by_len key, so read the run at most one
+    # character past it; reading the whole run from every letter unit is quadratic.
+    longest = max(o.by_len)
+    run = o.chars.mask_run.match(c, us, us + longest + 1).group()
+    if "*" not in run or len(run) > longest:
         return None
     low = o.chars.lower(run)
     if len(low) != len(run):
@@ -571,7 +574,7 @@ class WordPack:
 
     def __init__(self, path):
         self.path = str(path)
-        self._f = open(self.path, "rb")
+        self._f = open(self.path, "rb")  # noqa: SIM115 — open for the pack's lifetime; closed by weakref.finalize below
         # Closes the file when the pack is collected; a weakref callback runs before the file object's own finalizer, so no unclosed-file warning.
         weakref.finalize(self, self._f.close)
         self._lock = threading.Lock()

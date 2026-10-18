@@ -101,6 +101,8 @@ ignore = [
   "RUF015", # unnecessary-iterable-allocation-for-first-element (readability preference)
   "RUF059", # unused-unpacked-variable (common in tests)
   "SIM103", # needless-bool (explicit if/return is clearer)
+  "SIM118", # result containers have no __iter__; iterate with .keys()
+  "RUF022", # __all__ lists the main API first
 ]
 
 [tool.ruff.lint.isort]

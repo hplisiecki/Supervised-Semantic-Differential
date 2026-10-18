@@ -23,7 +23,7 @@ import os
 
 import pandas as pd
 
-from ssdiff import Corpus, Embeddings, SSD
+from ssdiff import SSD, Corpus, Embeddings
 
 
 def show(expr, value):

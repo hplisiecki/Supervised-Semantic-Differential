@@ -15,7 +15,7 @@ from typing import Any
 import numpy as np
 
 from ssdiff.utils.math import unit_vector
-from ssdiff.utils.text import PreprocessedDoc
+from ssdiff.utils.text import PreprocessedDoc, PreprocessedProfile
 from ssdiff.utils.vectors import compute_global_sif
 
 
@@ -69,22 +69,24 @@ class _DocLike:
 
 
 def _iter_doclikes(
-    pre_docs: list[PreprocessedDoc],
+    pre_docs: list[PreprocessedDoc | PreprocessedProfile],
 ) -> Iterator[_DocLike]:
     """
-    Iterate over all docs as _DocLike objects.
-    Yields _DocLike objects for each doc.
+    Iterate over all docs/posts as _DocLike objects.
+    Yields one _DocLike per PreprocessedDoc and one per post of a PreprocessedProfile.
     """
     if not pre_docs:
         return
     for di, P in enumerate(pre_docs):
-        yield _DocLike(
-            profile_id=di,
-            post_id=0,
-            sents_surface=P.sents_surface,
-            doc_lemmas=P.doc_lemmas,
-            token_to_sent=P.token_to_sent,
-        )
+        if isinstance(P, PreprocessedDoc):
+            yield _DocLike(profile_id=di, post_id=0, sents_surface=P.sents_surface,
+                           doc_lemmas=P.doc_lemmas, token_to_sent=P.token_to_sent)
+            continue
+        for pj, (sents, lemmas, tok2sent) in enumerate(
+            zip(P.post_sents_surface, P.post_doc_lemmas, P.post_token_to_sent)
+        ):
+            yield _DocLike(profile_id=di, post_id=pj, sents_surface=sents,
+                           doc_lemmas=lemmas, token_to_sent=tok2sent)
 
 
 def _build_global_sif(pre_docs) -> tuple[dict[str, int], int]:

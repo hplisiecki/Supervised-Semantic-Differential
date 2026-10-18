@@ -10,26 +10,23 @@ from __future__ import annotations
 
 import math
 import pickle
+from dataclasses import FrozenInstanceError
 
 import numpy as np
 import pytest
-from dataclasses import FrozenInstanceError
 
 from ssdiff.results.core import Result, ScalarView, View
+from ssdiff.results.lexicon_result import LexiconResult
 from ssdiff.results.schema import (
     Cluster,
     ClusterWord,
     Doc,
     FitInfo,
-    Pair,
     Snippet,
     Stats,
     Suggestion,
-    Summary,
     Word,
 )
-from ssdiff.results.lexicon_result import LexiconResult
-
 
 # ---------------------------------------------------------------------------
 # Helpers / tiny fixtures
@@ -84,14 +81,14 @@ def _make_lexicon_result(*, sort_descending=True) -> LexiconResult:
     """LexiconResult with known suggestions in a fixture-deterministic order."""
     # Three suggestions; corr acts as our effect size — in [0,1] when
     # var_type="categorical" (Cramér's V range).
-    # rank lower=better (combined score): we set rank such that tok_a < tok_b < tok_c
+    # higher rank = better (combined score): rank is set so tok_a > tok_b > tok_c
     suggestions = [
         Suggestion(token="tok_a", freq=10, cov_all=0.5, cov_bal=0.4,
-                   corr=0.8, pvalue=0.01, direction="positive", rank=0.1),
+                   corr=0.8, pvalue=0.01, direction="positive", rank=0.7),
         Suggestion(token="tok_b", freq=8,  cov_all=0.4, cov_bal=0.3,
                    corr=0.5, pvalue=0.05, direction="positive", rank=0.3),
         Suggestion(token="tok_c", freq=5,  cov_all=0.3, cov_bal=0.2,
-                   corr=0.2, pvalue=0.2,  direction="none",     rank=0.7),
+                   corr=0.2, pvalue=0.2,  direction="none",     rank=0.1),
     ]
     return LexiconResult(
         var_type="categorical",
@@ -230,6 +227,17 @@ def test_attach_embeddings_wires_attribute(pls_result, tiny_kv):
 
     # Restore original embeddings so other tests are not affected
     pls_result.attach(embeddings=tiny_kv)
+
+
+def test_attach_embeddings_at_other_abtt_raises(pls_result, tiny_kv):
+    """Attaching Embeddings at a different ABTT than the fit's is refused."""
+    from tests.conftest import make_kv
+    other = make_kv(["a", "b"], dim=4, seed=7)
+    other.abtt = pls_result.embeddings.abtt + 1
+    before = pls_result.embeddings
+    with pytest.raises(ValueError, match="abtt"):
+        pls_result.attach(embeddings=other)
+    assert pls_result.embeddings is before
 
 
 # ---------------------------------------------------------------------------
@@ -378,22 +386,16 @@ def test_lexicon_result_effect_size_in_range():
 
 
 # ---------------------------------------------------------------------------
-# Invariant 14: LexiconResult.suggestions returns tokens in effect-size-descending order
+# Invariant 14: LexiconResult.suggestions returns tokens in rank-descending order
 # ---------------------------------------------------------------------------
 
 def test_lexicon_suggestions_order_descending_by_rank():
-    """suggestions iterates tokens in rank-ascending (effect-size-descending) order."""
-    # The fixture sets rank: tok_a=0.1 < tok_b=0.3 < tok_c=0.7 (lower rank = better)
+    """suggestions iterates tokens in rank-descending order."""
+    # The fixture sets rank: tok_a=0.7 > tok_b=0.3 > tok_c=0.1 (higher rank = better)
     lr = _make_lexicon_result()
     tokens = [sug.token for sug in lr.suggestions]
     assert tokens == ["tok_a", "tok_b", "tok_c"], \
-        f"Suggestions not in rank-ascending order: {tokens}"
-
-    # Also verify corr (effect size) is non-increasing
-    corrs = [sug.corr for sug in lr.suggestions]
-    for i in range(len(corrs) - 1):
-        assert corrs[i] >= corrs[i + 1], \
-            f"corr not descending: corrs[{i}]={corrs[i]} < corrs[{i+1}]={corrs[i+1]}"
+        f"Suggestions not in rank-descending order: {tokens}"
 
 
 # ---------------------------------------------------------------------------

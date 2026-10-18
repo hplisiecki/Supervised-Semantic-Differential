@@ -374,7 +374,7 @@ def _rank_tokens(
             direction=direction,
         ))
 
-    rows.sort(key=lambda r: (-r["rank"], -r["cov_bal"], -r["freq"]))
+    rows.sort(key=lambda r: (-r["rank"], -r["cov_bal"], -r["freq"], r["token"]))
     return rows[:top_k]
 
 
@@ -408,7 +408,8 @@ def _seed_neighbours(
     :func:`_seed_endings` that are candidates, whatever their cosine. A token
     has one row: of the seeds that list it, the one with the highest cosine;
     a seed's row is its own. Rows are sorted by cosine, highest first; equal
-    cosines keep the order the seeds were given in.
+    cosines keep the order the seeds were given in, and a seed's own row comes
+    before that seed's other rows at cosine 1.
     """
     # Sorted so that equal cosines come out in the same order on every run.
     candidates = sorted(t for t in _frequent_tokens(token_sets, min_docs) if t in embeddings)
@@ -430,4 +431,4 @@ def _seed_neighbours(
     for seed in seeds:
         if seed in row_of:
             best[seed] = (seed, seed, 1.0)
-    return sorted(best.values(), key=lambda row: (-row[2], seeds.index(row[0])))
+    return sorted(best.values(), key=lambda row: (-min(row[2], 1.0), seeds.index(row[0]), row[1] != row[0]))

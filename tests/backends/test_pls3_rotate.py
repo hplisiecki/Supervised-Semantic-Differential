@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+
 from ssdiff.backends.pls import pls3_rotate
 
 

@@ -26,7 +26,6 @@ from ssdiff.backends._sweep_math import (
     zscore_ignore_nan,
 )
 
-
 # ---------------------------------------------------------------------------
 # cosine
 # ---------------------------------------------------------------------------
@@ -174,7 +173,6 @@ class TestDetrendByVariance:
 
     def test_perfect_log_linear_fit_zero_residuals(self):
         # y = 2 + 3*log(var) → residuals should be ~0
-        rng = np.random.default_rng(42)
         var = np.linspace(10.0, 100.0, 20)
         a_true, b_true = 2.0, 3.0
         y = a_true + b_true * np.log(var)

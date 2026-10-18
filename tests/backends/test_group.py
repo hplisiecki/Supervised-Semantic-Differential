@@ -28,7 +28,6 @@ from ssdiff.backends.group import (
 )
 from ssdiff.results.group_result import _canonical_pair_key
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -105,8 +104,8 @@ class TestMedianSplit:
         # 8 tied values → seeds should produce different shuffles almost surely
         results = set()
         for seed in range(20):
-            l = median_split(y, random_state=seed)
-            results.add(tuple(l))
+            labels = median_split(y, random_state=seed)
+            results.add(tuple(labels))
         # More than one unique assignment observed
         assert len(results) > 1
 

@@ -321,6 +321,7 @@ result = ssd.fit_regression(
     k_max=120,
     k_step=2,
     verbose=False,
+    pca_sweep_args=None,  # extra sweep settings; ignored when fixed_k is set
 )
 ```
 
@@ -334,6 +335,7 @@ result = ssd.fit_regression(
 | `k_max` | `int` | `120` | Maximum PCA-K for sweep |
 | `k_step` | `int` | `2` | Step size |
 | `verbose` | `bool` | `False` | Print progress |
+| `pca_sweep_args` | `dict \| None` | `None` | Extra keyword arguments for the PCA-K sweep (e.g. `cluster_topn`, `auck_radius`, `save_tables`, `out_dir`). Ignored when `fixed_k` is set. Otherwise a key `fit_regression` sets itself (`Xs`, `X_scale`, `x`, `ys`, `embeddings`, `pca_k_values`, `verbose`, `lang`) raises `ValueError`. |
 
 #### Covariates and mixed models
 
@@ -388,6 +390,7 @@ result = ssd.fit_pls(
     rotate="words",       # rotation of those gradients: "words" or None
     n_splits=50,          # split-half iterations
     random_state=2137,
+    test=True,            # False skips the confirmatory test; pvalue is NaN
     verbose=False,
 )
 ```
@@ -401,6 +404,7 @@ result = ssd.fit_pls(
 | `rotate` | `"words" \| None` | `"words"` | Rotation of the gradients when `ssd_gradients > 1`; ignored at 1. |
 | `n_splits` | `int` | `50` | Random splits for the split-half tests. |
 | `random_state` | `int` | `2137` | Random seed. |
+| `test` | `bool` | `True` | Run the confirmatory `split_exact` test. `False` skips it: `pvalue` is NaN, and k selection for `k="auto"` still runs. `result.test(n_splits=..., seed=...)` runs it later; with no arguments it uses 50 splits and no seed. |
 | `verbose` | `bool` | `False` | Print K-selection chain and confirmatory test progress. |
 
 To re-run the test with different settings, call `result.test(n_splits=200)` — it overwrites `result.stats.pvalue` and `result.test.pvalue` in place.
@@ -722,7 +726,7 @@ from ssdiff.results.multi_pls_result import MultiPLSResult
 - `SSD(embeddings, corpus, y, lexicon, *, window=3, sif_a=1e-3, use_full_doc=False, data=None)`
 - `.fit_pls(formula=None, *, k="auto", k_max=5, ssd_gradients=1, rotate="words", n_splits=50, random_state=2137, test=True, verbose=False)` -> `PLSResult`
 - `.fit_multipls(*, ssd_gradients=None, rotate=None, outcome_groups=None, n_splits=50, n_perm=1000, random_state=2137, verbose=False)` -> `MultiPLSResult`
-- `.fit_regression(formula=None, *, family="gaussian", link=None, fixed_k=None, k_min=2, k_max=120, k_step=2, verbose=False)` -> `PCAOLSResult`
+- `.fit_regression(formula=None, *, family="gaussian", link=None, fixed_k=None, k_min=2, k_max=120, k_step=2, verbose=False, pca_sweep_args=None)` -> `PCAOLSResult`
 - `.fit_groups(*, median_split=False, n_perm=5000, correction="holm", random_state=2137, verbose=False)` -> `GroupResult`
 
 ### `PLSResult` / `PCAOLSResult`

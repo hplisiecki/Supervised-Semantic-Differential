@@ -817,9 +817,11 @@ class Result(ABC):  # noqa: B024 — marker base class; subclasses share infra, 
         ``embeddings`` is an ``Embeddings`` or a path to load. A result fit on
         a wordpack is pickled without it: attach the same pack (name and
         version) at the fit's ABTT; a path is loaded at that ABTT. A result
-        fit on another format does not record the fit's ABTT: attach an
-        ``Embeddings`` normalized as for the fit.
+        fit on another format keeps its Embeddings, and attach checks new ones
+        against their ABTT; once they are removed nothing records it, so
+        attach an ``Embeddings`` normalized as for the fit.
         """
+        fit_emb = getattr(self, "embeddings", None)
         pack = getattr(self, "_wordpack", None)
         if isinstance(embeddings, (str, os.PathLike)):
             from ssdiff.embeddings import Embeddings
@@ -834,6 +836,8 @@ class Result(ABC):  # noqa: B024 — marker base class; subclasses share infra, 
                     f"This result was fit on wordpack {pack['name']}-{pack['version']} at "
                     f"abtt={pack['abtt']}; got {got['name']}-{got['version']} at abtt={got['abtt']}."
                 )
+        elif embeddings is not None and fit_emb is not None and embeddings.abtt != fit_emb.abtt:
+            raise ValueError(f"This result was fit on embeddings at abtt={fit_emb.abtt}; got abtt={embeddings.abtt}.")
         if embeddings is not None and not embeddings.l2_normalized:
             raise RuntimeError(
                 "This result was fit on L2-normalised embeddings. Normalize them as "

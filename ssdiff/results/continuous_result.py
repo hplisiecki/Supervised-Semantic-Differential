@@ -8,7 +8,6 @@ import numpy as np
 
 from ssdiff.results.core import ScalarView, TestView, View
 from ssdiff.results.display import _save_hint_enabled
-from ssdiff.results.single_result import _SingleResult
 from ssdiff.results.format import (
     fmt_count,
     fmt_d,
@@ -31,6 +30,7 @@ from ssdiff.results.schema import (
     Stats,
     Word,
 )
+from ssdiff.results.single_result import _SingleResult
 
 
 def _rolling_median(x: np.ndarray, window: int = 7) -> np.ndarray:
@@ -54,8 +54,7 @@ class FitInfoView(ScalarView):
 
     _name = "fit_info"
     _columns = (
-        "n_components", "pca_k", "p_at_k", "n_splits",
-        "split_mean_r", "random_state",
+        "n_components", "p_at_k", "n_splits", "random_state",
         "k_min", "k_max", "k_step", "best_k", "pca_k_source",
         "formula", "family", "ssd_gradients", "rotate",
     )
@@ -510,7 +509,8 @@ class ClustersViewSided(View[Cluster]):
         """
         from ssdiff.results.core import _project, _row_to_dict, _validate_cols, _warn
         from ssdiff.results.display import (
-            DEFAULT_MAX_ROWS, DEFAULT_MAX_ROWS_BY_CLASS,
+            DEFAULT_MAX_ROWS,
+            DEFAULT_MAX_ROWS_BY_CLASS,
         )
         from ssdiff.results.format import default_alignment, fmt_cell, fmt_table
         if self._cluster_id is not None and cols is None:
@@ -1379,7 +1379,9 @@ class ContinuousResult(_SingleResult):
         x_norms = np.maximum(x_norms, 1e-12)
         cos_align = ((x / x_norms) @ self.gradient).ravel()
         yhat_std = (x @ self.beta).ravel()
-        yhat_raw = self._predict_x(x)
+        # A non-Gaussian model's beta is on the link scale; y_hat is its fitted mean on the response scale.
+        linear = model is None or (model.family == "gaussian" and model.link == "identity")
+        yhat_raw = self._predict_x(x) if linear else np.asarray(model.fitted, dtype=float)
 
         denom = float(np.std(y) * np.std(yhat_std))
         corr = float(np.corrcoef(y, yhat_std)[0, 1]) if denom > 0 else 0.0
@@ -1700,8 +1702,6 @@ class ContinuousResult(_SingleResult):
             fit_rows.append(("n_components", fi.n_components))
         if fi.p_at_k is not None:
             fit_rows.append(("p_at_k", fi.p_at_k))
-        if fi.pca_k is not None:
-            fit_rows.append(("pca_k", fi.pca_k))
         if fi.pca_k_source is not None:
             fit_rows.append(("pca_k_source", fi.pca_k_source))
         if fi.random_state is not None:

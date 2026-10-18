@@ -21,7 +21,6 @@ from ssdiff.utils.lexicon import (
     _validate_var_type,
 )
 
-
 # ---------------------------------------------------------------------------
 # _as_float_array
 # ---------------------------------------------------------------------------
@@ -374,6 +373,7 @@ def test_a_repeated_seed_gives_the_table_of_the_seed_given_once():
     ({"embeddings": _angle_embeddings()}, ValueError, "only used with seeds"),
     ({"seeds": ["cat", "nope", "nada"], "embeddings": _angle_embeddings()},
      ValueError, "nope.*nada"),
+    ({"seeds": ["cat"], "embeddings": _angle_embeddings(), "top_k": -1}, ValueError, "top_k"),
 ])
 def test_suggest_lexicon_seed_argument_errors(kwargs, error, match):
     corpus = Corpus(SEED_DOCS, pretokenized=True)

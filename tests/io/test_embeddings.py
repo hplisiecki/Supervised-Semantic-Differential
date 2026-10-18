@@ -14,7 +14,6 @@ import pytest
 
 from ssdiff.embeddings import Embeddings
 
-
 # ---------------------------------------------------------------------------
 # Helpers / local fixtures
 # ---------------------------------------------------------------------------
@@ -136,7 +135,6 @@ class TestNormalizeABTT:
     def test_abtt_same_value_warns(self):
         emb = _make_emb(n=10, dim=6)
         emb.normalize(l2=True, abtt=2)
-        vectors_after_first = emb.vectors.copy()
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             emb.normalize(l2=True, abtt=2)  # same m — should warn
@@ -200,7 +198,7 @@ class TestRoundTrips:
 
     def test_round_trip_kv(self, source_emb, tmp_path):
         """Round-trip via .kv format; skip if gensim is not installed."""
-        gensim = pytest.importorskip("gensim")
+        pytest.importorskip("gensim")
         stem = str(tmp_path / "model")
         source_emb.save(stem, fmt="kv")
         loaded = Embeddings.load(stem + ".kv")
@@ -336,6 +334,7 @@ class TestLoadErrors:
 def test_load_autodetects_unit_rows(tmp_path):
     """Embeddings.load auto-detects unit rows and sets l2_normalized=True."""
     import numpy as np
+
     from ssdiff.embeddings import Embeddings
 
     rng = np.random.default_rng(0)
@@ -353,6 +352,7 @@ def test_load_autodetects_unit_rows(tmp_path):
 def test_load_does_not_falsely_set_unit_flag(tmp_path):
     """Embeddings.load leaves l2_normalized=False when rows are not unit."""
     import numpy as np
+
     from ssdiff.embeddings import Embeddings
 
     rng = np.random.default_rng(0)
@@ -368,6 +368,7 @@ def test_load_does_not_falsely_set_unit_flag(tmp_path):
 def test_ssd_init_raises_on_unnormed_embedding(tiny_kv, sample_docs, sample_y, lexicon):
     """SSD requires L2-normalised embeddings."""
     import pytest
+
     from ssdiff import SSD, Corpus
     # Force the flag off to simulate a raw (un-normalised) embedding.
     tiny_kv_raw = type(tiny_kv).__new__(type(tiny_kv))
@@ -380,7 +381,9 @@ def test_ssd_init_raises_on_unnormed_embedding(tiny_kv, sample_docs, sample_y, l
 
 def test_get_vector_norm_true_raises_on_unnormed():
     """get_vector(word, norm=True) raises when the embedding is not unit-normed."""
-    import numpy as np, pytest
+    import numpy as np
+    import pytest
+
     from ssdiff.embeddings import Embeddings
     raw = np.array([[3.0, 4.0]], dtype=np.float32)  # norm 5
     emb = Embeddings(["a"], raw)
@@ -390,7 +393,9 @@ def test_get_vector_norm_true_raises_on_unnormed():
 
 def test_similar_by_vector_raises_on_unnormed():
     """similar_by_vector raises when the embedding is not unit-normed."""
-    import numpy as np, pytest
+    import numpy as np
+    import pytest
+
     from ssdiff.embeddings import Embeddings
     raw = np.array([[3.0, 4.0], [1.0, 0.0]], dtype=np.float32)
     emb = Embeddings(["a", "b"], raw)
@@ -401,6 +406,7 @@ def test_similar_by_vector_raises_on_unnormed():
 def test_lazy_normaliser_state_removed():
     """The lazy normaliser API and its hidden state are gone."""
     import numpy as np
+
     from ssdiff.embeddings import Embeddings
     assert not hasattr(Embeddings, "get_normed_vectors")
     fresh = Embeddings(["a"], np.ones((1, 2), dtype=np.float32))
@@ -422,7 +428,9 @@ class TestLegacyNumpyCoreRemap:
     def test_find_class_resolves_legacy_path_without_stub(self):
         import io
         import sys
+
         import numpy._core.multiarray as real
+
         from ssdiff.embeddings import _GensimUnpickler
 
         u = _GensimUnpickler(io.BytesIO(b""))
@@ -440,7 +448,9 @@ class TestLegacyNumpyCoreRemap:
 
     def test_find_class_normal_numpy_global_unaffected(self):
         import io
+
         import numpy as np
+
         from ssdiff.embeddings import _GensimUnpickler
 
         u = _GensimUnpickler(io.BytesIO(b""))

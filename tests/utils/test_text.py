@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import math
-from unittest.mock import patch
-
 import pytest
 
 from ssdiff.lang_config import (
@@ -21,7 +18,6 @@ from ssdiff.utils.text import (
     load_stopwords,
     preprocess_texts,
 )
-
 
 # ---------------------------------------------------------------------------
 # load_stopwords

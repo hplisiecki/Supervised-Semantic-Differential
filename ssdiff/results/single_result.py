@@ -19,7 +19,6 @@ import numpy as np
 from ssdiff.results.core import Result
 from ssdiff.utils.math import unit_vector
 
-
 _SNIPPET_EXTRACTION_KWARGS = {"top_per_side", "min_cosine", "n_jobs"}
 
 

@@ -6,7 +6,6 @@ import pytest
 
 from ssdiff.corpus import Corpus
 
-
 # ---------------------------------------------------------------------------
 # 1. Pretokenized construction — basic len and docs
 # ---------------------------------------------------------------------------
@@ -82,7 +81,7 @@ def test_empty_pretokenized_zero_len():
 
 def test_empty_raw_text_raises_without_nlp():
     # No nlp / lang / model provided → ValueError
-    with pytest.raises(ValueError, match="lang=|model=|nlp="):
+    with pytest.raises(ValueError, match=r"lang=|model=|nlp="):
         Corpus(["hello world"])
 
 

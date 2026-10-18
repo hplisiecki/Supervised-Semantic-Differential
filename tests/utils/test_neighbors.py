@@ -9,7 +9,6 @@ import pytest
 
 from ssdiff.utils.neighbors import cluster_top_neighbors, filtered_neighbors
 
-
 # ---------------------------------------------------------------------------
 # filtered_neighbors tests
 # ---------------------------------------------------------------------------

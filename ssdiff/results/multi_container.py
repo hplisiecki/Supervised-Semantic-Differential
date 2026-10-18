@@ -11,7 +11,8 @@ wrappers: single-leaf access by key, no flat row iteration, no summed ``__len__`
 
 from __future__ import annotations
 
-from typing import Any, Hashable
+from collections.abc import Hashable
+from typing import Any
 
 from ssdiff.results.core import Result
 
@@ -35,7 +36,7 @@ class _ShimView:
         *,
         leaves: dict[Hashable, Any],
         view_name: str,
-        container: "_MultiContainer",
+        container: _MultiContainer,
     ):
         self._leaves = dict(leaves)
         self._view_name = view_name

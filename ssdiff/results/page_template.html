@@ -663,8 +663,8 @@ function buildSpecs(data, unit, ui) {
 
     if (continuous) {
       const byRes = docs.slice().sort((a, b) => a.residual - b.residual);
-      // With a formula, residual has the covariates taken out but y_hat is the text's part only,
-      // so y_hat could contradict the over/under-predicted labels.
+      // With a formula on a Gaussian fit, residual has the covariates taken out but y_hat is the
+      // text's part only, so y_hat could contradict the over/under-predicted labels.
       const formula = one(data.tables.fit_info).formula;
       const misCols = [C("rank", "Rank", "int"), C("text", "Document Text", "text", { wide: true }), C("y_true", "Actual Y", "num"),
         formula ? null : C("y_hat", "Predicted Y", "num"), C("residual", "Residual", "num")].filter(Boolean);
@@ -913,8 +913,8 @@ function PairTablesTab({ specs, tab }) {
 const STAT_LABELS = {
   backend: "Backend", r2: "R\u00B2", r2_adj: "Adj. R\u00B2", pvalue: "p", n_raw: "Documents (raw)", n_kept: "Documents kept",
   n_dropped: "Documents dropped", y_mean: "Mean y", y_std: "SD y", beta_norm: "\u2016\u03b2\u2016", delta: "\u0394y / +0.10 cos",
-  iqr_effect: "IQR effect", y_corr_pred: "Corr(y, \u0177)", n_components: "Components", pca_k: "PCA K", p_at_k: "p at K",
-  n_splits: "Splits", split_mean_r: "Mean split r", random_state: "Random state", name: "Test", split_r2: "Split R\u00B2",
+  iqr_effect: "IQR effect", y_corr_pred: "Corr(y, \u0177)", n_components: "Components", p_at_k: "p at K",
+  n_splits: "Splits", random_state: "Random state", name: "Test", split_r2: "Split R\u00B2",
   k: "k", k_max: "k max", k_min: "k min", topn: "Words clustered", min_cluster_size: "Min. cluster size",
   G: "Groups", n_perm: "Permutations", correction: "Correction", omnibus_T: "Omnibus T", omnibus_p: "Omnibus p",
   n: "Documents", q: "Outcomes", rotate: "Rotation", cov_explained: "Cov. explained", statistic: "Statistic",

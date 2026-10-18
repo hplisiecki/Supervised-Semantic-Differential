@@ -80,10 +80,8 @@
   "fit_info": {
    "columns": [
     "n_components",
-    "pca_k",
     "p_at_k",
     "n_splits",
-    "split_mean_r",
     "random_state",
     "k_min",
     "k_max",

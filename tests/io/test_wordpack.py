@@ -177,7 +177,9 @@ def test_new_corpus_rows_load_once_not_on_every_lookup(wordpack_path, monkeypatc
     if entry == "ssd":
         emb = SSD(first, corpus, [0.1, 0.2], use_full_doc=True).embeddings
     else:
-        emb = copy.copy(pls_result).attach(corpus=corpus, embeddings=first).embeddings
+        r = copy.copy(pls_result)
+        r.embeddings = None
+        emb = r.attach(corpus=corpus, embeddings=first).embeddings
 
     reads = []
     real = Embeddings._read_rows

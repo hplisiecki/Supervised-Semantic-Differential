@@ -7,10 +7,10 @@ Re-exports the result classes (``PLSResult``, ``PCAOLSResult``,
 """
 
 from ssdiff.results.continuous_result import (
-    ClusterWordsView,
-    ClusterWordsViewSided,
     ClustersView,
     ClustersViewSided,
+    ClusterWordsView,
+    ClusterWordsViewSided,
     ContinuousResult,
     PCAOLSResult,
     PLSResult,
@@ -25,6 +25,8 @@ from ssdiff.results.group_result import GroupResult, PairResult
 from ssdiff.results.lexicon_result import LexiconResult
 from ssdiff.results.multi_pls_result import (
     MultiPLSResult,
+)
+from ssdiff.results.multi_pls_result import (
     _PLSComponentResult as PLSComponentResult,
 )
 

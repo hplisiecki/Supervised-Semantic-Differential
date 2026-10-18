@@ -8,9 +8,7 @@ significance testing and k-selection live in ``ssdiff.ssd`` and call
 from __future__ import annotations
 
 import numpy as np
-
 import plskit
-
 
 __all__ = ("pls1_rotate", "pls3_rotate", "word_target")
 

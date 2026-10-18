@@ -26,7 +26,7 @@ def test_no_heavy_imports_on_load():
 
 def test_public_api_importable():
     """SSD, Corpus, and Embeddings must all be importable from ssdiff."""
-    from ssdiff import Corpus, Embeddings, SSD  # noqa: F401
+    from ssdiff import SSD, Corpus, Embeddings
 
     assert callable(SSD), "SSD should be a callable class"
     assert callable(Corpus), "Corpus should be a callable class"
@@ -34,8 +34,8 @@ def test_public_api_importable():
 
 
 def test_version_matches_pyproject():
-    from pathlib import Path
     import re
+    from pathlib import Path
     pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
     content = pyproject.read_text(encoding="utf-8")
 

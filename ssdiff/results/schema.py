@@ -257,7 +257,7 @@ class Suggestion:
         ``"positive"``, ``"negative"``, or ``"none"`` — sign of ``corr``.
     rank : float or None
         Combined ranking score: balanced coverage × (1 − |corr| / corr_cap).
-        Lower is better.
+        Higher is better.
     seed : str or None
         Of the seeds that list this token, the one it is closest to;
         ``None`` without seeds.
@@ -346,6 +346,8 @@ class FitInfo:
     """
     n_components: int | None = None
     # PLS-specific
+    # pca_k and split_mean_r are never filled but stay: FitInfo unpickles by field
+    # position, so removing one would shift the later values of old pickles.
     pca_k: int | None = None
     p_at_k: int | None = None        # k at which the reported p-value was tested
     n_splits: int | None = None

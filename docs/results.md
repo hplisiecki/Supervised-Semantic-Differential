@@ -376,14 +376,16 @@ gr.test.omnibus_p          # omnibus p-value
 
 ## Pickle & `attach()`
 
-Pickled results lose their corpus/embeddings link. Views that need live data (`words`, `clusters`, `snippets`, `docs.id(...)`) raise `RuntimeError` until re-wired:
+A pickled result keeps its corpus and its embeddings, except a wordpack: a wordpack is read from its file and cannot be pickled. Views that need embeddings (`words`, `clusters`, `snippets`, `predict()`) then raise `RuntimeError` until you attach the same pack again. A path is loaded at the fit's ABTT, and `attach()` checks the pack's name, version and ABTT against the fit:
 
 ```python
 import pickle
 result = pickle.load(open("result.pkl", "rb"))
-result.attach(corpus=my_corpus, embeddings=my_embeddings)
+result.attach(embeddings="en-glove2024-dolma-1.wordpack")
 result.words   # works now
 ```
+
+`attach(corpus=..., embeddings=...)` also swaps in another corpus or embeddings on any result; embeddings must have the fit's ABTT.
 
 `attach()` returns `self`, so it chains: `pickle.load(f).attach(corpus=c, embeddings=e)`. On a result with leaves (`GroupResult`, `MultiPLSResult`, or `fit_pls(ssd_gradients=N)`), it re-wires every leaf too.
 

@@ -20,9 +20,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from ssdiff.results.group_result import GroupResult, PairResult
-from ssdiff.results.multi_container import _MultiContainer, _ShimView
-
+from ssdiff.results.group_result import PairResult
+from ssdiff.results.multi_container import _ShimView
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -322,7 +321,6 @@ def test_report_text_pos_section_count(group_result_3g):
     # "Pairwise contrasts" section title appears exactly once
     assert text.count("Pairwise") >= 1
     # The pairwise table has one row per pair; check contrast lines in test view
-    n_pairs = _n_pairs(3)
     # Each pair produces one contrast entry in the pairwise table
     for pair_key in gr._leaves:
         contrast = f"{pair_key[0]}_{pair_key[1]}"

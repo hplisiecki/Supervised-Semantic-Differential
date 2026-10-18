@@ -357,3 +357,17 @@ def test_pls_summary_without_formula(tiny_kv, large_docs, large_y, lexicon):
     assert "Fixed effects" not in text
     assert "Text:  PLS, k = 1\n" in text
     assert f"(split_exact): p = {fmt_p(res.test.pvalue)}" in text
+
+
+def test_binomial_y_hat_is_fitted_probability(tiny_kv, large_docs, large_y, lexicon):
+    y01 = (large_y > np.median(large_y)).astype(float)
+    res = _ssd(tiny_kv, large_docs, y01, lexicon).fit_regression(family="binomial", fixed_k=3)
+    y_hat = np.array([d.y_hat for d in res.docs])
+    assert y_hat.min() >= 0 and y_hat.max() <= 1
+    np.testing.assert_allclose(y_hat, res.model.fitted)
+
+
+def test_integer_y_labels_groups_without_decimal(tiny_kv, large_docs, lexicon):
+    y = np.array([3] * 25 + [4] * 25)
+    res = _ssd(tiny_kv, large_docs, y, lexicon).fit_groups(n_perm=20, random_state=0)
+    assert sorted(res.group_labels.values()) == ["3", "4"]

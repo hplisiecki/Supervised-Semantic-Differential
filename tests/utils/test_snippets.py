@@ -10,9 +10,7 @@ Tests cover:
 
 from __future__ import annotations
 
-import numpy as np
-import pytest
-
+from ssdiff.utils.text import PreprocessedProfile
 from ssdiff.utils.snippets import (
     _DocLike,
     _iter_doclikes,
@@ -21,8 +19,6 @@ from ssdiff.utils.snippets import (
     cluster_snippets_by_centroids,
     snippets_along_beta,
 )
-from ssdiff.utils.text import PreprocessedDoc
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -177,6 +173,21 @@ class TestIterDoclikes:
         """post_id is always 0 for non-profile (plain PreprocessedDoc) input."""
         result = list(_iter_doclikes(sample_preprocessed_docs))
         assert all(dl.post_id == 0 for dl in result)
+
+    def test_profile_yields_one_doclike_per_post(self):
+        """A PreprocessedProfile yields (profile_id, post_id) per post with that post's lemmas."""
+        prof = PreprocessedProfile(
+            raw_posts=["a b", "c"],
+            post_sents_surface=[["a b"], ["c"]],
+            post_sents_lemmas=[[["a", "b"]], [["c"]]],
+            post_doc_lemmas=[["a", "b"], ["c"]],
+            post_sent_char_spans=[[(0, 3)], [(0, 1)]],
+            post_token_to_sent=[[0, 0], [0]],
+            post_sents_kept_idx=[[[0, 1]], [[0]]],
+        )
+        result = list(_iter_doclikes([prof, prof]))
+        assert [(d.profile_id, d.post_id) for d in result] == [(0, 0), (0, 1), (1, 0), (1, 1)]
+        assert [d.doc_lemmas for d in result[:2]] == [["a", "b"], ["c"]]
 
     def test_empty_list_yields_nothing(self):
         """Empty input produces empty output."""

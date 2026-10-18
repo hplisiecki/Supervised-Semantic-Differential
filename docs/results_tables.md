@@ -85,15 +85,15 @@ Cluster and snippet reruns with different parameters are cached separately — t
 
 | column | default | note |
 |---|:---:|---|
-| `n_components` | ✓ | defines the fit |
-| `pca_k` | ✓ | meaningful when PCA preprocess / PCA+OLS; `None` otherwise |
-| `p_method` | ✓ | which significance test was used |
-| `n_perm` |  | test config — on `.test` |
-| `n_splits` |  | same |
-| `split_mean_r` |  | surfaced as `split_r2` on `.test` |
-| `random_state` | ✓ | reproducibility anchor |
+| `n_components` | ✓ | PLS k; PCA regression K |
+| `p_at_k` | ✓ | `fit_pls`: the k the test runs at (1 for `k="auto"`) |
+| `n_splits` |  | `fit_pls` test config — on `.test` |
+| `random_state` | ✓ | `fit_pls` seed |
 | `k_min` / `k_max` / `k_step` |  | PCA-sweep config — on `.sweep` |
 | `best_k` |  | PCA-sweep output — on `.sweep` |
+| `pca_k_source` |  | `fit_regression`: `"sweep"` or `"fixed"` |
+| `formula` |  | formula given to `fit_pls` / `fit_regression` |
+| `family` |  | `fit_regression`: glmm family |
 | `ssd_gradients` |  | `fit_pls`: number of gradients returned; `None` for PCA+OLS |
 | `rotate` |  | `fit_pls`: rotation of those gradients; `None` for one gradient |
 
@@ -161,7 +161,7 @@ Same columns + same defaults as `WordsView`. Row cap default = 20 (per side). Us
 |---|:---:|---|
 | `doc_id` | ✓ | aligns with corpus row index |
 | `y_true` | ✓ | |
-| `y_hat` | ✓ | |
+| `y_hat` | ✓ | the text's score on the y scale; for a non-Gaussian `fit_regression`, the model's fitted mean on the response scale |
 | `residual` | ✓ | `y_true` minus `model`'s fitted value (`fit_regression`), or the PLS fit's residual on the residualized y (`fit_pls` with a formula), so the covariates are taken out of it while `y_hat` is the text's part only; otherwise `y_true − y_hat` |
 | `alignment_score` | ✓ | cosine along β — complementary to `y_hat` |
 
@@ -179,7 +179,16 @@ Default = full. Nothing to prune.
 
 ### `test` — `PCAOLSTestView` (ScalarView)
 
-Columns: `name`, `pvalue`. Default = full (rerun is a no-op; the test is analytic).
+| column | default | note |
+|---|:---:|---|
+| `name` | ✓ | `"f_test"` or `"lrt"` |
+| `pvalue` | ✓ | |
+| `statistic` | ✓ | F for `"f_test"`, χ² for `"lrt"` |
+| `df` | ✓ | the number of components K |
+| `df_resid` | ✓ | the F-test's residual df; `None` for `"lrt"` |
+| `r2_delta` | ✓ | R² the components add; NaN unless the model is OLS |
+
+Rerun is a no-op; the test is analytic.
 
 ### `covariates` — `CovariatesView` (PCAOLSResult)
 

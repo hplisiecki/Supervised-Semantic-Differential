@@ -10,10 +10,9 @@ Covers:
 
 from __future__ import annotations
 
-import math
-
 import pytest
 
+from ssdiff.results.display import _save_hint_enabled, set_repr_hints
 from ssdiff.results.format import (
     ELLIPSIS,
     MINUS,
@@ -27,8 +26,6 @@ from ssdiff.results.format import (
     fmt_table,
     truncate,
 )
-from ssdiff.results.display import set_repr_hints, _save_hint_enabled
-
 
 # ---------------------------------------------------------------------------
 # fmt_p
@@ -180,7 +177,6 @@ def test_fmt_table_right_aligns_numeric_column():
     headers = ["label", "n"]
     numeric = [False, True]
     result = fmt_table(rows, headers=headers, numeric=numeric)
-    lines = result.splitlines()
     # numeric column width for "n" vs "22": widths = [2, 2]; both right-aligned
     # header line: "label  n" with "n" right-padded to 2 or right-justified
     # The numeric column "n" should be right-justified (trailing whitespace at start)

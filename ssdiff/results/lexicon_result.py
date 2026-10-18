@@ -9,6 +9,7 @@ from ssdiff.results.format import fmt_count, fmt_d, fmt_p, fmt_pct, fmt_r
 from ssdiff.results.report import Report, Section, _resolve_section
 from ssdiff.results.schema import Suggestion, Summary
 
+
 def _opt(fmt, value, **kw) -> str:
     """Format *value* with *fmt*; an outcome statistic that is ``None`` shows as empty."""
     return "" if value is None else fmt(value, **kw)

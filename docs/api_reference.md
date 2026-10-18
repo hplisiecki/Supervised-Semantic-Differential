@@ -205,6 +205,7 @@ result = ssd.fit_regression(formula=None, *,
     fixed_k=None,
     k_min=2, k_max=120, k_step=2,
     verbose=False,
+    pca_sweep_args=None,
 )
 ```
 
@@ -216,10 +217,11 @@ result = ssd.fit_regression(formula=None, *,
 | `fixed_k` | `int \| None` | `None` | Fixed number of PCA components. `None` selects K via the interpretability + stability sweep. |
 | `k_min`, `k_max`, `k_step` | `int` | `2`, `120`, `2` | Sweep range (ignored when `fixed_k` is set). |
 | `verbose` | `bool` | `False` | Print progress. |
+| `pca_sweep_args` | `dict \| None` | `None` | Extra keyword arguments for the PCA-K sweep (e.g. `cluster_topn`, `auck_radius`, `save_tables`, `out_dir`). Ignored when `fixed_k` is set. Otherwise a key `fit_regression` sets itself (`Xs`, `X_scale`, `x`, `ys`, `embeddings`, `pca_k_values`, `verbose`, `lang`) raises `ValueError`. |
 
 Returns a `PCAOLSResult`. K is chosen by the sweep (OLS on standardized y, whatever the family). The final model at that K is fit by `glmm` with the K component scores added to the formula, and `result.model` holds that fit (response `_ssd_y`, components `_ssd_pca_1` … `_ssd_pca_K`). The p-value tests the K components together: the formula alone against the formula plus the components, both fit by ML on the same rows. An OLS model (Gaussian, no random effects) gives the F-test (`test.name == "f_test"`), and so do Gamma and inverse-Gaussian GLMs (Wald F); every other model gives the likelihood-ratio test (`"lrt"`). A column the formula uses must have no missing values in the retained documents. Sweep diagnostics and `result.plot_sweep(path=None, dpi=300)` are available when `fixed_k is None`.
 
-For a Gaussian identity-link fit, `beta` is on the standardized-y scale; for other families it is on the link scale (e.g. log-odds). With a formula, `r2` / `r2_adj` are the whole model's, covariates included, and NaN for GLMs and mixed models. `docs.y_hat` uses `beta` only, not the covariates or random effects. `predict()` raises `NotImplementedError` after a fit with a formula or another family.
+For a Gaussian identity-link fit, `beta` is on the standardized-y scale; for other families it is on the link scale (e.g. log-odds). With a formula, `r2` / `r2_adj` are the whole model's, covariates included, and NaN for GLMs and mixed models. For a Gaussian identity-link fit, `docs.y_hat` uses `beta` only, not the covariates or random effects; for other families it is the model's fitted mean on the response scale (e.g. a probability), covariates included. `predict()` raises `NotImplementedError` after a fit with a formula or another family.
 
 ```python
 ssd = SSD(emb, corpus, y="rating", lexicon=lexicon, data=df)
@@ -242,7 +244,7 @@ result = ssd.fit_pls(
     ssd_gradients=1,
     rotate="words",                  # "words" | None; used when ssd_gradients > 1
     n_splits=50,
-    random_state=2137, verbose=False,
+    random_state=2137, test=True, verbose=False,
 )
 ```
 
@@ -255,6 +257,7 @@ result = ssd.fit_pls(
 | `rotate` | `"words" \| None` | `"words"` | With `ssd_gradients > 1`: `"words"` varimax-rotates the weight vectors against the projection of the leading vocabulary rows, orders them by the correlation of their scores with y (highest first) and flips each so that correlation is positive; it needs attached `Embeddings`. `None` keeps NIPALS order and signs; gradients 2…N then have zero covariance with y. Any other value raises `ValueError`. |
 | `n_splits` | `int` | `50` | Random splits for the split-half tests. |
 | `random_state` | `int` | `2137` | Seed. |
+| `test` | `bool` | `True` | Run the confirmatory `split_exact` test. `False` skips it: `pvalue` is NaN, and k selection for `k="auto"` still runs. `result.test(n_splits=..., seed=...)` runs it later; with no arguments it uses 50 splits and no seed. |
 | `verbose` | `bool` | `False` | Print progress. |
 
 Returns a `PLSResult`. Re-run the significance test via `result.test(...)` — see [`results.md`](results.md). With `ssd_gradients=N > 1` it also has:
@@ -263,6 +266,8 @@ Returns a `PLSResult`. Re-run the significance test via `result.test(...)` — s
 - `.pls_info` — `ssd_gradients`, `rotate`, `order`, `signs`, `sweeps`, `V_converged`, `kaiser_normalized`, `random_state`
 
 `fit_info.n_components` stays the standard fit's k.
+
+`result.summary()` prints and returns a compact summary: the text's test and its R² (partial R² with a formula).
 
 ### `fit_groups()` — categorical outcome
 
@@ -345,7 +350,9 @@ result.words / .clusters / .snippets / .docs    # continuous; also .words/.clust
 result.pairs                # groups only — PairsListView of Pair dataclass rows
 gr[('g1', 'g2')].words      # idiomatic per-pair zoom (also .clusters, .snippets, .stats, …)
 gr.pairs[('g1', 'g2')]      # raw Pair dataclass (fields: T, p_raw, p_corrected, cohens_d, contrast, …)
-result.suggestions / .tokens / .summary         # lexicon only
+result.suggestions / .tokens / .summary         # LexiconResult
+result.summary()            # PLS / PCA regression — compact summary
+result.save_page(path) / result.page_data()     # one offline HTML page / its content as a dict; not LexiconResult
 result.attach(corpus=..., embeddings=...)       # re-wire after un-pickling
 result.clear_cache()
 ```

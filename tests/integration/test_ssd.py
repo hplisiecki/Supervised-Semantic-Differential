@@ -10,15 +10,13 @@ no real embeddings, no spaCy downloads, no network access.
 from __future__ import annotations
 
 import threading
-from contextlib import contextmanager
 
 import numpy as np
 import pytest
 
 from ssdiff.corpus import Corpus
 from ssdiff.ssd import SSD
-from ssdiff.utils.diagnostics import progress_hook, _get_hook
-
+from ssdiff.utils.diagnostics import _get_hook, progress_hook
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -131,7 +129,7 @@ def test_fit_pls_constant_y_rejected(tiny_kv, sample_docs, lexicon):
     constant_y = np.ones(len(sample_docs))
     corpus = Corpus(sample_docs, pretokenized=True, lang="pl")
     ssd = SSD(tiny_kv, corpus, constant_y, lexicon)
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError, match="nonzero variance"):
         ssd.fit_pls(k=1, n_splits=20)
 
 
@@ -247,11 +245,10 @@ def test_progress_hook_restores_on_exception():
     def cb(cur, tot, desc):
         sentinel_calls.append(cur)
 
-    with pytest.raises(RuntimeError, match="boom"):
-        with progress_hook(cb):
-            # Hook is active inside
-            assert _get_hook() is cb
-            raise RuntimeError("boom")
+    with pytest.raises(RuntimeError, match="boom"), progress_hook(cb):
+        # Hook is active inside
+        assert _get_hook() is cb
+        raise RuntimeError("boom")
 
     # After the exception, hook must be restored to None
     assert _get_hook() is None

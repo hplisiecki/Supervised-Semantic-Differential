@@ -382,7 +382,7 @@ class MultiPLSResult(_MultiContainer):
         self.R = np.asarray(R, dtype=np.float64)
         self._X_scale = np.asarray(X_scale, dtype=np.float64)
 
-        self.k = int(self.U_rot.shape[1])
+        self.ssd_gradients = int(self.U_rot.shape[1])
         self.rotate = rotate
         self.outcome_names = list(outcome_names)
         self.outcome_groups = (
@@ -400,12 +400,12 @@ class MultiPLSResult(_MultiContainer):
 
         pvalue = (test_info or {}).get("pvalue", float("nan"))
         self.stats = MultiPLSStatsView(
-            n=self._x.shape[0], q=self._y_raw.shape[1], ssd_gradients=self.k,
+            n=self._x.shape[0], q=self._y_raw.shape[1], ssd_gradients=self.ssd_gradients,
             rotate=rotate, cov_explained=cov_explained, pvalue=pvalue,
         )
 
         self.pls_info = PLSInfoView(
-            ssd_gradients=self.k,
+            ssd_gradients=self.ssd_gradients,
             rotate=rotate,
             order=order,
             signs=signs,
@@ -436,7 +436,7 @@ class MultiPLSResult(_MultiContainer):
         groups = self.outcome_groups or {}
         group_of = {name: g for g, members in groups.items() for name in members}
         leaves: dict = {}
-        for i in range(self.k):
+        for i in range(self.ssd_gradients):
             # c_i = (R' Σ² R)_ii — dimension i's squared cross-covariance.
             c_i = float(self.R[:, i] ** 2 @ sigma2)
             stats = PLSComponentStatsView(
@@ -535,7 +535,7 @@ class MultiPLSResult(_MultiContainer):
         sections += _dimension_sections(self, tw["n"] if tw else None)
 
         return Report(
-            title=f"MultiPLSResult — ssd_gradients={self.k}, rotate={self.rotate}",
+            title=f"MultiPLSResult — ssd_gradients={self.ssd_gradients}, rotate={self.rotate}",
             subtitle=(
                 f"(n = {fmt_count(s['n'])}, q = {s['q']}, "
                 f"cov_explained = {fmt_r(s['cov_explained'])})"

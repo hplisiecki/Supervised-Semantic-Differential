@@ -649,7 +649,7 @@ class SSD:
         m = plskit.pls1_fit(
             Xs, ys, k=n_comp, pre_standardized=True, seed=random_state,
         )
-        T, P, W, Q, coef = m.T, m.P, m.W, m.Q, m.coef
+        T, W, coef = m.T, m.W, m.coef
 
         y_pred = Xs @ coef
         stats = self._compute_fit_stats(ys, y_pred, W.shape[1])
@@ -1242,7 +1242,9 @@ class SSD:
         if median_split:
             groups_local = _median_split(self.y, random_state=random_state)
         else:
-            groups_local = np.asarray(self.y, dtype=object)
+            # A numeric y holds floats; a whole number labels its group as an int ("3", not "3.0").
+            groups_local = np.asarray(
+                [int(g) if self.is_numeric and float(g).is_integer() else g for g in self.y], dtype=object)
 
         # Small-group filtering (only when not median_split)
         n_group_dropped = 0
