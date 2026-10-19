@@ -10,7 +10,6 @@ Tests cover:
 
 from __future__ import annotations
 
-from ssdiff.utils.text import PreprocessedProfile
 from ssdiff.utils.snippets import (
     _DocLike,
     _iter_doclikes,
@@ -19,6 +18,7 @@ from ssdiff.utils.snippets import (
     cluster_snippets_by_centroids,
     snippets_along_beta,
 )
+from ssdiff.utils.text import PreprocessedProfile
 
 # ---------------------------------------------------------------------------
 # Helpers
