@@ -335,7 +335,7 @@ Returns a `MultiPLSResult`:
 
 The p-value tests the first dimension (LV1) and does not depend on `rotate`. Leaves have no p-value.
 
-Runnable example: [`examples/hate_multipls.py`](../examples/hate_multipls.py).
+Runnable example: [`examples/several_outcomes.py`](../examples/several_outcomes.py).
 
 ---
 

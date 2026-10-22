@@ -65,13 +65,12 @@ def test_rng_uniform_advances_counter():
 
 
 def test_permutation_and_integers():
-    rng = Rng(1)
-    p = rng.permutation(100)
-    assert p.dtype == np.intp
-    assert sorted(p.tolist()) == list(range(100))
-    assert all(0 <= rng.integers(5) < 5 for _ in range(200))
+    assert Rng(2137).permutation(10).tolist() == [1, 5, 2, 4, 3, 9, 8, 6, 7, 0]
+    rng = Rng(2137)
+    assert [rng.integers(10) for _ in range(5)] == [9, 0, 4, 4, 4]
     with pytest.raises(ValueError):
-        rng.integers(0)
+        Rng(1).integers(0)
+    assert Rng(1).permutation(100).dtype == np.intp
 
 
 def test_choice_respects_zero_weights_and_range():

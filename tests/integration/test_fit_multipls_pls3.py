@@ -177,7 +177,7 @@ def test_outcomes_rotation_at_q_loads_each_dim_on_one_outcome(planted):
 def test_guard_no_embeddings(planted):
     ssd = copy.copy(planted["ssd"])
     ssd.embeddings = None
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="no embeddings"):
         ssd.fit_multipls(planted["Yfull"], ssd_gradients=2)
 
 
@@ -202,7 +202,8 @@ def test_outcome_scale_invariance(planted, fits):
 
 
 def test_dataframe_integer_column_names(planted):
-    pd = pytest.importorskip("pandas")
+    import pandas as pd
+
     df = pd.DataFrame(planted["make"](planted["Y"]), columns=[0, 1, 2, 3])
     res = planted["ssd"].fit_multipls(
         df, ssd_gradients=2, rotate="outcomes", outcome_groups={"g": ["0", "1"]},
@@ -210,14 +211,6 @@ def test_dataframe_integer_column_names(planted):
     )
     assert res.outcome_names == ["0", "1", "2", "3"]
     assert "0" in [r.outcome for r in res["dim-1"].outcomes]
-
-
-def test_nan_outcome_row_dropped(planted):
-    Y_full = planted["make"](planted["Y"])
-    assert np.isfinite(Y_full[3]).all()
-    Y_full[3, 1] = np.nan
-    res = planted["ssd"].fit_multipls(Y_full, ssd_gradients=2, n_perm=19, n_splits=5)
-    assert res.stats.n == planted["ssd"].n_kept - 1
 
 
 def test_test_rerun_updates_pvalue(planted):

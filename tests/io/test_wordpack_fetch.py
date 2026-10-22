@@ -11,6 +11,7 @@ import functools
 import hashlib
 import http.server
 import json
+import pickle
 import sys
 import threading
 from pathlib import Path
@@ -285,9 +286,8 @@ def test_a_tag_wins_over_a_file_of_the_same_name(host, cache, tmp_path, monkeypa
     monkeypatch.chdir(work)
     assert Embeddings.load("en").name == "en-fixture"
     # A string with a dot is read as a path, so the file is opened and fails to parse.
-    with pytest.raises(Exception) as e:
+    with pytest.raises(pickle.UnpicklingError, match="invalid load key"):
         Embeddings.load("./en")
-    assert not isinstance(e.value, FileNotFoundError)
 
 
 def test_a_directory_named_like_a_tag_does_not_block_the_lookup(host, tmp_path, monkeypatch):

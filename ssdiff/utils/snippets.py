@@ -82,8 +82,6 @@ def _make_snippet_anchor(
     Returns (snippet_anchor, start_sent_idx, end_sent_idx).
     """
     s_idx = D.token_to_sent[i] if i < len(D.token_to_sent) else 0
-    start_tok = max(0, min(start_tok, len(D.doc_lemmas) - 1))
-    end_tok = max(0, min(end_tok, len(D.doc_lemmas) - 1))
     start_sent = (
         D.token_to_sent[start_tok] if start_tok < len(D.token_to_sent) else s_idx
     )

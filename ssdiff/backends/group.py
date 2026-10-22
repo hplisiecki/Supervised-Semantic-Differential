@@ -141,7 +141,7 @@ def correct_pvalues(
         )
     p = np.asarray(p_raw, dtype=np.float64)
     m = len(p)
-    if m == 0 or method == "none":
+    if method == "none":
         return p.copy()
 
     if method == "bonferroni":
@@ -190,10 +190,10 @@ def unified_permutation_test(
     dict with keys:
         omnibus_T, omnibus_p,
         pairwise: dict[(g1,g2)] -> {
-            gradient, T, p_raw, p_corrected, cohens_d,
+            T, p_raw, p_corrected, cohens_d,
             n_g1, n_g2, contrast_norm
         },
-        group_labels, G, correction
+        G
     """
     G = len(group_labels)
     pairs = list(combinations(group_labels, 2))
@@ -218,7 +218,7 @@ def unified_permutation_test(
         T_pairwise_obs[k] = 1.0 - dot
 
     # Omnibus T = mean of pairwise distances
-    T_omnibus_obs = float(T_pairwise_obs.mean()) if n_pairs > 0 else 0.0
+    T_omnibus_obs = float(T_pairwise_obs.mean())
 
     # --- Permutation loop (single pass) ---
     from ssdiff.utils import _progress
@@ -238,7 +238,7 @@ def unified_permutation_test(
                 np.dot(centroids_perm[ia], centroids_perm[ib]), -1, 1,
             ))
             null_pairwise[p, k] = 1.0 - dot
-        null_omnibus[p] = float(null_pairwise[p].mean()) if n_pairs > 0 else 0.0
+        null_omnibus[p] = float(null_pairwise[p].mean())
 
     # --- P-values ---
     from ssdiff.results.format import fmt_p
@@ -281,7 +281,6 @@ def unified_permutation_test(
         )
 
         pairwise[(g1, g2)] = {
-            "gradient": contrast_unit,
             "T": float(T_pairwise_obs[k]),
             "p_raw": float(p_raw_arr[k]),
             "p_corrected": float(p_corrected_arr[k]),
@@ -295,7 +294,5 @@ def unified_permutation_test(
         "omnibus_T": T_omnibus_obs,
         "omnibus_p": omnibus_p,
         "pairwise": pairwise,
-        "group_labels": group_labels,
         "G": G,
-        "correction": correction,
     }

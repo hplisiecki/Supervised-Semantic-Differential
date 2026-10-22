@@ -195,7 +195,7 @@ ssd = SSD(emb, tokens, lexicon)
 
 A text of token lists has no raw text, so it has no snippets, and `result.docs.id(i)` shows no original text.
 
-Lemmatize or tokenize with any tool you like and pass the tokens. `examples/custom_embedding_spacy.py` does this with spaCy, which is optional and is not an ssdiff dependency.
+Lemmatize or tokenize with any tool you like and pass the tokens. `examples/custom_embedding.py` does this with spaCy, which is optional and is not an ssdiff dependency.
 
 `SSD` options:
 
@@ -542,7 +542,7 @@ Leaf views (`result["dim-1"]`):
 - `.stats` — `cov_share` (share of the total cross-covariance of the dimensions; sums to 1 over the dimensions), `score_corr` (in-sample correlation of the word-side and outcome-side scores)
 - `.words`, `.clusters`, `.snippets`
 
-`fit_multipls` needs the embeddings attached to the `SSD` (the per-dimension views and `rotate="words"` use the vocabulary). See [`examples/hate_multipls.py`](examples/hate_multipls.py) and [`docs/api_reference.md`](docs/api_reference.md).
+`fit_multipls` needs the embeddings attached to the `SSD` (the per-dimension views and `rotate="words"` use the vocabulary). See [`examples/several_outcomes.py`](examples/several_outcomes.py) and [`docs/api_reference.md`](docs/api_reference.md).
 
 
 ### Cross-Group Comparison

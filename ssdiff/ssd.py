@@ -941,9 +941,6 @@ class SSD:
             ``ssd_gradients``, a ``rotate`` other than ``"words"`` or
             ``None`` with ``ssd_gradients > 1``, or when plskit returns
             fewer than ``ssd_gradients`` weight vectors.
-        RuntimeError
-            ``rotate="words"`` with ``ssd_gradients > 1`` and no embeddings
-            attached.
         """
         import plskit
 
@@ -969,18 +966,11 @@ class SSD:
                 f"ssd_gradients must be an int in [1, {g_max}] (min(n - 1, D) = "
                 f"min({n_kept - 1}, {D})); got {ssd_gradients!r}"
             )
-        if ssd_gradients > 1:
-            if rotate not in (None, "words"):
-                raise ValueError(
-                    f"fit_pls() rotate must be 'words' or None; got {rotate!r}. "
-                    "One outcome gives no outcome loadings to rotate against."
-                )
-            if rotate == "words" and self.embeddings is None:
-                raise RuntimeError(
-                    "fit_pls(rotate='words') requires Embeddings (the rotation "
-                    "target is the vocabulary); none attached. Re-construct SSD "
-                    "with embeddings, or pass rotate=None."
-                )
+        if ssd_gradients > 1 and rotate not in (None, "words"):
+            raise ValueError(
+                f"fit_pls() rotate must be 'words' or None; got {rotate!r}. "
+                "One outcome gives no outcome loadings to rotate against."
+            )
 
         y_std = float(np.std(rows.y))
         if y_std <= 1e-12:
@@ -1253,8 +1243,6 @@ class SSD:
             On a 1-D outcome, fewer than two outcomes, a constant outcome, an
             invalid ``rotate`` / ``outcome_groups`` / ``ssd_gradients``, or
             when plskit keeps fewer than ``ssd_gradients`` components.
-        RuntimeError
-            If no embeddings are attached.
         """
         fit_args = {"ssd_gradients": ssd_gradients, "rotate": rotate,
                     "outcome_groups": outcome_groups, "n_splits": n_splits,
@@ -1280,12 +1268,6 @@ class SSD:
             raise ValueError(
                 f"fit_multipls() requires outcomes with nonzero variance; "
                 f"constant: {constant}."
-            )
-        if self.embeddings is None:
-            raise RuntimeError(
-                "fit_multipls() requires Embeddings (the per-dimension views "
-                "and rotate='words' use the vocabulary); none attached. "
-                "Re-construct SSD with embeddings."
             )
         if rotate not in (None, "words", "outcomes"):
             raise ValueError(

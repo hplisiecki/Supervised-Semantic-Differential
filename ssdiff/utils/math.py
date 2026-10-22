@@ -316,25 +316,6 @@ def _silhouette_from_dists(dists: np.ndarray, labels: np.ndarray) -> float:
     return float(sil.mean())
 
 
-def silhouette_score(X: np.ndarray, labels: np.ndarray) -> float:
-    """Mean silhouette coefficient using Euclidean distances.
-
-    Parameters
-    ----------
-    X : ndarray of shape (n, d)
-        Data matrix.
-    labels : ndarray of shape (n,) of int
-        Cluster assignments.
-
-    Returns
-    -------
-    float
-        Mean silhouette score in [-1, 1].  Returns 0.0 if fewer than two
-        distinct clusters are present.
-    """
-    return _silhouette_from_dists(pairwise_euclidean(X), labels)
-
-
 def kmeans_auto_k(
     X: np.ndarray,
     k_min: int = 2,

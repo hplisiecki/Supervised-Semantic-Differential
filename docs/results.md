@@ -270,7 +270,7 @@ gr.cluster_snippets(
 
 ## `MultiPLSResult`
 
-Returned by `fit_multipls()` (PLS3, several outcomes). A container of per-dimension leaves keyed `"dim-1"`, `"dim-2"`, …. Mirrors the `GroupResult` / `PairResult` pattern. Runnable example: [`../examples/hate_multipls.py`](../examples/hate_multipls.py).
+Returned by `fit_multipls()` (PLS3, several outcomes). A container of per-dimension leaves keyed `"dim-1"`, `"dim-2"`, …. Mirrors the `GroupResult` / `PairResult` pattern. Runnable example: [`../examples/several_outcomes.py`](../examples/several_outcomes.py).
 
 **Scalar views** (whole model):
 
@@ -654,5 +654,5 @@ Missing deps raise `ImportError` with an install hint.
 - [`api_reference.md`](api_reference.md) — `Embeddings`, `SSD`, fit methods, `contrast`
 - [`results_tables.md`](results_tables.md) — every view's columns and defaults
 - [`architecture.md`](architecture.md) — backends, cache internals, how views compose
-- [`../examples/warriner_pls.py`](../examples/warriner_pls.py) — runnable end-to-end example
-- [`../examples/hate_multipls.py`](../examples/hate_multipls.py) — `fit_multipls`
+- [`../examples/pls.py`](../examples/pls.py) — runnable end-to-end example
+- [`../examples/several_outcomes.py`](../examples/several_outcomes.py) — `fit_multipls`

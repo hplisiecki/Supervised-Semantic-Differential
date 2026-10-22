@@ -7,7 +7,6 @@ All tests use tiny in-memory fixtures — no real embedding files, no network.
 from __future__ import annotations
 
 import gzip
-import warnings
 
 import numpy as np
 import pytest
@@ -30,6 +29,17 @@ def _make_emb_named(words: list[str], dim: int = 4, seed: int = 7) -> Embeddings
     rng = np.random.default_rng(seed)
     mat = rng.normal(size=(len(words), dim)).astype(np.float32)
     return Embeddings(words, mat)
+
+
+def _abtt_reference(vectors, m):
+    """All-but-the-top: L2-normalise, centre, remove the top-m principal components, L2-normalise."""
+    x = vectors.astype(np.float64)
+    x /= np.linalg.norm(x, axis=1, keepdims=True)
+    x -= x.mean(axis=0)
+    _, vecs = np.linalg.eigh(x.T @ x)
+    top = vecs[:, -m:].T
+    x -= (x @ top.T) @ top
+    return x / np.linalg.norm(x, axis=1, keepdims=True)
 
 
 # ---------------------------------------------------------------------------
@@ -56,10 +66,6 @@ class TestConstructor:
         emb = Embeddings(keys, mat)
         assert emb.vectors.dtype == np.float32
 
-    def test_source_path_initially_none(self):
-        emb = _make_emb()
-        assert emb._source_path is None
-
 
 # ---------------------------------------------------------------------------
 # 2. Basic lookup (__contains__, __len__, __getitem__)
@@ -70,22 +76,10 @@ class TestLookup:
     def emb(self) -> Embeddings:
         return _make_emb_named(["kraj", "narod", "panstwo"], dim=4)
 
-    def test_len(self, emb):
+    def test_lookup(self, emb):
         assert len(emb) == 3
-
-    def test_contains_existing(self, emb):
-        assert "kraj" in emb
-        assert "narod" in emb
-
-    def test_not_contains_missing(self, emb):
+        assert "kraj" in emb and "narod" in emb
         assert "nieznanesowo" not in emb
-
-    def test_getitem_returns_vector(self, emb):
-        v = emb["kraj"]
-        assert isinstance(v, np.ndarray)
-        assert v.shape == (4,)
-
-    def test_getitem_consistent_with_index(self, emb):
         idx = emb.key_to_index["narod"]
         np.testing.assert_array_equal(emb["narod"], emb.vectors[idx])
 
@@ -101,7 +95,9 @@ class TestLookup:
 class TestNormalizeL2:
     def test_l2_norms_are_unit(self):
         emb = _make_emb(n=8, dim=6)
+        assert not emb.l2_normalized
         emb.normalize(l2=True, abtt=0)
+        assert emb.l2_normalized
         norms = np.linalg.norm(emb.vectors, axis=1)
         np.testing.assert_allclose(norms, 1.0, atol=1e-6)
 
@@ -112,12 +108,6 @@ class TestNormalizeL2:
         emb.normalize(l2=True, abtt=0)  # second call — should be no-op
         np.testing.assert_array_equal(emb.vectors, v_after_first)
 
-    def test_l2_normalized_flag_set(self):
-        emb = _make_emb()
-        assert not emb.l2_normalized
-        emb.normalize(l2=True, abtt=0)
-        assert emb.l2_normalized
-
 
 # ---------------------------------------------------------------------------
 # 4. normalize(abtt=N) — changes vectors; repeat same value warns; irreversible
@@ -126,34 +116,18 @@ class TestNormalizeL2:
 class TestNormalizeABTT:
     def test_abtt_changes_vectors(self):
         emb = _make_emb(n=10, dim=6)
-        original = emb.vectors.copy()
+        expected = _abtt_reference(emb.vectors, 2)
         emb.normalize(l2=True, abtt=2)
-        assert not np.allclose(emb.vectors, original, atol=1e-6), (
-            "ABTT should change the vectors"
-        )
+        np.testing.assert_allclose(emb.vectors, expected, atol=1e-5)
+        assert emb.abtt == 2
 
     def test_abtt_same_value_warns(self):
         emb = _make_emb(n=10, dim=6)
         emb.normalize(l2=True, abtt=2)
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            emb.normalize(l2=True, abtt=2)  # same m — should warn
-        assert len(w) >= 1, "Expected a UserWarning for repeated ABTT"
-        assert any("already applied" in str(warning.message).lower() for warning in w)
-
-    def test_abtt_same_value_does_not_change_vectors(self):
-        emb = _make_emb(n=10, dim=6)
-        emb.normalize(l2=True, abtt=2)
-        vectors_after_first = emb.vectors.copy()
-        with warnings.catch_warnings(record=True):
-            warnings.simplefilter("always")
+        first = emb.vectors.copy()
+        with pytest.warns(UserWarning, match="already applied"):
             emb.normalize(l2=True, abtt=2)
-        np.testing.assert_array_equal(emb.vectors, vectors_after_first)
-
-    def test_abtt_abtt_attribute_set(self):
-        emb = _make_emb(n=10, dim=6)
-        emb.normalize(l2=True, abtt=2)
-        assert emb.abtt == 2
+        np.testing.assert_array_equal(emb.vectors, first)
 
 
 # ---------------------------------------------------------------------------
@@ -277,11 +251,6 @@ class TestSimilarByVector:
         results = emb.similar_by_vector(zero, topn=3)
         assert results == []
 
-    def test_topn_respected(self, emb):
-        v = emb["narod"]
-        results = emb.similar_by_vector(v, topn=5)
-        assert len(results) == 5
-
     def test_results_sorted_descending(self, emb):
         v = emb["panstwo"]
         results = emb.similar_by_vector(v, topn=4)
@@ -300,13 +269,6 @@ class TestSaveNoSourcePath:
         with pytest.raises(ValueError, match="filename is required"):
             emb.save(filename=None, fmt="bin")
 
-    def test_save_with_explicit_filename_works(self, tmp_path):
-        emb = _make_emb(n=3, dim=3)
-        stem = str(tmp_path / "explicit")
-        emb.save(filename=stem, fmt="bin")  # should not raise
-        loaded = Embeddings.load(stem + ".bin")
-        assert len(loaded) == 3
-
 
 # ---------------------------------------------------------------------------
 # 10. load nonexistent path raises FileNotFoundError
@@ -318,13 +280,10 @@ class TestLoadErrors:
         with pytest.raises(ValueError, match=r"\.ssdembed format is deprecated"):
             Embeddings.load(name)
 
-    def test_nonexistent_txt_raises_file_not_found(self):
+    @pytest.mark.parametrize("name", ["missing.txt", "missing.bin"])
+    def test_nonexistent_file_raises_file_not_found(self, tmp_path, name):
         with pytest.raises(FileNotFoundError):
-            Embeddings.load("/tmp/nonexistent_ssdiff_test_xyz_12345.txt")
-
-    def test_nonexistent_bin_raises_file_not_found(self):
-        with pytest.raises(FileNotFoundError):
-            Embeddings.load("/tmp/nonexistent_ssdiff_test_xyz_12345.bin")
+            Embeddings.load(str(tmp_path / name))
 
 
 # ---------------------------------------------------------------------------
@@ -400,16 +359,6 @@ def test_similar_by_vector_raises_on_unnormed():
     emb = Embeddings(["a", "b"], raw)
     with pytest.raises(RuntimeError, match="L2-normalised"):
         emb.similar_by_vector(np.array([1.0, 0.0], dtype=np.float32))
-
-
-def test_lazy_normaliser_state_removed():
-    """Embeddings has no lazy normaliser API (get_normed_vectors) and no _is_unit_normed state."""
-    import numpy as np
-
-    from ssdiff.embeddings import Embeddings
-    assert not hasattr(Embeddings, "get_normed_vectors")
-    fresh = Embeddings(["a"], np.ones((1, 2), dtype=np.float32))
-    assert not hasattr(fresh, "_is_unit_normed")
 
 
 # ---------------------------------------------------------------------------

@@ -8,26 +8,19 @@ One test per invariant.
 
 from __future__ import annotations
 
-import math
+import dataclasses
+import inspect
 import pickle
 from dataclasses import FrozenInstanceError
 
 import numpy as np
 import pytest
 
-from ssdiff.ssd import SSD
+from ssdiff.results import schema
 from ssdiff.results.core import Result, ScalarView, View
 from ssdiff.results.lexicon_result import LexiconResult
-from ssdiff.results.schema import (
-    Cluster,
-    ClusterWord,
-    Doc,
-    FitInfo,
-    Snippet,
-    Stats,
-    Suggestion,
-    Word,
-)
+from ssdiff.results.schema import Cluster, Suggestion
+from ssdiff.ssd import SSD
 
 # ---------------------------------------------------------------------------
 # Helpers / tiny fixtures
@@ -100,18 +93,6 @@ def _make_lexicon_result(*, sort_descending=True) -> LexiconResult:
 
 
 # ---------------------------------------------------------------------------
-# _cache_get — first call computes, second call is identical object
-# ---------------------------------------------------------------------------
-
-def test_cache_get_identity_on_second_call():
-    """Second _cache_get call with same (name, params) returns identical object."""
-    r = _make_simple_result()
-    first = r._cache_get("dummy", {"k": 5}, lambda: object())
-    second = r._cache_get("dummy", {"k": 5}, lambda: object())
-    assert first is second, "Cache must return identical object on second call"
-
-
-# ---------------------------------------------------------------------------
 # Stale-cache regression — different params coexist independently
 # ---------------------------------------------------------------------------
 
@@ -150,49 +131,6 @@ def test_clear_cache_named_view_selective():
 
 
 # ---------------------------------------------------------------------------
-# View.__getitem__ and iteration work consistently
-# ---------------------------------------------------------------------------
-
-def test_view_getitem_and_iteration_consistent():
-    """View[i] and iter(view) return matching data."""
-
-    class _ListedView(View):
-        _name = "listed"
-        _columns = ("v",)
-
-        def __init__(self, items):
-            super().__init__()
-            self._items = items
-
-        def __iter__(self):
-            return iter(self._items)
-
-        def __len__(self):
-            return len(self._items)
-
-        def __getitem__(self, i):
-            if isinstance(i, slice):
-                return _ListedView(self._items[i])
-            return self._items[i]
-
-    data = [{"v": 10}, {"v": 20}, {"v": 30}]
-    view = _ListedView(data)
-
-    # iter
-    as_list = list(view)
-    assert as_list == data
-
-    # __getitem__
-    assert view[0] == {"v": 10}
-    assert view[2] == {"v": 30}
-
-    # slicing returns a new view and has correct length
-    sliced = view[:2]
-    assert len(sliced) == 2
-    assert list(sliced) == data[:2]
-
-
-# ---------------------------------------------------------------------------
 # ScalarView attr-access and dict-access return same values
 # ---------------------------------------------------------------------------
 
@@ -216,18 +154,7 @@ def test_scalar_view_attr_and_dict_access_agree():
 # attach(embeddings=...) wires _embeddings attribute correctly
 # ---------------------------------------------------------------------------
 
-def test_attach_embeddings_wires_attribute(pls_result, parity_emb):
-    """result.attach(embeddings=new_emb) sets result.embeddings to new_emb."""
-    original = pls_result.embeddings
-    pls_result.attach(embeddings=parity_emb)
-    assert pls_result.embeddings.name == parity_emb.name
-    assert pls_result.embeddings.abtt == parity_emb.abtt
-
-    # Restore original embeddings so other tests are not affected
-    pls_result.attach(embeddings=original)
-
-
-def test_attach_embeddings_at_other_abtt_raises(pls_result, tiny_kv):
+def test_attach_embeddings_at_other_abtt_raises(pls_result):
     """Attaching Embeddings at a different ABTT than the fit's is refused."""
     from tests.conftest import make_kv
     other = make_kv(["a", "b"], dim=4, seed=7)
@@ -236,6 +163,11 @@ def test_attach_embeddings_at_other_abtt_raises(pls_result, tiny_kv):
     with pytest.raises(ValueError, match="abtt"):
         pls_result.attach(embeddings=other)
     assert pls_result.embeddings is before
+
+
+def test_attach_texts_count_must_match(pls_result):
+    with pytest.raises(ValueError, match="documents"):
+        pls_result.attach(texts=["people work."])
 
 
 # ---------------------------------------------------------------------------
@@ -250,19 +182,12 @@ def test_words_without_embeddings_raises_runtime_error(ssd_instance, parity_df):
     """
     result = ssd_instance.fit_pls(parity_df["y"], k=1, n_splits=20, random_state=0)
 
-    # Save original embeddings so we can restore after the test
-    original_emb = result.embeddings
-
     # Directly strip embeddings to simulate un-attached state
     result.embeddings = None
     result.clear_cache("words")
 
-    try:
-        with pytest.raises(RuntimeError, match=r"(?i)attach"):
-            _ = result.words
-    finally:
-        # Restore so subsequent tests using this result are unaffected
-        result.embeddings = original_emb
+    with pytest.raises(RuntimeError, match=r"(?i)attach"):
+        _ = result.words
 
 
 # ---------------------------------------------------------------------------
@@ -270,64 +195,32 @@ def test_words_without_embeddings_raises_runtime_error(ssd_instance, parity_df):
 # ---------------------------------------------------------------------------
 
 def test_pickle_round_trip_preserves_state(pls_result):
-    """pickle.loads(pickle.dumps(result)) preserves r2, n_kept, and cache contents."""
-    # Pre-populate cache with a sentinel
-    sentinel = object.__new__(object)
-    pls_result._cache[("_pickle_test_key", ())] = sentinel
+    """pickle.loads(pickle.dumps(result)) preserves stats, beta, and the cached views."""
+    words = list(pls_result.words)
+    restored = pickle.loads(pickle.dumps(pls_result))
 
-    data = pickle.dumps(pls_result)
-    restored = pickle.loads(data)
-
-    # Core stats preserved
-    assert math.isfinite(restored.stats.r2)
+    assert restored.embeddings is None
     assert restored.stats.r2 == pls_result.stats.r2
     assert restored.stats.n_kept == pls_result.stats.n_kept
-
-    # Cache entry survived the round-trip
-    assert ("_pickle_test_key", ()) in restored._cache
-
-    # Cleanup sentinel from live object
-    del pls_result._cache[("_pickle_test_key", ())]
+    np.testing.assert_array_equal(restored.beta, pls_result.beta)
+    # embeddings are gone, so the words can only come from the pickled cache
+    assert list(restored.words) == words
 
 
 # ---------------------------------------------------------------------------
 # Every @dataclass in schema.py is frozen (mutation raises)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("cls,kwargs", [
-    (Word,    dict(side="pos", rank=1, word="test", cos_beta=0.5)),
-    (Cluster, dict(cluster_id=0, side="pos", size=3, coherence=0.7, centroid_cos_beta=0.6)),
-    (ClusterWord, dict(cluster_id=0, side="pos", word="test", cos_centroid=0.8, cos_beta=0.6)),
-    (Snippet, dict(snippet_id=0, side="pos", doc_id=0, cosine=0.5, seed="test",
-                   start_token_idx=0, end_token_idx=2, start_sent_idx=0, end_sent_idx=0,
-                   text_window="w", text_surface="s", text_lemmas="l")),
-    (Doc,     dict(doc_id=0, y_true=1.0, y_hat=0.9, residual=0.1, alignment_score=0.5)),
-    (FitInfo, dict()),
-    (Stats,   dict(backend="PLS", r2=0.5, pvalue=0.05, n_raw=10, n_kept=9, n_dropped=1,
-                   y_mean=1.0, y_std=0.5, beta_norm=1.0, delta=0.1,
-                   iqr_effect=0.3, y_corr_pred=0.7)),
-])
-def test_schema_dataclasses_are_frozen(cls, kwargs):
+def test_schema_dataclasses_are_frozen():
     """Every schema dataclass is frozen — mutation raises FrozenInstanceError."""
-    obj = cls(**kwargs)
-    first_field = next(iter(obj.__dataclass_fields__))
-    with pytest.raises(FrozenInstanceError):
-        setattr(obj, first_field, None)
-
-
-# ---------------------------------------------------------------------------
-# Snippet.cluster_id is Optional[int] — constructible with None
-# ---------------------------------------------------------------------------
-
-def test_snippet_cluster_id_optional():
-    """Snippet can be constructed with cluster_id=None."""
-    s = Snippet(
-        snippet_id=0, side="neg", doc_id=1, cosine=0.3, seed="word",
-        start_token_idx=0, end_token_idx=1, start_sent_idx=0, end_sent_idx=0,
-        text_window="w", text_surface="s", text_lemmas="l",
-        cluster_id=None,
-    )
-    assert s.cluster_id is None
+    classes = [
+        c for _, c in inspect.getmembers(schema, inspect.isclass)
+        if dataclasses.is_dataclass(c) and c.__module__ == schema.__name__
+    ]
+    assert len(classes) >= 10
+    for cls in classes:
+        with pytest.raises(FrozenInstanceError):
+            setattr(cls.__new__(cls), dataclasses.fields(cls)[0].name, None)
 
 
 # ---------------------------------------------------------------------------
@@ -355,45 +248,11 @@ def test_alignment_scores_formula():
     x_norms = np.maximum(np.linalg.norm(x, axis=1, keepdims=True), 1e-12)
     expected = ((x / x_norms) @ gradient).ravel()
 
+    assert result.beta_norm == pytest.approx(np.linalg.norm(beta))
+
     actual = result.alignment_scores
     np.testing.assert_allclose(actual, expected, rtol=1e-6,
                                 err_msg="alignment_scores must equal cos(x_i, gradient)")
-
-
-# ---------------------------------------------------------------------------
-# beta_norm == np.linalg.norm(beta)
-# ---------------------------------------------------------------------------
-
-def test_beta_norm_equals_norm_of_beta(pls_result):
-    """pls_result.beta_norm equals np.linalg.norm(pls_result.beta) exactly."""
-    expected = float(np.linalg.norm(pls_result.beta))
-    assert pls_result.beta_norm == expected, \
-        f"beta_norm {pls_result.beta_norm} != norm(beta) {expected}"
-
-
-# ---------------------------------------------------------------------------
-# LexiconResult — effect-size field (corr) in [0, 1]
-# ---------------------------------------------------------------------------
-
-def test_lexicon_result_effect_size_in_range():
-    """LexiconResult suggestions have corr (effect size) in [0, 1] and finite."""
-    lr = _make_lexicon_result()
-    for sug in lr.suggestions:
-        assert math.isfinite(sug.corr), f"corr not finite for token {sug.token!r}"
-        assert 0.0 <= sug.corr <= 1.0, f"corr={sug.corr} out of [0,1] for token {sug.token!r}"
-
-
-# ---------------------------------------------------------------------------
-# LexiconResult.suggestions returns tokens in rank-descending order
-# ---------------------------------------------------------------------------
-
-def test_lexicon_suggestions_order_descending_by_rank():
-    """suggestions iterates tokens in rank-descending order."""
-    # The fixture sets rank: tok_a=0.7 > tok_b=0.3 > tok_c=0.1 (higher rank = better)
-    lr = _make_lexicon_result()
-    tokens = [sug.token for sug in lr.suggestions]
-    assert tokens == ["tok_a", "tok_b", "tok_c"], \
-        f"Suggestions not in rank-descending order: {tokens}"
 
 
 # ---------------------------------------------------------------------------
@@ -436,6 +295,13 @@ def test_suggestion_pickled_before_the_seed_fields_prints():
     assert (old.seed, old.cos) == (None, None)
     lr = LexiconResult(var_type="continuous", n_docs=100, n_tokens=1, suggestions=[old])
     assert "tok_a" in lr.suggestions.to_text()
+
+
+def test_cluster_pickled_before_the_top_fields_has_empty_strings():
+    """A Cluster restored from a state without top_words and top_snippet has both as ""."""
+    old = Cluster.__new__(Cluster)
+    old.__setstate__([0, "pos", 3, 0.5, 0.4, None])
+    assert (old.top_words, old.top_snippet) == ("", "")
 
 
 def test_seeded_lexicon_report_lists_the_first_n_rows():

@@ -1,7 +1,7 @@
 """Tests for ssdiff/utils/vectors.py.
 
 Covers:
-  - compute_global_sif: SIF weight ordering, empty input
+  - compute_global_sif: counts, empty input
   - build_doc_vectors: seed mode, full mode, keep_mask
   - build_and_normalize_doc_vectors: unit norm, use_full_doc path, sif_a=None
 """
@@ -30,40 +30,13 @@ def _sif_weight(sif_a: float, count: int, total: int) -> float:
 # ---------------------------------------------------------------------------
 
 
-def test_compute_global_sif_empty_input():
-    """Empty sentence list returns empty dict and zero total."""
-    wc, total = compute_global_sif([])
-    assert wc == {}
-    assert total == 0
-
-
-def test_compute_global_sif_sif_weight_ordering():
-    """A rare token (count=1) has strictly higher SIF weight than a frequent one (count=10).
-
-    compute_global_sif returns raw counts; the weight ordering follows from the
-    formula  a / (a + count/total).  Larger count → smaller weight.
-    """
-    sif_a = 1e-3
-    sentences = [["common"] * 10, ["rare"]]
-    wc, total = compute_global_sif(sentences)
-
-    assert wc["common"] == 10
-    assert wc["rare"] == 1
-    assert total == 11
-
-    w_common = _sif_weight(sif_a, wc["common"], total)
-    w_rare = _sif_weight(sif_a, wc["rare"], total)
-    assert w_rare > w_common, (
-        f"rare weight ({w_rare:.6f}) should exceed common weight ({w_common:.6f})"
-    )
-
-
 def test_compute_global_sif_counts_correctly():
-    """Word counts are accumulated correctly across multiple sentences."""
+    """Word counts are accumulated across sentences; empty input gives no counts."""
     sentences = [["a", "b", "a"], ["b", "c"]]
     wc, total = compute_global_sif(sentences)
     assert wc == {"a": 2, "b": 2, "c": 1}
     assert total == 5
+    assert compute_global_sif([]) == ({}, 0)
 
 
 # ---------------------------------------------------------------------------
@@ -102,41 +75,13 @@ def test_build_doc_vectors_seed_mode_known_fixture(tiny_kv, lexicon):
 
     assert keep_mask.tolist() == [True]
     assert X.shape == (1, tiny_kv.vector_size)
+    assert X.dtype == np.float64
     np.testing.assert_allclose(X[0], expected, atol=1e-10)
 
 
-def test_build_doc_vectors_seed_mode_shape(tiny_kv, lexicon, sample_docs):
-    """Seed mode on standard fixtures: all 8 docs kept, shape is correct."""
-    wc, total = compute_global_sif(sample_docs)
-    X, keep_mask = build_doc_vectors(
-        sample_docs, tiny_kv, lexicon, wc, total, window=3, sif_a=1e-3, mode="seed"
-    )
-    assert keep_mask.shape == (8,)
-    assert keep_mask.all()
-    assert X.shape == (8, tiny_kv.vector_size)
-    assert X.dtype == np.float64
-
-
 # ---------------------------------------------------------------------------
-# build_doc_vectors — full mode vs seed mode differ
+# build_doc_vectors — full mode
 # ---------------------------------------------------------------------------
-
-
-def test_build_doc_vectors_full_vs_seed_differ(tiny_kv, lexicon, sample_docs):
-    """Full-doc mode produces different vectors than seed mode on the same input."""
-    wc, total = compute_global_sif(sample_docs)
-
-    X_seed, _ = build_doc_vectors(
-        sample_docs, tiny_kv, lexicon, wc, total, window=3, sif_a=1e-3, mode="seed"
-    )
-    X_full, _ = build_doc_vectors(
-        sample_docs, tiny_kv, lexicon, wc, total, window=3, sif_a=1e-3, mode="full"
-    )
-
-    # At least one row must differ (full uses all tokens; seed uses only context windows)
-    assert not np.allclose(X_seed, X_full), (
-        "full mode should produce different vectors than seed mode"
-    )
 
 
 def test_build_doc_vectors_full_mode_known_fixture(tiny_kv, lexicon):
@@ -210,30 +155,6 @@ def test_build_and_normalize_unit_norm(tiny_kv, lexicon, sample_docs):
     assert keep_mask.all()
     norms = np.linalg.norm(X, axis=1)
     np.testing.assert_allclose(norms, np.ones(len(norms)), atol=1e-6)
-
-
-def test_build_and_normalize_use_full_doc(tiny_kv, lexicon, sample_docs):
-    """use_full_doc=True uses full-doc mode; result is still unit-normalized."""
-    X, keep_mask = build_and_normalize_doc_vectors(
-        sample_docs, tiny_kv, lexicon, window=3, sif_a=1e-3, use_full_doc=True
-    )
-    assert keep_mask.all()
-    norms = np.linalg.norm(X, axis=1)
-    np.testing.assert_allclose(norms, np.ones(len(norms)), atol=1e-6)
-
-
-def test_build_and_normalize_l2_false_no_unit_norm(tiny_kv, lexicon, sample_docs):
-    """l2_normalize=False: vectors are NOT unit-normed (raw SIF-weighted means)."""
-    X, keep_mask = build_and_normalize_doc_vectors(
-        sample_docs, tiny_kv, lexicon, window=3, sif_a=1e-3, l2_normalize=False
-    )
-    norms = np.linalg.norm(X, axis=1)
-    # Raw vectors from unit-normalized embeddings won't all be exactly 1.0
-    # (they're weighted averages of different vectors); just confirm not all 1.0
-    # This is a sanity check, not an exact value test.
-    assert not np.allclose(norms, np.ones(len(norms))), (
-        "without l2_normalize, rows should not be unit-normed"
-    )
 
 
 @pytest.mark.parametrize("use_full_doc, words", [

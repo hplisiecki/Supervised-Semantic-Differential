@@ -119,11 +119,6 @@ def sample_groups() -> np.ndarray:
     return np.array(["A", "A", "A", "A", "B", "B", "B", "B"], dtype=object)
 
 
-@pytest.fixture(scope="session")
-def sample_groups_3() -> np.ndarray:
-    return np.array(["X", "X", "X", "Y", "Y", "Z", "Z", "Z"], dtype=object)
-
-
 # --- Larger fixtures for group tests (need >=20 docs per group) ---
 
 def _make_large_docs(n: int, rng: np.random.Generator) -> list[list[str]]:
@@ -150,12 +145,6 @@ def large_docs() -> list[list[str]]:
 def large_groups_2() -> np.ndarray:
     """2 groups, 25 each."""
     return np.array(["A"] * 25 + ["B"] * 25, dtype=object)
-
-
-@pytest.fixture(scope="session")
-def large_groups_3() -> np.ndarray:
-    """3 groups: 20, 15, 15."""
-    return np.array(["X"] * 20 + ["Y"] * 15 + ["Z"] * 15, dtype=object)
 
 
 @pytest.fixture(scope="session")

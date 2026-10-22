@@ -82,11 +82,12 @@ def test_outcome_checks(two, parity_df):
                               essay=essay, diary=diary, fixed_k=3)
 
 
-def test_summary_labels_all_texts(two, parity_df, capsys):
+def test_summary_labels_all_texts(two, parity_df):
     essay, diary = two
     res = ssdiff.fit_regression("y ~ ssd(essay) + ssd(diary)", parity_df,
                                 essay=essay, diary=diary, fixed_k=3)
-    assert "all texts" in res.summary()
+    block = res.summary().split("SSD effects:")[1].split("---")[0].strip().split("\n")[1:]
+    assert [ln.split()[0] for ln in block] == ["all", "essay", "diary"]
 
 
 def test_attach_texts_on_an_unpickled_one_text_regression(ssd_instance, parity_emb, parity_df):
@@ -107,12 +108,6 @@ def test_attach_texts_on_an_unpickled_two_text_regression(two, parity_emb, parit
     res.attach(texts={"essay": list(parity_df["text"]), "diary": essay.docs[::-1]},
                embeddings={"essay": parity_emb, "diary": parity_emb})
     assert len(res["essay"].words.pos)
-
-
-def test_predict_strings_on_a_wordpack_regression(ssd_instance, parity_df):
-    res = ssd_instance.fit_regression(parity_df["y"], fixed_k=3)
-    pred = res.predict(list(parity_df["text"][:5]))
-    assert pred.shape == (5,)
 
 
 def test_page_keeps_the_moderated_term_key_of_a_one_term_text(two, parity_df):

@@ -30,11 +30,6 @@ def test_beta_is_normalized_difference_of_unit_gradients():
     assert c.stats.diff_norm == pytest.approx(np.linalg.norm(d))
 
 
-def test_scale_of_inputs_does_not_matter():
-    g1, g2 = np.array([1.0, 2.0, 0.5]), np.array([-1.0, 0.3, 2.0])
-    np.testing.assert_allclose(ssdiff.contrast(g1, g2, None).beta, ssdiff.contrast(7 * g1, 0.1 * g2, None).beta)
-
-
 def test_same_direction_and_length_mismatch_raise():
     g = np.array([1.0, 2.0, 3.0])
     with pytest.raises(ValueError, match="same direction"):

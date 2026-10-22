@@ -39,11 +39,6 @@ def test_text_first_order(essay, parity_df):
     assert res.keys()[1] == "ssd(essay):grouplow"
 
 
-def test_numeric_moderator(essay, parity_df):
-    res = essay.fit_regression("y ~ cov*ssd()", data=parity_df, fixed_k=4)
-    assert res.keys() == ["ssd(essay)", "cov:ssd(essay)"]
-
-
 def test_leaves_share_the_fit(essay, parity_df):
     res = essay.fit_regression("y ~ group*ssd()", data=parity_df, fixed_k=4)
     a, b = res["ssd(essay)"], res["grouplow:ssd(essay)"]
@@ -54,7 +49,7 @@ def test_leaves_share_the_fit(essay, parity_df):
 def test_missing_level_after_drop(essay, parity_df):
     df = parity_df.copy(); df.loc[df.group == "mid", "y"] = np.nan
     res = essay.fit_regression("y ~ group*ssd()", data=df, fixed_k=4)
-    assert not any("mid" in k for k in res.keys())
+    assert res.keys() == ["ssd(essay)", "grouplow:ssd(essay)"]
 
 
 def test_two_names_in_a_method_call_raise(essay, parity_df):
@@ -73,6 +68,7 @@ def test_rows_and_dfs(essay, parity_df):
 
 def test_wald_f_equals_refit_f_on_ols(essay, parity_df):
     res = essay.fit_regression("y ~ cov*ssd()", data=parity_df, fixed_k=4)
+    assert res.keys() == ["ssd(essay)", "cov:ssd(essay)"]
     row = next(r for r in res.test if r.label == "cov:ssd(essay)")
     leaf = res["ssd(essay)"]
     z = pca_fit_transform(standardize(leaf.x)[0], 4)[0]   # the fit's own component scores

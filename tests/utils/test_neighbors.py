@@ -9,6 +9,7 @@ import pytest
 
 from ssdiff.embeddings import Embeddings
 from ssdiff.utils.neighbors import cluster_top_neighbors, filtered_neighbors, skip_neighbor
+from tests.conftest import make_kv
 
 # ---------------------------------------------------------------------------
 # filtered_neighbors tests
@@ -37,56 +38,10 @@ class TestFilteredNeighbors:
         sims = [sim for _, sim in result]
         assert sims == sorted(sims, reverse=True)
 
-    def test_filters_bad_tokens_digits(self, tiny_kv_large):
-        """tokens containing digits (e.g. 'ABC123') are excluded."""
-        # ABC123 is in VOCAB_50 — it matches bad_token_re (has digits)
-        rng = np.random.default_rng(7)
-        vec = rng.normal(size=tiny_kv_large.vector_size).astype(np.float32)
-
-        result = filtered_neighbors(tiny_kv_large, vec, topn=20, cand=50, restrict=50)
-
-        returned_words = [w for w, _ in result]
-        assert "ABC123" not in returned_words
-
-    def test_filters_capitalized_tokens(self, tiny_kv_large):
-        """tokens starting with uppercase are excluded."""
-        # 'Warszawa' starts with uppercase — matches bad_token_re
-        rng = np.random.default_rng(7)
-        vec = rng.normal(size=tiny_kv_large.vector_size).astype(np.float32)
-
-        result = filtered_neighbors(tiny_kv_large, vec, topn=20, cand=50, restrict=50)
-
-        returned_words = [w for w, _ in result]
-        assert "Warszawa" not in returned_words
-
-    def test_filtering_removes_bad_tokens_from_output(self, tiny_kv_large):
-        """no uppercase or digit-containing tokens appear.
-
-        Note: filtered_neighbors has no `exclude` parameter. Filtering is
-        driven purely by bad_token_re (digits or uppercase start). We verify
-        that all returned words pass the clean-token criterion.
-        """
-        # Build a query vector that is the average of the entire vocabulary
-        # so that results are spread across the vocab
-        vecs = tiny_kv_large.vectors
-        mean_vec = vecs.mean(axis=0)
-
-        result = filtered_neighbors(tiny_kv_large, mean_vec, topn=20, cand=50, restrict=50)
-
-        bad_re = re.compile(r".*\d|^[A-ZÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝÞĄĆĘŁŃÓŚŹŻĈĜĤĴŜŬŠŽĐ]")
-        for word, _ in result:
-            assert not bad_re.match(word), f"Bad token in output: {word!r}"
-
     def test_empty_result_when_all_candidates_filtered(self, tiny_kv_large):
         """returns empty list (not error) when all candidates are filtered."""
-        # Build tiny embeddings with only bad tokens (digit/uppercase tokens from VOCAB_20)
-        from ssdiff.embeddings import Embeddings
-
-        bad_words = ["ABC123", "Warszawa"]
-        # Extract their vectors from tiny_kv_large
-        vecs = np.vstack([tiny_kv_large.get_vector(w) for w in bad_words]).astype(np.float32)
-        bad_emb = Embeddings(bad_words, vecs)
-        bad_emb.l2_normalized = True  # vectors extracted from a unit-normed source
+        # Only bad tokens (digit / uppercase start)
+        bad_emb = make_kv(["ABC123", "Warszawa"], dim=10)
 
         rng = np.random.default_rng(0)
         vec = rng.normal(size=bad_emb.vector_size).astype(np.float32)
@@ -97,21 +52,15 @@ class TestFilteredNeighbors:
 
     def test_fewer_results_than_topn_when_vocab_small(self, tiny_kv_large):
         """When fewer than topn clean tokens exist, returns as many as are available."""
-        from ssdiff.embeddings import Embeddings
-
         # Only 2 clean words available
-        clean_words = ["kraj", "dom"]
-        vecs = np.vstack([tiny_kv_large.get_vector(w) for w in clean_words]).astype(np.float32)
-        small_emb = Embeddings(clean_words, vecs)
-        small_emb.l2_normalized = True  # vectors extracted from a unit-normed source
+        small_emb = make_kv(["kraj", "dom"], dim=10)
 
         rng = np.random.default_rng(0)
         vec = rng.normal(size=small_emb.vector_size).astype(np.float32)
 
         result = filtered_neighbors(small_emb, vec, topn=10, cand=10, restrict=10)
 
-        # At most 2 clean words can be returned
-        assert len(result) <= 2
+        assert sorted(w for w, _ in result) == ["dom", "kraj"]
 
 
 # ---------------------------------------------------------------------------
@@ -145,23 +94,22 @@ class TestClusterTopNeighbors:
                 assert "cos_centroid" in row
                 assert "cos_beta" in row
 
-    def test_neg_side_returns_different_words_than_pos(self, tiny_kv_large):
-        """side='neg' queries -beta and produces different neighbors."""
+    def test_neg_side_is_pos_side_of_negated_beta(self, tiny_kv_large):
+        """side='neg' queries -beta: same clusters as side='pos' on -beta."""
         rng = np.random.default_rng(42)
         beta = rng.normal(size=tiny_kv_large.vector_size).astype(np.float64)
 
-        clusters_pos = cluster_top_neighbors(
-            tiny_kv_large, beta, topn=30, k=2, restrict_vocab=50
-        )
         clusters_neg = cluster_top_neighbors(
             tiny_kv_large, beta, topn=30, k=2, restrict_vocab=50, side="neg"
         )
+        clusters_pos_of_minus = cluster_top_neighbors(
+            tiny_kv_large, -beta, topn=30, k=2, restrict_vocab=50
+        )
 
-        words_pos = {row["word"] for c in clusters_pos for row in c["words"]}
-        words_neg = {row["word"] for c in clusters_neg for row in c["words"]}
+        def words(clusters):
+            return sorted(sorted(r["word"] for r in c["words"]) for c in clusters)
 
-        # The negative direction should not be identical to positive
-        assert words_pos != words_neg, "pos and neg sides returned identical words"
+        assert words(clusters_neg) == words(clusters_pos_of_minus)
 
     def test_auto_k_runs_and_returns_reasonable_clusters(self, tiny_kv_large):
         """k=None triggers kmeans_auto_k; result has >=2 clusters."""
@@ -178,49 +126,29 @@ class TestClusterTopNeighbors:
             restrict_vocab=50,
         )
 
-        # Auto-k picks between k_min=2 and k_max=5; min_cluster_size=2 may drop small clusters
-        # so we just assert we got at least 1 cluster and each has >=2 words (min_cluster_size)
-        assert len(clusters) >= 1
+        # Auto-k picks between k_min=2 and k_max=5; a fixed k=1 would return one cluster
+        assert 2 <= len(clusters) <= 5
         for cluster in clusters:
             assert cluster["size"] >= 2
             assert len(cluster["words"]) >= 1
 
-    def test_fixed_k_larger_than_neighbors_is_clamped(self, tiny_kv_large):
-        """k clamped to len(words) when k > available clean neighbors.
-
-        Source: `k_clamped = min(int(k), len(words))`. No error is raised.
-        With only ~48 clean words (50 vocab minus 2 bad), k=5 << len(words),
-        so this tests the normal path. To test clamping, we use a tiny vocab.
-        """
-        from ssdiff.embeddings import Embeddings
-
-        # Build embeddings with very few clean words (3 clean, 2 bad)
-        words = ["kraj", "dom", "praca", "ABC123", "Warszawa"]
-        vecs = np.vstack([tiny_kv_large.get_vector(w) for w in words]).astype(np.float32)
-        small_emb = Embeddings(words, vecs)
-        small_emb.l2_normalized = True  # vectors extracted from a unit-normed source
+    def test_fixed_k_larger_than_neighbors_is_clamped(self):
+        """k is clamped to the number of clean neighbors; no error is raised."""
+        # 3 clean words, 2 bad
+        small_emb = make_kv(["kraj", "dom", "praca", "ABC123", "Warszawa"], dim=10)
 
         rng = np.random.default_rng(0)
         beta = rng.normal(size=small_emb.vector_size).astype(np.float64)
 
-        # k=5 > 3 clean words — should clamp k to 3, not raise
-        # But clusters with <2 members are dropped, so result may be 0 or more
-        # The important thing is no ValueError is raised here
         clusters = cluster_top_neighbors(
-            small_emb, beta, topn=10, k=5, restrict_vocab=10
+            small_emb, beta, topn=10, k=5, restrict_vocab=10, min_cluster_size=1
         )
-        # clusters is a list (may be empty if all clusters < min_cluster_size)
-        assert isinstance(clusters, list)
+        assert len(clusters) == 3
 
-    def test_too_few_valid_neighbors_raises_value_error(self, tiny_kv_large):
+    def test_too_few_valid_neighbors_raises_value_error(self):
         """raises ValueError when fewer than max(2, k_min) neighbors."""
-        from ssdiff.embeddings import Embeddings
-
         # Only 1 clean word available
-        words = ["kraj", "ABC123"]
-        vecs = np.vstack([tiny_kv_large.get_vector(w) for w in words]).astype(np.float32)
-        tiny_emb = Embeddings(words, vecs)
-        tiny_emb.l2_normalized = True  # vectors extracted from a unit-normed source
+        tiny_emb = make_kv(["kraj", "ABC123"], dim=10)
 
         rng = np.random.default_rng(0)
         beta = rng.normal(size=tiny_emb.vector_size).astype(np.float64)
@@ -229,34 +157,21 @@ class TestClusterTopNeighbors:
         with pytest.raises(ValueError, match="Not enough neighbors"):
             cluster_top_neighbors(tiny_emb, beta, topn=10, k=2, restrict_vocab=10)
 
-    def test_pos_clusters_sorted_by_centroid_cos_beta_descending(self, tiny_kv_large):
-        """side='pos': clusters are sorted by centroid_cos_beta descending."""
+    @pytest.mark.parametrize("side, reverse", [("pos", True), ("neg", False)])
+    def test_clusters_sorted_by_centroid_cos_beta(self, tiny_kv_large, side, reverse):
+        """pos: centroid_cos_beta descending; neg: ascending."""
         rng = np.random.default_rng(5)
         beta = rng.normal(size=tiny_kv_large.vector_size).astype(np.float64)
 
         clusters = cluster_top_neighbors(
-            tiny_kv_large, beta, topn=40, k=3, restrict_vocab=50, side="pos"
+            tiny_kv_large, beta, topn=40, k=3, restrict_vocab=50, side=side
         )
 
         cos_betas = [c["centroid_cos_beta"] for c in clusters]
-        assert cos_betas == sorted(cos_betas, reverse=True)
-
-    def test_neg_clusters_sorted_by_centroid_cos_beta_ascending(self, tiny_kv_large):
-        """side='neg': clusters are sorted by centroid_cos_beta ascending."""
-        rng = np.random.default_rng(5)
-        beta = rng.normal(size=tiny_kv_large.vector_size).astype(np.float64)
-
-        clusters = cluster_top_neighbors(
-            tiny_kv_large, beta, topn=40, k=3, restrict_vocab=50, side="neg"
-        )
-
-        cos_betas = [c["centroid_cos_beta"] for c in clusters]
-        assert cos_betas == sorted(cos_betas, reverse=False)
+        assert cos_betas == sorted(cos_betas, reverse=reverse)
 
 
 def test_filtered_neighbors_prefers_the_embedding_filter():
-    from tests.conftest import make_kv
-
     emb = make_kv(["Dog", "dog", "x1", "cat", "bird", "fish"], dim=8)
     vec = emb["Dog"]
     words = [w for w, _ in filtered_neighbors(emb, vec, topn=6, cand=6, restrict=6)]
@@ -264,30 +179,6 @@ def test_filtered_neighbors_prefers_the_embedding_filter():
     emb.neighbor_filter = re.compile(r".*\d")
     words = [w for w, _ in filtered_neighbors(emb, vec, topn=6, cand=6, restrict=6)]
     assert "Dog" in words and "x1" not in words
-
-
-def test_pca_sweep_prefers_the_embedding_filter(monkeypatch):
-    import ssdiff.backends.pca_sweep as ps
-    from tests.conftest import VOCAB_50, make_kv
-
-    emb = make_kv(VOCAB_50, dim=8)
-    emb.neighbor_filter = re.compile(r".*\d")
-    seen = []
-    real = ps._top_indices_filtered
-
-    def spy(sim_col, keys, skip, topn, cand):
-        seen.append(skip("dog1"))
-        return real(sim_col, keys, skip, topn, cand)
-
-    monkeypatch.setattr(ps, "_top_indices_filtered", spy)
-    rng = np.random.default_rng(0)
-    Xs = rng.normal(size=(30, 8))
-    ps.pca_sweep(
-        Xs=Xs, X_scale=np.ones(8), x=Xs, ys=rng.normal(size=30), embeddings=emb,
-        pca_k_values=[2, 3, 4, 5, 6], cluster_topn=10,
-    )
-    assert seen and all(seen)
-    assert not skip_neighbor(emb, "Dog")
 
 
 @pytest.mark.parametrize("word, skipped", [
@@ -301,4 +192,5 @@ def test_default_neighbor_filter(tiny_kv, word, skipped):
 def test_wordpack_filter_wins(wordpack_path):
     emb = Embeddings.load(wordpack_path)
     assert emb.neighbor_filter is not None
-    assert skip_neighbor(emb, "dog") is bool(emb.neighbor_filter.match("dog"))
+    assert skip_neighbor(emb, "Dog") is False  # pack filter ".*\d" keeps it; the default rule would skip it
+    assert skip_neighbor(emb, "dog1") is True

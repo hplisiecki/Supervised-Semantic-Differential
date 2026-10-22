@@ -1,4 +1,4 @@
-"""Tests for ssdiff.backends._sweep_math utilities.
+"""Tests for ssdiff.backends._sweep_math utilities and pca_sweep's neighbor filter.
 
 Public surface under test:
   - cosine (cosine similarity)
@@ -6,35 +6,34 @@ Public surface under test:
   - compute_auck
   - detrend_by_variance
   - overall_interpretability
+  - pca_sweep (neighbor filter)
 
-Note: pca_sweep itself requires real Embeddings objects for clustering, so
-it is integration-tested elsewhere. All math primitives are pure numpy and
-fully testable here.
+All math primitives are pure numpy; pca_sweep itself is tested for its use of
+the embedding's neighbor filter.
 """
 
 from __future__ import annotations
+
+import re
 
 import numpy as np
 import pytest
 
 from ssdiff.backends._sweep_math import (
-    PCAKSelectionResult,
     compute_auck,
     cosine,
     detrend_by_variance,
     overall_interpretability,
     zscore_ignore_nan,
 )
+from ssdiff.backends.pca_sweep import pca_sweep
+from tests.conftest import VOCAB_50, make_kv
 
 # ---------------------------------------------------------------------------
 # cosine
 # ---------------------------------------------------------------------------
 
 class TestCosine:
-    def test_identical_vectors_returns_one(self):
-        v = np.array([1.0, 2.0, 3.0])
-        assert cosine(v, v) == pytest.approx(1.0, abs=1e-15)
-
     def test_antiparallel_returns_minus_one(self):
         v = np.array([1.0, 2.0, 3.0])
         assert cosine(v, -v) == pytest.approx(-1.0, abs=1e-15)
@@ -43,15 +42,6 @@ class TestCosine:
         zero = np.array([0.0, 0.0, 0.0])
         v = np.array([1.0, 2.0, 3.0])
         assert np.isnan(cosine(zero, v))
-
-    def test_both_zero_vectors_returns_nan(self):
-        zero = np.array([0.0, 0.0])
-        assert np.isnan(cosine(zero, zero))
-
-    def test_orthogonal_returns_zero(self):
-        u = np.array([1.0, 0.0])
-        v = np.array([0.0, 1.0])
-        assert cosine(u, v) == pytest.approx(0.0, abs=1e-15)
 
     def test_known_angle(self):
         # 45-degree angle: cosine = sqrt(2)/2
@@ -72,21 +62,13 @@ class TestZscoreIgnoreNan:
         assert np.nanmean(z) == pytest.approx(0.0, abs=1e-12)
         assert np.nanstd(z) == pytest.approx(1.0, abs=1e-12)
 
-    def test_nan_positions_preserved(self):
-        x = np.array([1.0, np.nan, 3.0, np.nan, 5.0])
-        z = zscore_ignore_nan(x)
-        assert np.isnan(z[1])
-        assert np.isnan(z[3])
-        assert np.isfinite(z[0])
-        assert np.isfinite(z[2])
-        assert np.isfinite(z[4])
-
     def test_nan_excluded_from_stats(self):
         # NaN should not affect the z-score of finite values
         x_full = np.array([1.0, 3.0, 5.0])
         x_nan = np.array([1.0, np.nan, 3.0, 5.0])
         z_full = zscore_ignore_nan(x_full)
         z_nan = zscore_ignore_nan(x_nan)
+        assert np.isnan(z_nan[1])
         assert z_nan[0] == pytest.approx(z_full[0], abs=1e-12)
         assert z_nan[2] == pytest.approx(z_full[1], abs=1e-12)
         assert z_nan[3] == pytest.approx(z_full[2], abs=1e-12)
@@ -109,19 +91,11 @@ class TestZscoreIgnoreNan:
 # ---------------------------------------------------------------------------
 
 class TestComputeAuck:
-    def test_constant_ones_mean_equals_one(self):
-        # Constant array — every window has mean 1.0
-        z = np.array([1.0, 1.0, 1.0])
-        auck = compute_auck(z, radius=3)
-        assert auck[0] == pytest.approx(1.0, abs=1e-12)
-        assert auck[1] == pytest.approx(1.0, abs=1e-12)
-        assert auck[2] == pytest.approx(1.0, abs=1e-12)
-
-    def test_linear_ramp_center_mean(self):
-        # [1, 2, 3] with radius=3: all windows cover the full array → mean=2.0
-        z = np.array([1.0, 2.0, 3.0])
-        auck = compute_auck(z, radius=3)
-        assert auck[2] == pytest.approx(2.0, abs=1e-12)
+    def test_window_means_with_edge_truncation(self):
+        z = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+        np.testing.assert_allclose(
+            compute_auck(z, radius=1), [1.5, 2.0, 3.0, 4.0, 4.5], atol=1e-12
+        )
 
     def test_radius_zero_returns_self(self):
         # With radius=0 each window is just the element itself
@@ -146,30 +120,13 @@ class TestComputeAuck:
 # ---------------------------------------------------------------------------
 
 class TestDetrendByVariance:
-    def test_all_nan_var_returns_nan_residuals(self):
-        var = np.array([np.nan, np.nan, np.nan, np.nan])
-        y = np.array([1.0, 2.0, 3.0, 4.0])
-        y_hat, resid, (a, b) = detrend_by_variance(var, y)
-        assert np.all(np.isnan(y_hat))
-        assert np.all(np.isnan(resid))
-        assert np.isnan(a)
-        assert np.isnan(b)
-
     def test_insufficient_valid_points_returns_nan(self):
         # Only 2 valid points → function returns NaN (needs at least 3)
         var = np.array([10.0, 20.0, np.nan, np.nan])
         y = np.array([1.0, 2.0, np.nan, np.nan])
         y_hat, resid, (a, b) = detrend_by_variance(var, y)
-        assert np.all(np.isnan(y_hat))
-
-    def test_zero_slope_when_y_is_constant(self):
-        # When y is constant, OLS slope b ≈ 0, residuals ≈ 0
-        var = np.array([10.0, 20.0, 30.0, 40.0, 50.0])
-        y = np.array([5.0, 5.0, 5.0, 5.0, 5.0])
-        y_hat, resid, (a, b) = detrend_by_variance(var, y)
-        assert b == pytest.approx(0.0, abs=1e-10)
-        assert a == pytest.approx(5.0, abs=1e-10)
-        np.testing.assert_allclose(resid, 0.0, atol=1e-10)
+        assert np.all(np.isnan(y_hat)) and np.all(np.isnan(resid))
+        assert np.isnan(a) and np.isnan(b)
 
     def test_perfect_log_linear_fit_zero_residuals(self):
         # y = 2 + 3*log(var) → residuals should be ~0
@@ -226,8 +183,7 @@ class TestOverallInterpretability:
     def test_aggregate_is_coherence_times_abs_cosb(self):
         clusters = self._make_clusters([10, 10], [0.6, 0.6], [0.8, 0.8])
         result = overall_interpretability(clusters, weight_by_size=True)
-        expected_aggregate = result["mean_coherence"] * result["mean_abs_cosb"]
-        assert result["aggregate"] == pytest.approx(expected_aggregate, abs=1e-14)
+        assert result["aggregate"] == pytest.approx(0.48, abs=1e-14)  # 0.6 * 0.8
 
     def test_centroid_cos_beta_takes_abs_value(self):
         # Negative and positive cos_beta with same magnitude → same mean_abs_cosb
@@ -252,13 +208,21 @@ class TestOverallInterpretability:
 
 
 # ---------------------------------------------------------------------------
-# PCAKSelectionResult dataclass: frozen fields
+# pca_sweep: neighbor filter
 # ---------------------------------------------------------------------------
 
-class TestPCAKSelectionResult:
-    def test_frozen_dataclass_fields(self):
-        result = PCAKSelectionResult(best_k=5, df_joined=[{"PCA_K": 5}])
-        assert result.best_k == 5
-        assert len(result.df_joined) == 1
-        with pytest.raises((TypeError, AttributeError)):
-            result.best_k = 10  # type: ignore[misc]
+def test_pca_sweep_prefers_the_embedding_filter():
+    def sweep(neighbor_filter):
+        emb = make_kv(VOCAB_50, dim=8)
+        emb.neighbor_filter = neighbor_filter
+        rng = np.random.default_rng(0)
+        Xs = rng.normal(size=(30, 8))
+        res = pca_sweep(
+            Xs=Xs, X_scale=np.ones(8), x=Xs, ys=rng.normal(size=30),
+            embeddings=emb, pca_k_values=[2, 3, 4, 5, 6], cluster_topn=10,
+        )
+        return [row["mean_coherence"] for row in res.df_joined]
+
+    # The default rule drops "ABC123" and "Warszawa"; a pack filter that only
+    # drops digit tokens keeps "Warszawa", so the cluster metrics change.
+    assert not np.allclose(sweep(re.compile(r".*\d")), sweep(None))

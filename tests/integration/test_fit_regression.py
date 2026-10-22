@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import glmm
 import numpy as np
 import pandas as pd
 import pytest
@@ -53,6 +54,7 @@ def test_no_formula_matches_pca_ols(tiny_kv, large_docs, large_y, lexicon):
     assert res.test.name == "f_test"
     assert res.stats.backend == "PCA+OLS"
     assert res.model.nobs == ssd.n_kept
+    assert res.pca_k == 4
 
 
 def test_sweep_k_used(tiny_kv, large_docs, large_y, lexicon):
@@ -78,23 +80,6 @@ def test_fit_ols_warns_and_matches(tiny_kv, large_docs, large_y, lexicon):
 def test_outcome_column_name(tiny_kv, large_docs, large_y, lexicon, frame):
     res = _ssd(tiny_kv, large_docs, lexicon).fit_regression("rating", data=frame, fixed_k=3)
     np.testing.assert_allclose(res.y, large_y)
-
-
-def test_outcome_column_list(tiny_kv, large_docs, lexicon, frame):
-    res = _ssd(tiny_kv, large_docs, lexicon).fit_multipls(
-        ["rating", "arousal"], data=frame, n_perm=19, n_splits=5
-    )
-    assert res.y.shape == (len(frame), 2)
-    assert res.outcome_names == ["rating", "arousal"]
-
-
-def test_outcome_column_list_from_dict(tiny_kv, large_docs, lexicon, frame):
-    data = {c: frame[c].to_numpy() for c in ("rating", "arousal")}
-    res = _ssd(tiny_kv, large_docs, lexicon).fit_multipls(
-        ["rating", "arousal"], data=data, n_perm=19, n_splits=5
-    )
-    assert res.y.shape == (len(frame), 2)
-    assert res.outcome_names == ["rating", "arousal"]
 
 
 def test_outcome_name_without_data_raises(tiny_kv, large_docs, lexicon):
@@ -125,16 +110,9 @@ def test_data_follows_dropped_documents(tiny_kv, large_docs, large_y, lexicon, f
 
 # --- formulas --------------------------------------------------------------
 
-def test_fixed_covariates_give_f_test(tiny_kv, large_docs, lexicon, frame):
-    res = _ssd(tiny_kv, large_docs, lexicon).fit_regression("rating ~ age", data=frame, fixed_k=3)
-    assert res.test.name == "f_test"
-    assert res.stats.backend == "PCA+GLMM"
-
-
-@pytest.mark.parametrize("y", ["nope", ["rating", "nope"]])
-def test_outcome_column_missing_raises(tiny_kv, large_docs, lexicon, frame, y):
+def test_outcome_column_missing_raises(tiny_kv, large_docs, lexicon, frame):
     with pytest.raises(ValueError, match="nope"):
-        _ssd(tiny_kv, large_docs, lexicon).fit_multipls(y, data=frame)
+        _ssd(tiny_kv, large_docs, lexicon).fit_multipls(["rating", "nope"], data=frame)
 
 
 def test_formula_without_data_raises(tiny_kv, large_docs, lexicon):
@@ -143,14 +121,17 @@ def test_formula_without_data_raises(tiny_kv, large_docs, lexicon):
 
 
 def test_mixed_model(tiny_kv, large_docs, lexicon, frame):
-    res = _ssd(tiny_kv, large_docs, lexicon).fit_regression(
-        "rating ~ age + (1 | ID)", data=frame, fixed_k=3
-    )
+    ssd = _ssd(tiny_kv, large_docs, lexicon)
+    res = ssd.fit_regression("rating ~ age + (1 | ID)", data=frame, fixed_k=3)
+    z = pca_fit_transform(standardize(ssd._vectors()[0])[0], 3)[0]
+    d = frame.assign(_ssd_y=res.y, **{f"_ssd_pca_{i + 1}": z[:, i] for i in range(3)})
+    cmp = glmm.compare(d, "_ssd_y ~ age + (1 | ID)",
+                       "_ssd_y ~ age + (1 | ID) + (_ssd_pca_1 + _ssd_pca_2 + _ssd_pca_3)")
+    assert res.test.params["statistic"] == pytest.approx(float(cmp.table["Chisq"][1]), rel=1e-6)
+    assert res.stats.pvalue == pytest.approx(float(cmp.table["Pr(>Chisq)"][1]), rel=1e-6)
     assert res.test.name == "lrt"
     assert res.stats.backend == "PCA+GLMM"
-    assert res.model.formula == "_ssd_y ~ age + (1 | ID) + (_ssd_pca_1 + _ssd_pca_2 + _ssd_pca_3)"
     assert res.model.re_groups
-    assert 0 < res.stats.pvalue < 1
     assert np.isnan(res.stats.r2)
     assert res.fit_info.formula == "rating ~ age + (1 | ID)"
     assert res.fit_info.family == "gaussian"
@@ -188,6 +169,9 @@ def test_binomial(tiny_kv, large_docs, large_y, lexicon):
     names = list(res.model.names)
     w = np.array([res.model.beta[names.index(f"_ssd_pca_{i}")] for i in (1, 2, 3)])
     np.testing.assert_allclose(res.pca_weights, w)
+    y_hat = np.array([d.y_hat for d in res.docs])
+    assert y_hat.min() >= 0 and y_hat.max() <= 1
+    np.testing.assert_allclose(y_hat, res.model.fitted)
 
 
 @pytest.mark.parametrize("fit", [
@@ -277,6 +261,8 @@ def test_regression_covariates_hold_components_fixed(tiny_kv, large_docs, lexico
     assert [r.term for r in cov] == ["(Intercept)", "age"]
     np.testing.assert_allclose([r.estimate for r in cov], coef[:2], rtol=1e-6)
     np.testing.assert_allclose([r.se for r in cov], se[:2], rtol=1e-6)
+    assert res.test.name == "f_test"
+    assert res.stats.backend == "PCA+GLMM"
 
 
 @pytest.mark.parametrize("fit", [
@@ -354,14 +340,6 @@ def test_pls_summary_without_formula(tiny_kv, large_docs, large_y, lexicon):
     assert "Fixed effects" not in text
     assert "Text:  PLS, k = 1\n" in text
     assert f"(split_exact): p = {fmt_p(res.test.pvalue)}" in text
-
-
-def test_binomial_y_hat_is_fitted_probability(tiny_kv, large_docs, large_y, lexicon):
-    y01 = (large_y > np.median(large_y)).astype(float)
-    res = _ssd(tiny_kv, large_docs, lexicon).fit_regression(y01, family="binomial", fixed_k=3)
-    y_hat = np.array([d.y_hat for d in res.docs])
-    assert y_hat.min() >= 0 and y_hat.max() <= 1
-    np.testing.assert_allclose(y_hat, res.model.fitted)
 
 
 def test_integer_y_labels_groups_without_decimal(tiny_kv, large_docs, lexicon):

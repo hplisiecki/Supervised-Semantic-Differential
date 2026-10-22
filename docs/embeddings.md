@@ -110,7 +110,7 @@ Only a wordpack tokenizes strings, and wordpacks exist for English. For any othe
 - The lexicon lists tokens in that same form.
 - A text of token lists has no raw text, so a result from it has no snippets and `result.docs.id(i)` shows no original text. Predicting for new documents (`result.predict(...)`) and `result.attach(texts=...)` take token lists too.
 
-Any tool can make the tokens. `examples/custom_embedding_spacy.py` lemmatizes with spaCy; spaCy is optional and ssdiff does not depend on it.
+Any tool can make the tokens. `examples/custom_embedding.py` lemmatizes with spaCy; spaCy is optional and ssdiff does not depend on it.
 
 ---
 

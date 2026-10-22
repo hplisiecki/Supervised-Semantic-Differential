@@ -24,14 +24,6 @@ def test_no_heavy_imports_on_load():
     )
 
 
-def test_public_api_importable():
-    """SSD and Embeddings must both be importable from ssdiff."""
-    from ssdiff import SSD, Embeddings
-
-    assert callable(SSD), "SSD should be a callable class"
-    assert callable(Embeddings), "Embeddings should be a callable class"
-
-
 def test_version_matches_pyproject():
     import re
     from pathlib import Path
@@ -43,9 +35,8 @@ def test_version_matches_pyproject():
 
     assert ssdiff.__version__ == match.group(1)
 
-def test_all_contains_core_names():
-    """ssdiff.__all__ must exist and include SSD and Embeddings."""
-    assert hasattr(ssdiff, "__all__"), "ssdiff does not define __all__"
-    all_names = ssdiff.__all__
-    for name in ("SSD", "Embeddings"):
-        assert name in all_names, f"{name!r} missing from ssdiff.__all__"
+def test_all_names_resolve():
+    """Every name in ssdiff.__all__ exists, and the core classes are exported."""
+    ns = {}
+    exec("from ssdiff import *", ns)
+    assert {"SSD", "Embeddings"} <= set(ssdiff.__all__) <= ns.keys()

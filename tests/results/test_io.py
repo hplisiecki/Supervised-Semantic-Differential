@@ -10,27 +10,16 @@ from __future__ import annotations
 
 import csv
 import json
+import zipfile
 
-import numpy as np
 import pytest
 
-from ssdiff import SSD
 from ssdiff.results.display import NARRATIVE_EXTS, TABULAR_EXTS
 from ssdiff.results.report import Report, Section
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _words_view(pls_result):
-    """Return the words tabular View from pls_result."""
-    return pls_result.words
-
-
-def _stats_view(pls_result):
-    """Return the stats ScalarView from pls_result."""
-    return pls_result.stats
 
 
 def _minimal_report() -> Report:
@@ -55,26 +44,38 @@ def _minimal_report() -> Report:
 _OPTIONAL_TABULAR = {"xlsx": "openpyxl", "docx": "docx"}
 
 
-@pytest.mark.parametrize("ext", TABULAR_EXTS)
-def test_view_save_format_exists_nonempty(pls_result, tmp_path, ext):
-    """Save a WordsView to each supported tabular extension.
+_TABULAR_MARKER = {
+    "csv": "side,rank,word,cos_beta",
+    "json": '"cos_beta":',
+    "md": "| side | rank | word | cos_beta |",
+    "txt": "side  rank",
+    "html": "<table>",
+    "tex": "\\begin{tabular}",
+}
 
-    File must exist and be non-empty after save().
-    """
+
+@pytest.mark.parametrize("ext", TABULAR_EXTS)
+def test_view_save_writes_each_format(pls_result, tmp_path, ext):
+    """Each tabular format holds the table in its own container or markup."""
     if ext in _OPTIONAL_TABULAR:
         pytest.importorskip(_OPTIONAL_TABULAR[ext])
 
-    view = _words_view(pls_result)
     out = tmp_path / f"words.{ext}"
-    view.save(str(out))
+    pls_result.words.save(out)
 
-    assert out.exists(), f"save() did not create file for .{ext}"
-    assert out.stat().st_size > 0, f"save() wrote empty file for .{ext}"
+    if ext in ("xlsx", "docx"):
+        with zipfile.ZipFile(out) as z:
+            member = "xl/workbook.xml" if ext == "xlsx" else "word/document.xml"
+            assert member in z.namelist()
+    else:
+        text = out.read_text(encoding="utf-8")
+        assert _TABULAR_MARKER[ext] in text
+        assert pls_result.words[0].word in text
 
 
 def test_view_save_csv_roundtrip(pls_result, tmp_path):
     """CSV save: read back and verify column names and at least one row value."""
-    view = _words_view(pls_result)
+    view = pls_result.words
     out = tmp_path / "words.csv"
     view.save(str(out))
 
@@ -97,7 +98,7 @@ def test_view_save_csv_roundtrip(pls_result, tmp_path):
 def test_view_save_default_cwd(pls_result, tmp_path, monkeypatch):
     """save(path=None) creates a file in cwd with the default filename."""
     monkeypatch.chdir(tmp_path)
-    view = _words_view(pls_result)
+    view = pls_result.words
     view.save()  # path=None
 
     default_name = view._default_filename()
@@ -114,7 +115,7 @@ def test_view_save_default_cwd(pls_result, tmp_path, monkeypatch):
 
 def test_view_save_accepts_path_object(pls_result, tmp_path):
     """save() must accept a pathlib.Path argument (not just str)."""
-    view = _words_view(pls_result)
+    view = pls_result.words
     out = tmp_path / "out.csv"
     view.save(out)  # passing a Path, not a str
 
@@ -126,11 +127,11 @@ def test_view_save_accepts_path_object(pls_result, tmp_path):
 # save("out") with no extension raises ValueError
 # ---------------------------------------------------------------------------
 
-def test_view_save_no_extension_raises(pls_result, tmp_path):
+def test_view_save_no_extension_raises(pls_result, tmp_path, monkeypatch):
     """save(path_without_extension) must raise ValueError."""
-    view = _words_view(pls_result)
-    with pytest.raises(ValueError, match=r"extension"):
-        view.save(str(tmp_path / "out"))
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(ValueError, match="requires a path with an extension"):
+        pls_result.words.save("out")
 
 
 # ---------------------------------------------------------------------------
@@ -139,26 +140,9 @@ def test_view_save_no_extension_raises(pls_result, tmp_path):
 
 def test_view_save_unknown_extension_raises(pls_result, tmp_path):
     """save(path_with_unknown_extension) must raise ValueError."""
-    view = _words_view(pls_result)
+    view = pls_result.words
     with pytest.raises(ValueError, match=r"[Uu]nsupported"):
         view.save(str(tmp_path / "out.xyz"))
-
-
-# ---------------------------------------------------------------------------
-# save("out.csv", k=3) produces exactly 3 data rows
-# ---------------------------------------------------------------------------
-
-def test_view_save_k_caps_rows(pls_result, tmp_path):
-    """save(path, k=3) must write exactly 3 data rows (not counting header)."""
-    view = _words_view(pls_result)
-    out = tmp_path / "words_k3.csv"
-    view.save(str(out), k=3)
-
-    with open(out, newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        rows = list(reader)
-
-    assert len(rows) == 3, f"Expected 3 rows with k=3, got {len(rows)}"
 
 
 # ---------------------------------------------------------------------------
@@ -189,7 +173,7 @@ _ROW_VIEW_GETTERS = [
 @pytest.mark.parametrize("label,getter", _ROW_VIEW_GETTERS,
                          ids=[lbl for lbl, _ in _ROW_VIEW_GETTERS])
 def test_view_save_k_caps_rows_all_views(pls_result, tmp_path, label, getter):
-    """save(path, k=N) on any row-bearing view: no crash, ≤ N data rows.
+    """save(path, k=N) on any row-bearing view: no crash, exactly min(N, len) data rows.
 
     Contract is per the View base class, not per-call-site. Every concrete
     subclass must honor it — otherwise the bug only shows in whichever
@@ -204,25 +188,8 @@ def test_view_save_k_caps_rows_all_views(pls_result, tmp_path, label, getter):
 
     with open(out, newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
-    assert len(rows) <= k, (
-        f"{label}: save(k={k}) wrote {len(rows)} data rows; expected ≤ {k}"
-    )
-
-
-@pytest.mark.parametrize("label,getter", _ROW_VIEW_GETTERS,
-                         ids=[lbl for lbl, _ in _ROW_VIEW_GETTERS])
-def test_view_slice_returns_view_all_views(pls_result, label, getter):
-    """view[:k] must return something with ``_columns`` (i.e. a View, not list).
-
-    ``View._resized(k)`` (used by ``save(k=N)``) delegates to ``self[:k]``,
-    then ``_validate_cols`` reads ``view._columns``. A bare list slips through
-    every type hint and only crashes at write time.
-    """
-    view = getter(pls_result)
-    sliced = view[:2]
-    assert hasattr(sliced, "_columns"), (
-        f"{label}: view[:k] returned {type(sliced).__name__} "
-        f"(must be a View with ``_columns``)"
+    assert len(rows) == min(k, len(view)), (
+        f"{label}: save(k={k}) wrote {len(rows)} data rows; expected {min(k, len(view))}"
     )
 
 
@@ -231,14 +198,8 @@ def test_view_slice_returns_view_all_views(pls_result, label, getter):
 # ---------------------------------------------------------------------------
 
 def test_scalar_view_save_k_zero(pls_result, tmp_path):
-    """ScalarView.save(..., k=0) should not raise; result is 0 or 1 data rows.
-
-    The source uses _resized(k) which slices; for ScalarView the slice
-    returns self (single row), so k=0 is treated as 'full single row'
-    (the view always has exactly 1 row). We accept 0 or 1 rows — the
-    important thing is no exception is raised.
-    """
-    view = _stats_view(pls_result)
+    """ScalarView.save(..., k=0) still writes its single row."""
+    view = pls_result.stats
     out = tmp_path / "stats_k0.csv"
     view.save(str(out), k=0)  # must not raise
 
@@ -246,8 +207,7 @@ def test_scalar_view_save_k_zero(pls_result, tmp_path):
     with open(out, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         rows = list(reader)
-    # ScalarView always iterates exactly 1 item regardless of k
-    assert len(rows) in (0, 1), f"Unexpected row count: {len(rows)}"
+    assert len(rows) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -281,28 +241,18 @@ def test_report_save_unknown_extension_raises(tmp_path):
 # Bonus: Report.save() round-trips for non-binary narrative formats
 # ---------------------------------------------------------------------------
 
-_OPTIONAL_NARRATIVE = {"docx": "docx"}
-
-@pytest.mark.parametrize("ext", [e for e in NARRATIVE_EXTS if e != "docx"])
+@pytest.mark.parametrize("ext", NARRATIVE_EXTS)
 def test_report_save_narrative_exists_nonempty(tmp_path, ext):
-    """Report.save() creates a non-empty file for each text narrative format."""
-    report = _minimal_report()
+    """Report.save() writes each narrative format with the report title in it."""
+    if ext == "docx":
+        pytest.importorskip("docx")
     out = tmp_path / f"report.{ext}"
-    report.save(str(out))
+    _minimal_report().save(out)
 
-    assert out.exists(), f"Report.save() did not create file for .{ext}"
-    assert out.stat().st_size > 0, f"Report.save() wrote empty file for .{ext}"
-
-
-def test_report_save_docx_exists_nonempty(tmp_path):
-    """Report.save() creates a non-empty .docx if python-docx is available."""
-    pytest.importorskip("docx")
-    report = _minimal_report()
-    out = tmp_path / "report.docx"
-    report.save(str(out))
-
-    assert out.exists()
-    assert out.stat().st_size > 0
+    if ext == "docx":
+        assert zipfile.is_zipfile(out)
+    else:
+        assert "Test Report" in out.read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -318,16 +268,3 @@ def test_report_save_json_roundtrip(tmp_path):
     data = json.loads(out.read_text(encoding="utf-8"))
     assert data["title"] == report.title
     assert "sections" in data
-
-
-def test_predict_takes_the_fit_form(tiny_kv, large_docs, lexicon, large_y):
-    r = SSD(tiny_kv, large_docs, lexicon).fit_regression(large_y, fixed_k=3)
-    kept = list(r.docs)[:4]
-    np.testing.assert_allclose(r.predict([large_docs[d.doc_id] for d in kept]), [d.y_hat for d in kept])
-    with pytest.raises(TypeError, match="token lists"):
-        r.predict([" ".join(d) for d in large_docs[:4]])
-
-
-def test_attach_texts_count_must_match(pls_result):
-    with pytest.raises(ValueError, match="documents"):
-        pls_result.attach(texts=["people work."])

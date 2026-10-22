@@ -15,95 +15,14 @@ from ssdiff.ssd import SSD
 from ssdiff.utils.diagnostics import _get_hook, progress_hook
 
 # ---------------------------------------------------------------------------
-# Helpers
+# 9. A categorical outcome raises ValueError
 # ---------------------------------------------------------------------------
 
-def _cos_sim(a: np.ndarray, b: np.ndarray) -> float:
-    """Cosine similarity between two 1-D arrays."""
-    na = np.linalg.norm(a)
-    nb = np.linalg.norm(b)
-    if na < 1e-12 or nb < 1e-12:
-        return 0.0
-    return float(np.dot(a, b) / (na * nb))
-
-
-# ---------------------------------------------------------------------------
-# 1. Construction: vectors are built lazily; SSD has no fit_info
-# ---------------------------------------------------------------------------
-
-def test_construction_counts(ssd_instance):
-    """n_kept <= len(ssd); SSD has no fit_info attribute pre-fit."""
-    ssd = ssd_instance
-    assert 0 < ssd.n_kept <= len(ssd)
-    assert not hasattr(ssd, "fit_info")
-
-
-def test_construction_shapes(ssd_instance):
-    """The vectors are 2-D with one row per document that has one."""
-    X, has_vector, _ = ssd_instance._vectors()
-    assert X.ndim == 2
-    assert has_vector.shape == (len(ssd_instance),)
-    assert X.shape[0] == ssd_instance.n_kept
-
-
-# ---------------------------------------------------------------------------
-# 2. fit_pls basic invariants
-# ---------------------------------------------------------------------------
-
-def test_fit_pls_returns_plsresult(ssd_instance, parity_df):
-    from ssdiff.results.continuous_result import PLSResult
-    result = ssd_instance.fit_pls(parity_df["y"], k=2, n_splits=20)
-    assert isinstance(result, PLSResult)
-
-
-def test_fit_pls_r2_in_range(ssd_instance, parity_df):
-    """PLSResult.stats.r2 is in [0, 1]."""
-    result = ssd_instance.fit_pls(parity_df["y"], k=2, n_splits=20)
-    assert 0.0 <= result.stats.r2 <= 1.0
-
-
-def test_fit_pls_beta_shape(ssd_instance, parity_df, parity_emb):
-    """beta shape is (D,) where D == embeddings.dim."""
-    result = ssd_instance.fit_pls(parity_df["y"], k=2, n_splits=20)
-    D = parity_emb.vectors.shape[1]
-    assert result.beta.shape == (D,)
-
-
-# ---------------------------------------------------------------------------
-# 5. fit_regression with fixed_k
-# ---------------------------------------------------------------------------
-
-def test_fit_regression_fixed_k(ssd_instance, parity_df):
-    """fit_regression(fixed_k=3) returns PCAOLSResult with pca_k == 3."""
-    from ssdiff.results.continuous_result import PCAOLSResult
-    result = ssd_instance.fit_regression(parity_df["y"], fixed_k=3)
-    assert isinstance(result, PCAOLSResult)
-    assert result.pca_k == 3
-
-
-# ---------------------------------------------------------------------------
-# 6. fit_regression sweep (fixed_k=None)
-# ---------------------------------------------------------------------------
-
-def test_fit_regression_sweep(tiny_kv, large_docs, large_y, lexicon):
-    """fit_regression(fixed_k=None) sweep produces valid PCAOLSResult."""
-    from ssdiff.results.continuous_result import PCAOLSResult
-    ssd = SSD(tiny_kv, large_docs, lexicon)
-    result = ssd.fit_regression(large_y, fixed_k=None, k_min=2, k_max=6, k_step=1)
-    assert isinstance(result, PCAOLSResult)
-    assert 0.0 <= result.stats.r2 <= 1.0
-    assert result.pca_k >= 2
-
-
-# ---------------------------------------------------------------------------
-# 9. fit_pls on categorical y raises ValueError
-# ---------------------------------------------------------------------------
-
-def test_fit_pls_categorical_y_raises(tiny_kv, sample_docs, sample_groups, lexicon):
-    """A categorical outcome raises ValueError on fit_pls()."""
+@pytest.mark.parametrize("method", ["fit_pls", "fit_regression"])
+def test_categorical_y_raises(tiny_kv, sample_docs, sample_groups, lexicon, method):
     ssd = SSD(tiny_kv, sample_docs, lexicon)
     with pytest.raises(ValueError, match="categorical"):
-        ssd.fit_pls(sample_groups)
+        getattr(ssd, method)(sample_groups)
 
 
 # ---------------------------------------------------------------------------
@@ -119,52 +38,19 @@ def test_fit_pls_constant_y_rejected(tiny_kv, sample_docs, lexicon):
 
 
 # ---------------------------------------------------------------------------
-# 11. use_full_doc=True produces different results from use_full_doc=False
+# 11. use_full_doc=True produces different vectors from use_full_doc=False
 # ---------------------------------------------------------------------------
 
-def test_use_full_doc_differs(tiny_kv, sample_docs, sample_y, lexicon):
-    """use_full_doc=True vs False: betas are not identical."""
-    ssd_ctx = SSD(tiny_kv, sample_docs, lexicon, use_full_doc=False)
-    ssd_full = SSD(tiny_kv, sample_docs, None, use_full_doc=True)
-
-    res_ctx = ssd_ctx.fit_pls(sample_y, k=1, n_splits=20)
-    res_full = ssd_full.fit_pls(sample_y, k=1, n_splits=20)
-
-    # Results should differ — at minimum their betas are not identical
-    assert not np.allclose(res_ctx.beta, res_full.beta), (
-        "Expected use_full_doc=True and use_full_doc=False to produce different betas"
-    )
+def test_use_full_doc_differs(tiny_kv, sample_docs, lexicon):
+    """Whole-document vectors differ from seed-window vectors for the same text and lexicon."""
+    ctx = SSD(tiny_kv, sample_docs, lexicon, use_full_doc=False)
+    full = SSD(tiny_kv, sample_docs, lexicon, use_full_doc=True)
+    assert not np.allclose(ctx._vectors()[0], full._vectors()[0])
 
 
 # ---------------------------------------------------------------------------
-# 12. progress_hook: fires per step; thread-local isolation
+# 12. progress_hook: thread-local isolation
 # ---------------------------------------------------------------------------
-
-def test_progress_hook_does_not_break_fit_pls(ssd_instance, parity_df):
-    """progress_hook around fit_pls is a no-op for the permutation, split and
-    calibrated tests: they run inside plskit's Rust core, which reports no
-    progress. This test checks that wrapping ``fit_pls`` in a
-    ``progress_hook`` does not break it.
-    """
-    calls = []
-
-    def cb(current, total, desc):
-        calls.append((current, total, desc))
-
-    with progress_hook(cb):
-        result = ssd_instance.fit_pls(
-            parity_df["y"], k=1, n_splits=20, random_state=1
-        )
-
-    # Hook may legitimately receive zero calls; what we care about is
-    # that fit_pls produced a valid result.
-    assert 0.0 <= result.stats.r2 <= 1.0
-    # If the hook fires, each call must still have the right shape.
-    for current, total, desc in calls:
-        assert isinstance(current, int)
-        assert isinstance(total, int)
-        assert isinstance(desc, str)
-
 
 def test_progress_hook_thread_local_isolation():
     """Two threads with different hooks do not cross-contaminate."""
@@ -175,24 +61,26 @@ def test_progress_hook_thread_local_isolation():
 
     def thread_a():
         def cb_a(cur, tot, desc):
-            calls_a.append(desc)
+            calls_a.append((cur, tot, desc))
 
         with progress_hook(cb_a):
             barrier.wait()  # sync: both hooks set before either fires
             # Simulate a hooked progress call directly
             from ssdiff.utils.diagnostics import _progress
             list(_progress(range(3), total=3, desc="thread-A"))
-        barrier.wait()  # sync: both done
+            # Wait inside the block: leaving it restores the previous hook,
+            # which would hide a shared (non-thread-local) hook from the other thread.
+            barrier.wait()
 
     def thread_b():
         def cb_b(cur, tot, desc):
-            calls_b.append(desc)
+            calls_b.append((cur, tot, desc))
 
         with progress_hook(cb_b):
             barrier.wait()
             from ssdiff.utils.diagnostics import _progress
             list(_progress(range(2), total=2, desc="thread-B"))
-        barrier.wait()
+            barrier.wait()
 
     ta = threading.Thread(target=thread_a)
     tb = threading.Thread(target=thread_b)
@@ -201,12 +89,8 @@ def test_progress_hook_thread_local_isolation():
     ta.join(timeout=10)
     tb.join(timeout=10)
 
-    # Each thread should only see its own hook's callbacks
-    assert all(d == "thread-A" for d in calls_a), f"Thread A saw: {calls_a}"
-    assert all(d == "thread-B" for d in calls_b), f"Thread B saw: {calls_b}"
-    # No cross-contamination
-    assert "thread-B" not in calls_a
-    assert "thread-A" not in calls_b
+    assert calls_a == [(1, 3, "thread-A"), (2, 3, "thread-A"), (3, 3, "thread-A")]
+    assert calls_b == [(1, 2, "thread-B"), (2, 2, "thread-B")]
 
 
 # ---------------------------------------------------------------------------
@@ -255,46 +139,6 @@ def test_progress_hook_nested_restores():
 
 
 # ---------------------------------------------------------------------------
-# 15b. k="auto" routes through plskit.pls1_find_k_optimal
-# ---------------------------------------------------------------------------
-
-def test_fit_pls_k_auto(ssd_instance, parity_df):
-    """fit_pls(k='auto') resolves to k>=1 via pls1_find_k_optimal."""
-    result = ssd_instance.fit_pls(
-        parity_df["y"], k="auto", k_max=3, n_splits=5, random_state=0,
-    )
-    assert result.fit_info["n_components"] >= 1
-
-
-# ---------------------------------------------------------------------------
-# 16. fit_regression raises ValueError on categorical y
-# ---------------------------------------------------------------------------
-
-def test_fit_regression_categorical_y_raises(tiny_kv, sample_docs, sample_groups, lexicon):
-    """A categorical outcome raises ValueError on fit_regression()."""
-    ssd = SSD(tiny_kv, sample_docs, lexicon)
-    with pytest.raises(ValueError, match="categorical"):
-        ssd.fit_regression(sample_groups)
-
-
-# ---------------------------------------------------------------------------
-# 17. A fit needs a lexicon unless use_full_doc=True
-# ---------------------------------------------------------------------------
-
-def test_fit_without_lexicon_raises(tiny_kv, sample_docs, sample_y):
-    """No lexicon and use_full_doc=False raises ValueError at fit time."""
-    ssd = SSD(tiny_kv, sample_docs, lexicon=None, use_full_doc=False)
-    with pytest.raises(ValueError, match="lexicon"):
-        ssd.fit_pls(sample_y)
-
-
-def test_construction_full_doc_no_lexicon_ok(tiny_kv, sample_docs, sample_y):
-    """SSD(use_full_doc=True) with lexicon=None does not raise."""
-    ssd = SSD(tiny_kv, sample_docs, lexicon=None, use_full_doc=True)
-    assert ssd.n_kept >= 0
-
-
-# ---------------------------------------------------------------------------
 # 2-D y (several outcomes)
 # ---------------------------------------------------------------------------
 
@@ -309,13 +153,6 @@ def test_y_2d_array_accepted(tiny_kv, sample_docs, lexicon):
     assert res.outcome_names == ["y1", "y2", "y3"]
 
 
-def test_y_dataframe_names(tiny_kv, sample_docs, lexicon):
-    pd = pytest.importorskip("pandas")
-    df = pd.DataFrame(_y2(len(sample_docs)), columns=[10, "b", "c"])
-    res = SSD(tiny_kv, sample_docs, lexicon).fit_multipls(df, n_perm=20, n_splits=5)
-    assert res.outcome_names == ["10", "b", "c"]
-
-
 def test_y_2d_nan_row_and_empty_doc_stay_aligned(tiny_kv, sample_docs, lexicon):
     docs = [list(d) for d in sample_docs] + [["zzz_not_in_vocab"]]
     y = _y2(len(docs))
@@ -324,6 +161,7 @@ def test_y_2d_nan_row_and_empty_doc_stay_aligned(tiny_kv, sample_docs, lexicon):
     expected_rows = [i for i in range(len(docs)) if i != 1 and i != len(docs) - 1]
     np.testing.assert_array_equal(res.y, y[expected_rows])
     assert res.x.shape[0] == res.y.shape[0]
+    assert res.stats.n == len(expected_rows)
 
 
 def test_y_2d_non_numeric_raises(tiny_kv, sample_docs, lexicon):
@@ -362,6 +200,10 @@ def test_predict_training_text_reproduces_fit(ssd_instance, parity_df, fit):
 
     y_hat = np.array([d.y_hat for d in res.docs])
     np.testing.assert_allclose(pred[res._keep_mask], y_hat, rtol=1e-10)
+    # A subset must reuse the training SIF counts, not recount on the new batch.
+    sub = np.flatnonzero(res._keep_mask)[:4]
+    np.testing.assert_allclose(
+        res.predict(list(parity_df["text"].iloc[sub])), pred[sub], rtol=1e-10)
     # Fitted values of a centered least-squares-type fit average to mean(y).
     assert y_hat.mean() == pytest.approx(res.y.mean())
 

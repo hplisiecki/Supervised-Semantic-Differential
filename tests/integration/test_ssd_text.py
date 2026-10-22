@@ -47,8 +47,10 @@ def test_no_lexicon_raises_at_vectors(tiny_kv, sample_docs):
 
 
 def test_sif_counts_use_all_documents(tiny_kv, sample_docs, lexicon):
-    t = SSD(tiny_kv, sample_docs, lexicon)
-    assert t._vectors()[2] == compute_global_sif(sample_docs)
+    docs = sample_docs + [["piekny", "dom"]]   # no lexicon word: dropped from the fit
+    counts = SSD(tiny_kv, docs, lexicon)._vectors()[2]
+    assert counts == compute_global_sif(docs)
+    assert counts != compute_global_sif(sample_docs)
 
 
 def test_empty_cells_get_no_vector(parity_emb, parity_lexicon):
@@ -61,7 +63,7 @@ def test_pickle_drops_embeddings_and_vectors(tiny_kv, sample_docs, lexicon):
     t = SSD(tiny_kv, sample_docs, lexicon)
     t._vectors()
     s = pickle.loads(pickle.dumps(t))
-    assert s.embeddings is None and s.docs == sample_docs
+    assert s.embeddings is None and s._cache is None and s.docs == sample_docs
 
 
 @pytest.fixture
@@ -110,8 +112,17 @@ def test_multipls_columns_and_groups_column(text, large_y, large_groups_2):
         "b": np.random.default_rng(1).normal(size=len(large_y)),
         "g": large_groups_2,
     })
-    assert text.fit_multipls(["a", "b"], data=df, n_perm=19, n_splits=5).outcome_names == ["a", "b"]
+    r = text.fit_multipls(["a", "b"], data=df, n_perm=19, n_splits=5)
+    assert r.outcome_names == ["a", "b"]
+    assert r.y.shape == (len(df), 2)
     assert text.fit_groups("g", data=df, n_perm=50).G == 2
+
+
+def test_multipls_columns_from_a_dict(text, large_y):
+    data = {"a": large_y, "b": np.random.default_rng(1).normal(size=len(large_y))}
+    r = text.fit_multipls(["a", "b"], data=data, n_perm=19, n_splits=5)
+    assert r.outcome_names == ["a", "b"]
+    assert r.y.shape == (len(large_y), 2)
 
 
 def test_n_no_vector(tiny_kv, large_docs, lexicon, large_y):

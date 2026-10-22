@@ -3,16 +3,16 @@
 Covers:
 - format.py primitives: fmt_p, fmt_r, fmt_d, fmt_sig, fmt_count, fmt_pct, truncate,
   fmt_table, default_alignment
-- display.py: set_repr_hints, _save_hint_enabled
-- Result class reprs: PLSResult, PCAOLSResult, GroupResult, LexiconResult (one repr test each)
-- View save-hint sanity: WordsView, ClustersView, SnippetsView, DocsView
+- display.py: set_repr_hints
+- Result class reprs: PLSResult, PCAOLSResult, GroupResult, LexiconResult
+- View repr save hints: WordsView, DocsView, SnippetsView, ClustersView
 """
 
 from __future__ import annotations
 
 import pytest
 
-from ssdiff.results.display import _save_hint_enabled, set_repr_hints
+from ssdiff.results.display import TABULAR_EXTS, set_repr_hints
 from ssdiff.results.format import (
     ELLIPSIS,
     MINUS,
@@ -43,12 +43,9 @@ def test_fmt_p(p, expected):
     assert fmt_p(p) == expected
 
 
-def test_fmt_p_nan():
-    assert fmt_p(float("nan")) == "nan"
-
-
-def test_fmt_p_inf():
-    assert fmt_p(float("inf")) == "nan"
+@pytest.mark.parametrize("p", [float("nan"), float("inf")])
+def test_fmt_p_nan(p):
+    assert fmt_p(p) == "nan"
 
 
 # ---------------------------------------------------------------------------
@@ -77,13 +74,10 @@ def test_fmt_r(r, digits, signed, expected):
     (-0.567, 2, "-0.57"),  # unbounded: leading zero kept
     (0.0,    2, "0.00"),
     (10.0,   2, "10.00"),
+    (float("nan"), 2, "nan"),
 ])
 def test_fmt_d(x, digits, expected):
     assert fmt_d(x, digits=digits) == expected
-
-
-def test_fmt_d_nan():
-    assert fmt_d(float("nan")) == "nan"
 
 
 # ---------------------------------------------------------------------------
@@ -134,55 +128,24 @@ def test_fmt_pct(x, digits, expected):
 # truncate
 # ---------------------------------------------------------------------------
 
-def test_truncate_short_string_unchanged():
-    assert truncate("abc", 5) == "abc"
-
-
-def test_truncate_exact_length_unchanged():
-    assert truncate("abcde", 5) == "abcde"
-
-
-def test_truncate_long_string():
-    result = truncate("abcdefgh", 5)
-    assert result == "abcd" + ELLIPSIS
-    assert len(result) == 5
-
-
-def test_truncate_appends_ellipsis_char():
-    # Confirm it's the unicode ELLIPSIS (U+2026) not three dots
-    result = truncate("abcdefgh", 4)
-    assert result[-1] == ELLIPSIS
+@pytest.mark.parametrize("text,width,expected", [
+    ("abc", 5, "abc"),
+    ("abcde", 5, "abcde"),
+    ("abcdefgh", 5, "abcd" + ELLIPSIS),
+])
+def test_truncate(text, width, expected):
+    assert truncate(text, width) == expected
 
 
 # ---------------------------------------------------------------------------
 # fmt_table
 # ---------------------------------------------------------------------------
 
-def test_fmt_table_basic():
-    rows = [["apple", "1.23"], ["banana", "4.56"]]
-    headers = ["fruit", "value"]
-    numeric = [False, True]
-    result = fmt_table(rows, headers=headers, numeric=numeric)
-    lines = result.splitlines()
-    # Header row first
-    assert "fruit" in lines[0]
-    assert "value" in lines[0]
-    # Data rows follow
-    assert "apple" in lines[1]
-    assert "banana" in lines[2]
-
-
 def test_fmt_table_right_aligns_numeric_column():
-    rows = [["a", "1"], ["bb", "22"]]
-    headers = ["label", "n"]
-    numeric = [False, True]
-    result = fmt_table(rows, headers=headers, numeric=numeric)
-    # numeric column width for "n" vs "22": widths = [2, 2]; both right-aligned
-    # header line: "label  n" with "n" right-padded to 2 or right-justified
-    # The numeric column "n" should be right-justified (trailing whitespace at start)
-    # we just verify the output is a non-empty string and contains the values
-    assert "1" in result
-    assert "22" in result
+    result = fmt_table(
+        [["a", "1"], ["bb", "22"]], headers=["label", "n"], numeric=[False, True]
+    )
+    assert result == "label   n\na       1\nbb     22"
 
 
 def test_fmt_table_empty_rows():
@@ -203,36 +166,18 @@ def test_fmt_table_text_truncate():
 # default_alignment
 # ---------------------------------------------------------------------------
 
-def test_default_alignment_zero_cols():
-    assert default_alignment(0) == ()
-
-
-def test_default_alignment_one_col():
-    result = default_alignment(1)
-    assert result == (False,)  # single column: left-aligned
-
-
-def test_default_alignment_multi_col():
-    result = default_alignment(4)
-    # First column left (False), rest right (True)
-    assert result == (False, True, True, True)
-
-
-def test_default_alignment_first_left_rest_right():
-    for n in range(1, 6):
-        result = default_alignment(n)
-        assert result[0] is False
-        assert all(v is True for v in result[1:])
+@pytest.mark.parametrize("n,expected", [
+    (0, ()),
+    (1, (False,)),
+    (4, (False, True, True, True)),
+])
+def test_default_alignment(n, expected):
+    assert default_alignment(n) == expected
 
 
 # ---------------------------------------------------------------------------
 # set_repr_hints toggle
 # ---------------------------------------------------------------------------
-
-def test_repr_hints_default_on():
-    set_repr_hints(True)  # ensure clean state
-    assert _save_hint_enabled() is True
-
 
 def test_repr_hints_toggle_off(pls_result):
     set_repr_hints(False)
@@ -243,49 +188,25 @@ def test_repr_hints_toggle_off(pls_result):
         set_repr_hints(True)  # restore
 
 
-def test_repr_hints_toggle_on(pls_result):
-    set_repr_hints(True)
-    r = repr(pls_result)
-    assert "Save:" in r
-
-
-def test_repr_hints_bad_type_raises():
+@pytest.mark.parametrize("value", ["maybe", 1])
+def test_repr_hints_bad_type_raises(value):
     with pytest.raises(TypeError):
-        set_repr_hints("maybe")
-
-
-def test_repr_hints_bad_type_int_raises():
-    with pytest.raises(TypeError):
-        set_repr_hints(1)
+        set_repr_hints(value)
 
 
 # ---------------------------------------------------------------------------
 # Result-class repr examples (one per class)
 # ---------------------------------------------------------------------------
 
-def test_pls_result_repr(pls_result):
+@pytest.mark.parametrize("fixture, head, fact", [
+    ("pls_result", "PLSResult  r²=", "p="),
+    ("pcaols_result", "PCAOLSResult  r²=", "p="),
+    ("group_result_2g", "GroupResult  G=2  n=50", "omnibus p="),
+])
+def test_result_repr(request, fixture, head, fact):
     set_repr_hints(True)
-    r = repr(pls_result)
-    assert "PLSResult" in r
-    # r² appears in the summary line
-    assert "r²" in r or "r2" in r.lower()
-    # Save hint present
-    assert "Save:" in r
-
-
-def test_pcaols_result_repr(pcaols_result):
-    set_repr_hints(True)
-    r = repr(pcaols_result)
-    assert "PCAOLSResult" in r
-    assert "Save:" in r
-
-
-def test_group_result_repr(group_result_2g):
-    set_repr_hints(True)
-    r = repr(group_result_2g)
-    assert "GroupResult" in r
-    # Omnibus p-value appears
-    assert "omnibus" in r.lower() or "p=" in r
+    r = repr(request.getfixturevalue(fixture))
+    assert r.startswith(head) and fact in r.splitlines()[0]
     assert "Save:" in r
 
 
@@ -307,9 +228,8 @@ def test_lexicon_result_repr():
     lr = LexiconResult(var_type="continuous", n_docs=100, n_tokens=3, suggestions=[sug])
     set_repr_hints(True)
     r = repr(lr)
-    assert "LexiconResult" in r
-    # n_tokens appears in summary
-    assert "n_tokens=3" in r or "3" in r
+    assert r.startswith("LexiconResult  n_tokens=3  n_docs=100")
+    assert "Save:" in r
 
 
 # ---------------------------------------------------------------------------
@@ -359,41 +279,24 @@ def test_seeded_suggestions_save_to_lexicon_suggestions_csv(tmp_path, monkeypatc
 
 
 # ---------------------------------------------------------------------------
-# View save-hint sanity: WordsView, DocsView, SnippetsView, ClustersView
+# View repr save hints
 # ---------------------------------------------------------------------------
 
-def test_words_view_save_hint_starts_with_save(pls_result):
-    """WordsView._save_hint() begins with 'Save:'."""
-    from ssdiff.results.continuous_result import WordsView
-    # Access words through pls_result (which has embeddings attached)
-    words_view = pls_result.words
-    assert isinstance(words_view, WordsView)
-    hint = words_view._save_hint()
-    assert hint.startswith("Save:")
+@pytest.mark.parametrize("view_name, tail", [
+    ("words", "Sides:"),
+    ("docs", "Slice:"),
+    ("snippets", "Size:"),
+])
+def test_view_repr_save_hint(pls_result, view_name, tail):
+    set_repr_hints(True)
+    r = repr(getattr(pls_result, view_name))
+    assert f".save('{view_name}.csv'" in r
+    listed = r.split("extensions:")[1].split("\n")[0].split()
+    assert all(ext in listed for ext in TABULAR_EXTS)
+    assert tail in r
 
 
-def test_docs_view_save_hint_starts_with_save(pls_result):
-    """DocsView._save_hint() begins with 'Save:'."""
-    from ssdiff.results.continuous_result import DocsView
-    docs_view = pls_result.docs
-    assert isinstance(docs_view, DocsView)
-    hint = docs_view._save_hint()
-    assert hint.startswith("Save:")
-
-
-def test_snippets_view_save_hint_starts_with_save(pls_result):
-    """SnippetsView._save_hint() begins with 'Save:'."""
-    from ssdiff.results.continuous_result import SnippetsView
-    snippets_view = pls_result.snippets
-    assert isinstance(snippets_view, SnippetsView)
-    hint = snippets_view._save_hint()
-    assert hint.startswith("Save:")
-
-
-def test_clusters_view_custom_save_hint(pls_result):
-    """ClustersView has a custom _save_hint() that starts with 'Save:'."""
-    from ssdiff.results.continuous_result import ClustersView
-    clusters_view = pls_result.clusters
-    assert isinstance(clusters_view, ClustersView)
-    hint = clusters_view._save_hint()
-    assert hint.startswith("Save:")
+def test_clusters_repr_save_hint(pls_result):
+    set_repr_hints(True)
+    r = repr(pls_result.clusters)
+    assert ".save('clusters.csv')" in r and ".pos.save('clusters_pos.csv')" in r

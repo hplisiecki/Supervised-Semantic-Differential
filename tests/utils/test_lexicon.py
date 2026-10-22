@@ -7,7 +7,7 @@ import math
 import numpy as np
 import pandas as pd
 import pytest
-from scipy.stats import pointbiserialr
+from scipy.stats import chi2_contingency, pointbiserialr
 
 from ssdiff.embeddings import Embeddings
 from ssdiff.ssd import SSD
@@ -26,14 +26,9 @@ from ssdiff.utils.lexicon import (
 # _as_float_array
 # ---------------------------------------------------------------------------
 
-def test_as_float_array_basic():
-    result = _as_float_array([1, 2, 3])
-    assert result.dtype == np.float64
-    np.testing.assert_array_equal(result, [1.0, 2.0, 3.0])
-
-
 def test_as_float_array_none_becomes_nan():
     result = _as_float_array([1.0, None, 3.0])
+    assert result.dtype == np.float64
     assert np.isnan(result[1])
     assert result[0] == 1.0
     assert result[2] == 3.0
@@ -50,13 +45,7 @@ def test_quantile_bins_5_elements_2_bins():
     result = _quantile_bins(np.array([1, 2, 3, 4, 5]), n_bins=2)
     expected = np.array([0, 0, 1, 1, 1])
     np.testing.assert_array_equal(result, expected)
-
-
-def test_quantile_bins_returns_integer_labels():
-    y = np.array([10.0, 20.0, 30.0, 40.0])
-    result = _quantile_bins(y, n_bins=2)
-    assert result.dtype in (np.int64, np.int32, np.intp)
-    assert set(result).issubset({0, 1})
+    assert result.dtype.kind == "i"
 
 
 def test_quantile_bins_constant_falls_back_to_median_split():
@@ -71,23 +60,12 @@ def test_quantile_bins_constant_falls_back_to_median_split():
 # _crosstab
 # ---------------------------------------------------------------------------
 
-def test_crosstab_2x2_exact():
-    # a=[0,0,1,1], b=[0,1,0,1] → row_labels=[0,1], col_labels=[0,1]
-    # table[0,0]=1, table[0,1]=1, table[1,0]=1, table[1,1]=1
-    a = np.array([0, 0, 1, 1])
-    b = np.array([0, 1, 0, 1])
+def test_crosstab_counts_and_sorted_labels():
+    a = np.array(["lo", "hi", "hi", "hi", "lo"])
+    b = np.array([1, 2, 2, 3, 2])
     table, row_labels, col_labels = _crosstab(a, b)
-    assert row_labels == [0, 1]
-    assert col_labels == [0, 1]
-    np.testing.assert_array_equal(table, [[1, 1], [1, 1]])
-
-
-def test_crosstab_perfect_association():
-    # a=[0,0,1,1], b=[0,0,1,1] → only diagonal cells filled
-    a = np.array([0, 0, 1, 1])
-    b = np.array([0, 0, 1, 1])
-    table, row_labels, col_labels = _crosstab(a, b)
-    np.testing.assert_array_equal(table, [[2, 0], [0, 2]])
+    assert row_labels == ["hi", "lo"] and col_labels == [1, 2, 3]
+    np.testing.assert_array_equal(table, [[0, 2, 1], [1, 1, 0]])
 
 
 # ---------------------------------------------------------------------------
@@ -158,13 +136,18 @@ def test_effect_direction_continuous_none_constant_presence():
 # _chi2_pvalue (presence, groups)
 # ---------------------------------------------------------------------------
 
-def test_chi2_pvalue_no_association_returns_large_p():
-    # Uniform table → chi2~0 → p close to 1
-    presence = np.array([0, 0, 1, 1] * 25)
-    groups = np.array([0, 1, 0, 1] * 25)
-    p = _chi2_pvalue(presence, groups)
-    assert np.isfinite(p)
-    assert p > 0.5
+@pytest.mark.parametrize("table, correction", [
+    ([[20, 10], [8, 22]], True),
+    ([[20, 10, 5], [8, 22, 12]], False),
+])
+def test_chi2_pvalue_matches_scipy(table, correction):
+    # 2x2 tables get Yates' continuity correction; larger tables do not.
+    table = np.array(table)
+    rows, cols = table.shape
+    presence = np.repeat(np.repeat(np.arange(rows), cols), table.ravel())
+    groups = np.repeat(np.tile(np.arange(cols), rows), table.ravel())
+    expected = chi2_contingency(table, correction=correction)[1]
+    assert _chi2_pvalue(presence, groups) == pytest.approx(expected, abs=1e-10)
 
 
 def test_chi2_pvalue_perfect_association_returns_small_p():
@@ -207,11 +190,6 @@ def test_pointbiserial_pvalue_constant_returns_nan():
 # _validate_var_type
 # ---------------------------------------------------------------------------
 
-def test_validate_var_type_valid():
-    _validate_var_type("continuous")
-    _validate_var_type("categorical")
-
-
 def test_validate_var_type_invalid():
     with pytest.raises(ValueError, match="var_type"):
         _validate_var_type("ordinal")
@@ -221,24 +199,10 @@ def test_validate_var_type_invalid():
 # SSD.suggest_lexicon
 # ---------------------------------------------------------------------------
 
-def test_suggest_lexicon_returns_lexicon_result(tiny_kv, sample_docs, sample_y):
-    from ssdiff.results.lexicon_result import LexiconResult
-    text = SSD(tiny_kv, sample_docs)
-    result = text.suggest_lexicon(sample_y, top_k=5, min_docs=1)
-    assert isinstance(result, LexiconResult)
-
-
 def test_suggest_lexicon_top_k_respected(tiny_kv, sample_docs, sample_y):
     text = SSD(tiny_kv, sample_docs)
     result = text.suggest_lexicon(sample_y, top_k=3, min_docs=1)
-    assert len(result.tokens) <= 3
-
-
-def test_suggest_lexicon_tokens_list_not_empty(tiny_kv, sample_docs, sample_y):
-    text = SSD(tiny_kv, sample_docs)
-    result = text.suggest_lexicon(sample_y, min_docs=1)
-    assert len(result.tokens) > 0
-    assert all(isinstance(t, str) for t in result.tokens)
+    assert len(result.tokens) == 3
 
 
 def test_suggest_lexicon_without_seeds_returns_the_rank_table(tiny_kv):
@@ -403,35 +367,17 @@ def test_suggest_lexicon_without_y_or_seeds_raises():
 # SSD.token_stats
 # ---------------------------------------------------------------------------
 
-def test_token_stats_returns_list_of_dicts(tiny_kv, sample_docs, sample_y):
-    text = SSD(tiny_kv, sample_docs)
-    lex = ["kraj", "narod", "panstwo"]
-    rows = text.token_stats(sample_y, lex)
-    assert isinstance(rows, list)
-    assert len(rows) == 3
-    for row in rows:
-        assert isinstance(row, dict)
-        assert "token" in row
-        assert "freq" in row
-        assert "cov_all" in row
-        assert "rank" in row
-        assert "direction" in row
-
-
 def test_token_stats_freq_correct(tiny_kv, sample_docs, sample_y):
     # From conftest: "kraj" appears in docs 0, 3, 6 → freq=3
     text = SSD(tiny_kv, sample_docs)
     rows = text.token_stats(sample_y, ["kraj"])
     kraj_row = next(r for r in rows if r["token"] == "kraj")
     assert kraj_row["freq"] == 3
-
-
-def test_token_stats_cov_all_correct(tiny_kv, sample_docs, sample_y):
-    # 8 docs, "kraj" in 3 → cov_all = 3/8 = 0.375
-    text = SSD(tiny_kv, sample_docs)
-    rows = text.token_stats(sample_y, ["kraj"])
-    kraj_row = next(r for r in rows if r["token"] == "kraj")
-    assert abs(kraj_row["cov_all"] - 3 / 8) < 1e-10
+    # 8 docs, "kraj" in 3 → cov_all = 3/8
+    assert kraj_row["cov_all"] == pytest.approx(3 / 8)
+    assert set(kraj_row) == {
+        "token", "freq", "cov_all", "cov_bal", "corr", "pvalue", "direction", "rank",
+    }
 
 
 def test_token_stats_without_y_gives_the_counts_sorted_by_freq(tiny_kv, sample_docs, sample_y):
@@ -450,22 +396,16 @@ def test_token_stats_without_y_gives_the_counts_sorted_by_freq(tiny_kv, sample_d
 # SSD.coverage_summary
 # ---------------------------------------------------------------------------
 
-def test_coverage_summary_returns_dict(tiny_kv, sample_docs, sample_y):
-    text = SSD(tiny_kv, sample_docs)
-    summary = text.coverage_summary(sample_y, {"kraj"})
-    assert isinstance(summary, dict)
-    assert "docs_any" in summary
-    assert "cov_all" in summary
-    assert "q1" in summary
-    assert "q4" in summary
-
-
 def test_coverage_summary_kraj_fraction(tiny_kv, sample_docs, sample_y):
     # "kraj" appears in docs 0, 3, 6 → 3/8 docs = 0.375
     text = SSD(tiny_kv, sample_docs)
     summary = text.coverage_summary(sample_y, {"kraj"})
     assert summary["docs_any"] == 3
     assert abs(summary["cov_all"] - 3 / 8) < 1e-10
+    assert set(summary) == {
+        "docs_any", "cov_all", "q1", "q4", "corr_any",
+        "hits_mean", "hits_median", "types_mean", "types_median",
+    }
 
 
 def test_coverage_summary_full_lexicon_all_docs(tiny_kv, sample_docs, sample_y):
@@ -492,19 +432,10 @@ def test_coverage_summary_without_y_gives_the_counts_only(tiny_kv, sample_docs, 
 # SSD.evaluate_lexicon
 # ---------------------------------------------------------------------------
 
-def test_evaluate_lexicon_returns_lexicon_result(tiny_kv, sample_docs, sample_y):
-    from ssdiff.results.lexicon_result import LexiconResult
-    text = SSD(tiny_kv, sample_docs)
-    result = text.evaluate_lexicon(sample_y, ["kraj", "narod"])
-    assert isinstance(result, LexiconResult)
-    assert result.summary is not None
-
-
 def test_evaluate_lexicon_empty_lexicon_graceful(tiny_kv, sample_docs, sample_y):
     # Empty lexicon should not raise — zero-token case
     text = SSD(tiny_kv, sample_docs)
     result = text.evaluate_lexicon(sample_y, [])
-    assert result is not None
     assert len(result.tokens) == 0
     assert result.summary is not None
     # cov_all=0 since no tokens; docs_any=0
@@ -520,11 +451,15 @@ def test_evaluate_lexicon_counts_a_repeated_token_once(tiny_kv, sample_docs, sam
 
 def test_evaluate_lexicon_summary_matches_coverage_summary(tiny_kv, sample_docs, sample_y):
     text = SSD(tiny_kv, sample_docs)
-    lex = ["kraj", "narod", "panstwo"]
+    lex = ["panstwo", "piekny", "wielki"]
     result = text.evaluate_lexicon(sample_y, lex)
     direct = text.coverage_summary(sample_y, lex)
-    assert result.summary.docs_any == direct["docs_any"]
-    assert abs(result.summary.cov_all - direct["cov_all"]) < 1e-12
+    for field in (
+        "docs_any", "cov_all", "q1", "q4", "corr_any",
+        "hits_mean", "hits_median", "types_mean", "types_median",
+    ):
+        assert getattr(result.summary, field) == direct[field], field
+    assert result.summary.group_cov == direct.get("group_cov")
 
 
 def test_evaluate_lexicon_without_y_keeps_every_document(tiny_kv, sample_docs, sample_y_with_nan):
@@ -562,13 +497,6 @@ def test_lexicon_helpers_take_a_column(tiny_kv, large_docs, large_y):
     t, df = SSD(tiny_kv, large_docs), pd.DataFrame({"score": large_y})
     a = t.token_stats(large_y, ["kraj", "dom"])
     assert a == t.token_stats("score", ["kraj", "dom"], data=df)
-
-
-def test_spacy_is_gone():
-    import ssdiff
-    import ssdiff.utils.text as text
-    assert not hasattr(ssdiff, "Corpus")
-    assert not hasattr(text, "load_spacy") and not hasattr(text, "load_stopwords")
 
 
 def test_integer_group_labels_keep_their_values(tiny_kv, sample_docs):

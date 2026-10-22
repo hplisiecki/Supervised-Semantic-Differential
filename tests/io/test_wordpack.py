@@ -7,7 +7,6 @@ of 48 keys (``KEYS``, in row order) at D = 16.
 from __future__ import annotations
 
 import copy
-import os
 import pickle
 import warnings
 from concurrent.futures import ThreadPoolExecutor
@@ -21,7 +20,7 @@ import ssdiff.embeddings as em
 from ssdiff import SSD, Embeddings
 from ssdiff.utils.text import PreprocessedDoc
 from ssdiff.wordpack.reader import WordPack, WordPackError, read_header
-from tests.conftest import PARITY_DIR, make_kv
+from tests.conftest import make_kv
 
 def _tokens(docs):
     """Stand-in for a text: ``with_corpus`` reads only ``.docs``."""
@@ -305,11 +304,6 @@ def test_wordpack_text_fills_preprocessed_doc_consistently(wordpack_path):
     assert ssd.tokenizer == "wordpack:en-fixture-1"
 
 
-def test_wordpack_text_drops_the_packs_stopwords(wordpack_path):
-    emb = Embeddings.load(wordpack_path)
-    assert SSD(emb, ["I like the dog."], use_full_doc=True).docs == [["like", "dog"]]
-
-
 def test_wordpack_text_empty_none_and_nan_inputs(wordpack_path):
     emb = Embeddings.load(wordpack_path)
     flat = SSD(emb, ["", None, float("nan"), "   "], use_full_doc=True)
@@ -443,11 +437,12 @@ def test_pickled_wordpack_result_takes_the_pack_back_by_path(wordpack_path):
     emb = Embeddings.load(wordpack_path).normalize(abtt=3)
     res = SSD(emb, texts, use_full_doc=True).fit_regression(y, fixed_k=2)
     back = pickle.loads(pickle.dumps(res))
-    assert back.embeddings is None
+    assert back.embeddings is None and back.text.embeddings is None
     with pytest.raises(ValueError, match="abtt=3"):
         back.attach(embeddings=Embeddings.load(wordpack_path))
     back.attach(embeddings=wordpack_path)
     np.testing.assert_allclose(back.predict(NEW_TEXTS), res.predict(NEW_TEXTS), rtol=1e-6)
+    assert len(back.words) and len(list(back.snippets(top_per_side=3)))
 
 
 def test_attach_on_a_pickled_group_result_reaches_every_pair(wordpack_path):
@@ -477,11 +472,3 @@ def test_group_and_multipls_reports_name_the_wordpack(wordpack_path):
     y2 = np.column_stack([y, np.random.default_rng(0).normal(size=len(y))])
     mp = ssd.fit_multipls(y2, ssd_gradients=1, n_perm=19, n_splits=5)
     assert "en-fixture-1" in mp.report(top_words=False).to_text()
-
-
-def test_pickle_round_trip_restores_snippets(parity_emb, parity_df, parity_lexicon):
-    r = SSD(parity_emb, parity_df["text"], parity_lexicon).fit_pls("y", data=parity_df, k=1, n_splits=5)
-    s = pickle.loads(pickle.dumps(r))
-    assert s.embeddings is None and s.text.embeddings is None
-    s.attach(embeddings=os.path.join(PARITY_DIR, "parity.wordpack"))
-    assert len(s.words) and len(list(s.snippets(top_per_side=3)))

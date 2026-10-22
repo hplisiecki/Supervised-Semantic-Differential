@@ -14,12 +14,13 @@ This folder holds three tiers of documentation; runnable examples are in [`../ex
 |---|---|
 | [`embeddings.md`](embeddings.md) | Get embeddings and texts ready. The ready English packs (`Embeddings.load()`), tags and full names, where packs are stored, and loading your own embedding file with token lists for another language. |
 | [`api_reference.md`](api_reference.md) | Fit a model. Covers `Embeddings`, `SSD`, the fit methods (`fit_regression`, `fit_pls`, `fit_groups`, `fit_multipls`), formulas with the text term `ssd()`, several texts, `contrast`, and a full workflow example. Results are only sketched here. |
-| [`../examples/warriner_regression.py`](../examples/warriner_regression.py) | Runnable example for `fit_regression`, with a tour of what every result has. |
-| [`../examples/warriner_pls.py`](../examples/warriner_pls.py) | Runnable example for `fit_pls`. |
-| [`../examples/hate_lexicon_regression.py`](../examples/hate_lexicon_regression.py) | Build a lexicon with the lexicon helpers, then `fit_regression`. |
-| [`../examples/hate_multipls.py`](../examples/hate_multipls.py) | Runnable example for `fit_multipls`. |
-| [`../examples/hate_groups.py`](../examples/hate_groups.py) | Runnable example for `fit_groups`. |
-| [`../examples/custom_embedding_spacy.py`](../examples/custom_embedding_spacy.py) | Your own embedding file and token lists made with spaCy. |
+| [`../examples/regression.py`](../examples/regression.py) | `fit_regression`: the text as a predictor, alone and with a covariate. |
+| [`../examples/regression_interaction.py`](../examples/regression_interaction.py) | An interaction with the text, `score ~ women * ssd()`, its tests, and `contrast`. |
+| [`../examples/pls.py`](../examples/pls.py) | `fit_pls`: alone, with a covariate, and with several rotated gradients. |
+| [`../examples/lexicon_analysis.py`](../examples/lexicon_analysis.py) | Build a lexicon with the lexicon helpers, then fit on the lexicon contexts. |
+| [`../examples/several_outcomes.py`](../examples/several_outcomes.py) | `fit_multipls`: one text against several outcomes. |
+| [`../examples/between_group_differences.py`](../examples/between_group_differences.py) | `fit_groups`: how the texts of labelled groups differ. |
+| [`../examples/custom_embedding.py`](../examples/custom_embedding.py) | Your own embedding file and token lists made with spaCy. |
 
 
 ### For power users — making results do what you want
@@ -64,7 +65,7 @@ result.report().save("report.md")
 
 The outcome is the first argument of each fit: values, a column name of `data`, or a formula. Several texts in one model use `ssdiff.fit_regression("score ~ ssd(essay) + ssd(diary)", df, essay=..., diary=...)`. Two fitted gradients are compared with `ssdiff.contrast(g1, g2, emb)`.
 
-See [`../examples/warriner_pls.py`](../examples/warriner_pls.py) for a runnable end-to-end script, and [`../examples/hate_multipls.py`](../examples/hate_multipls.py) for `fit_multipls`.
+See [`../examples/pls.py`](../examples/pls.py) for a runnable end-to-end script, and [`../examples/several_outcomes.py`](../examples/several_outcomes.py) for `fit_multipls`.
 
 ---
 

@@ -35,11 +35,10 @@ WORD_OVERLAP_MIN = 0.8  # fraction of top words that must match (rank-order is f
 def golden_run():
     """Reproduce the frozen PLS fit from committed fixtures."""
     for p in (EMB_PATH, CORPUS_PATH, GOLDEN_PATH):
-        if not os.path.exists(p):
-            pytest.skip(
-                f"golden-warriner fixture missing: {os.path.basename(p)} "
-                "(run tests/fixtures/golden_warriner/generate_fixtures.py)"
-            )
+        assert os.path.exists(p), (
+            f"golden-warriner fixture missing: {os.path.basename(p)} "
+            "(run tests/fixtures/golden_warriner/generate_fixtures.py)"
+        )
 
     with open(CORPUS_PATH, encoding="utf-8") as f:
         cdata = json.load(f)

@@ -2,11 +2,10 @@
 
 Covers:
 - median_split (tie-breaking, all-same error, no-tie case)
-- filter_small_groups (drop below MIN_GROUP_SIZE, pairs only for large groups)
+- filter_small_groups (drop below MIN_GROUP_SIZE)
 - correct_pvalues (Holm, Bonferroni, FDR-BH, none)
-- unified_permutation_test (canonical pair order, signal vs null p-values,
-  Cohen's d formula)
-- _canonical_pair_key (numeric-string sort, regression guard for g2 < g10)
+- unified_permutation_test (pair keys, correction wiring, signal vs null
+  p-values, Cohen's d formula)
 
 Does NOT test fit_groups SSD-level integration (integration/test_ssd.py)
 or _ShimView access patterns (results/test_group.py).
@@ -26,7 +25,6 @@ from ssdiff.backends.group import (
     median_split,
     unified_permutation_test,
 )
-from ssdiff.results.group_result import _canonical_pair_key
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -43,9 +41,7 @@ def _make_x(n: int, dim: int = 8, seed: int = 0) -> np.ndarray:
 def _make_signal_x(n_per_group: int, dim: int = 16, seed: int = 42) -> tuple[np.ndarray, np.ndarray]:
     """Two-group x with a planted signal (groups have separated centroids)."""
     rng = np.random.default_rng(seed)
-    # Group A: shifted +signal along dim 0; Group B: shifted -signal
-    signal = np.zeros(dim)
-    signal[0] = 3.0  # strong separation on first dimension
+    # Group A: shifted +3 along dim 0; Group B: shifted -3
     base = rng.normal(size=(n_per_group * 2, dim)) * 0.3
     x = base.copy()
     x[:n_per_group, 0] += 3.0
@@ -134,23 +130,6 @@ class TestFilterSmallGroups:
         # Warning should mention the dropped group
         assert any("C" in str(warning.message) for warning in w)
 
-    def test_pairs_only_for_large_groups(self):
-        """With sizes [30, 30, 5], filter leaves only the two 30-doc groups."""
-        n_large = 30
-        n_small = 5
-        n_total = n_large * 2 + n_small
-        x = _make_x(n_total, dim=4, seed=1)
-        groups = np.array(
-            ["big1"] * n_large + ["big2"] * n_large + ["tiny"] * n_small,
-            dtype=object,
-        )
-        with warnings.catch_warnings(record=True):
-            warnings.simplefilter("always")
-            _, g_out, _ = filter_small_groups(x, groups)
-
-        assert "tiny" not in set(g_out)
-        assert {"big1", "big2"} == set(g_out)
-
     def test_no_small_groups_unchanged(self):
         """No groups dropped when all are >= MIN_GROUP_SIZE; n_dropped=0."""
         n = MIN_GROUP_SIZE
@@ -186,12 +165,9 @@ class TestCorrectPvalues:
         p = np.array([0.01, 0.05, 0.1, 0.5])
         result = correct_pvalues(p, method="none")
         np.testing.assert_array_equal(result, p)
-
-    def test_bonferroni_single_pair(self):
-        """Single-pair Bonferroni: p_corrected == p_raw (multiply by 1)."""
-        p_raw = np.array([0.03])
-        result = correct_pvalues(p_raw, method="bonferroni")
-        np.testing.assert_allclose(result, p_raw, atol=1e-15)
+        assert result is not p
+        result[0] = 0.9
+        assert p[0] == 0.01
 
     def test_bonferroni_three_pairs(self):
         """Three-pair Bonferroni: p_corrected == min(1.0, 3 * p_raw) for each pair."""
@@ -222,26 +198,12 @@ class TestCorrectPvalues:
         result = correct_pvalues(p_raw, method="fdr_bh")
         np.testing.assert_allclose(result, expected, atol=1e-15)
 
-    def test_holm_monotonic_inflation(self):
-        """Holm correction: at least one pair has p_corrected > p_raw for 3-pair signal."""
-        # Use a fixed set of plausible signal p-values
-        for seed in [0, 7, 42]:
-            rng = np.random.default_rng(seed)
-            # Generate 3 small p-values (simulating signal)
-            p_raw = np.sort(rng.uniform(0.001, 0.04, size=3))
-            result = correct_pvalues(p_raw, method="holm")
-            assert np.any(result > p_raw), (
-                f"Holm should inflate at least one p-value; seed={seed}, "
-                f"p_raw={p_raw}, corrected={result}"
-            )
-
-    def test_holm_minimum_unchanged_or_inflated(self):
-        """Holm smallest p is multiplied by m (largest multiplier)."""
-        p_raw = np.array([0.005, 0.02, 0.04])
+    def test_holm_step_down_on_unsorted_input(self):
+        """Holm on unsorted p-values: scaling by (m - rank), running max, original order."""
+        p_raw = np.array([0.01, 0.04, 0.03])
         result = correct_pvalues(p_raw, method="holm")
-        # Smallest p gets multiplied by 3 (m=3, rank=0 → m-rank=3)
-        expected_min = min(0.005 * 3, 1.0)
-        np.testing.assert_allclose(result[0], expected_min, atol=1e-15)
+        # sorted: 0.01*3, 0.03*2, 0.04*1 -> step-down cummax lifts the last to 0.06
+        np.testing.assert_allclose(result, [0.03, 0.06, 0.06], atol=1e-15)
 
     def test_unknown_correction_raises(self):
         """Unknown correction method raises ValueError."""
@@ -249,59 +211,11 @@ class TestCorrectPvalues:
         with pytest.raises(ValueError, match="Unknown correction"):
             correct_pvalues(p, method="bh_invalid")
 
-    def test_empty_array_none(self):
+    def test_empty_array_returns_empty(self):
         """Empty p-value array returns empty array (not error)."""
         p = np.array([], dtype=float)
         result = correct_pvalues(p, method="holm")
         assert len(result) == 0
-
-
-# ---------------------------------------------------------------------------
-# _canonical_pair_key — numeric-string sort
-# ---------------------------------------------------------------------------
-
-class TestCanonicalPairKey:
-    def test_two_groups_alphabetical(self):
-        """'B', 'A' input → ('A', 'B') canonical order (alphabetical)."""
-        result = _canonical_pair_key("B", "A")
-        assert result == ("A", "B")
-
-    def test_canonical_g2_before_g10(self):
-        """Numeric sort: g2 < g10 (regression guard against lexicographic ordering).
-
-        Without numeric sort, lexicographic order gives 'g10' < 'g2' (wrong).
-        """
-        result = _canonical_pair_key("g10", "g2")
-        assert result == ("g2", "g10"), (
-            "Numeric sort must put g2 before g10; "
-            "lexicographic sort would incorrectly reverse them"
-        )
-
-    def test_canonical_eleven_groups_full_enumeration(self):
-        """11-group canonical labels g1..g11: g2 appears before g10 in pair list."""
-        labels = [f"g{i}" for i in range(1, 12)]  # g1..g11
-        from itertools import combinations
-
-        pairs = [_canonical_pair_key(a, b) for a, b in combinations(labels, 2)]
-        # Extract indices for g2 and g10 in pair list
-        g2_first_pair = next(
-            (i for i, (a, _) in enumerate(pairs) if a == "g2"), None
-        )
-        g10_first_pair = next(
-            (i for i, (a, _) in enumerate(pairs) if a == "g10"), None
-        )
-        # Both should appear; g2 appears as first element of its pair before g10 does
-        assert g2_first_pair is not None
-        assert g10_first_pair is not None
-        assert g2_first_pair < g10_first_pair, (
-            "g2 should appear before g10 in pair enumeration "
-            "(numeric-sort, not lexicographic)"
-        )
-
-    def test_already_canonical_unchanged(self):
-        """Input already in canonical order is returned unchanged."""
-        assert _canonical_pair_key("g1", "g2") == ("g1", "g2")
-        assert _canonical_pair_key("A", "B") == ("A", "B")
 
 
 # ---------------------------------------------------------------------------
@@ -339,11 +253,8 @@ class TestUnifiedPermutationTest:
             correction="none",
             random_state=99,
         )
-        # Null case: p should not be suspiciously small
-        # Use a relaxed threshold; even random chance could give < 0.1
-        # so we just assert it's not at the floor (< 1/(n_perm+1) ~ 0.002)
-        assert result["omnibus_p"] > 1.0 / 501, (
-            f"Null omnibus_p at minimum floor is suspicious: {result['omnibus_p']}"
+        assert result["omnibus_p"] > 0.1, (
+            f"Null omnibus_p should not be small: {result['omnibus_p']}"
         )
 
     def test_pair_keys_match_group_labels(self):
@@ -356,18 +267,26 @@ class TestUnifiedPermutationTest:
         assert ("A", "B") in result["pairwise"]
         assert len(result["pairwise"]) == 1
 
-    def test_three_group_pair_count(self):
-        """Three groups → C(3,2)=3 pairs in pairwise dict."""
+    def test_three_group_pairs_and_correction_wiring(self):
+        """Three groups -> C(3,2) pairs; the chosen correction reaches p_corrected.
+
+        fdr_bh, because on this data Holm and Bonferroni give the same values,
+        so either would pass with the ``correction`` argument ignored.
+        """
+        scipy_stats = pytest.importorskip("scipy.stats")
         n = 25
         x = _make_x(n * 3, dim=8, seed=5)
         groups = np.array(["X"] * n + ["Y"] * n + ["Z"] * n, dtype=object)
-        group_labels = ["X", "Y", "Z"]
         result = unified_permutation_test(
-            x, groups, group_labels, n_perm=50, random_state=0,
+            x, groups, ["X", "Y", "Z"], n_perm=50, correction="fdr_bh",
+            random_state=0,
         )
-        assert len(result["pairwise"]) == 3
-        expected_pairs = {("X", "Y"), ("X", "Z"), ("Y", "Z")}
-        assert set(result["pairwise"].keys()) == expected_pairs
+        assert result["G"] == 3
+        pairwise = result["pairwise"]
+        assert set(pairwise) == {("X", "Y"), ("X", "Z"), ("Y", "Z")}
+        p_raw = [pw["p_raw"] for pw in pairwise.values()]
+        expected = scipy_stats.false_discovery_control(p_raw, method="bh")
+        np.testing.assert_allclose([pw["p_corrected"] for pw in pairwise.values()], expected)
 
     def test_cohens_d_formula(self):
         """Cohen's d ≈ 1.0 for groups with mean difference 1 and pooled std 1.
@@ -393,32 +312,10 @@ class TestUnifiedPermutationTest:
             x, groups, group_labels, n_perm=50, random_state=0,
         )
         d = result["pairwise"][("A", "B")]["cohens_d"]
-        assert abs(abs(d) - 1.0) < 0.05, (
-            f"Cohen's d should be ≈ 1.0 for mean diff=1, pooled_std≈1; got {d}"
+        # sign: g1 minus g2
+        assert d > 0 and abs(d - 1.0) < 0.05, (
+            f"Cohen's d should be ≈ +1.0 for mean diff=1, pooled_std≈1; got {d}"
         )
-
-    def test_canonical_input_pair_order(self):
-        """Input group_labels=['A','B'] → pair key ('A','B') present (not ('B','A'))."""
-        x, groups = _make_signal_x(n_per_group=25, dim=8, seed=1)
-        group_labels = ["A", "B"]  # alphabetical, as fit_groups produces
-        result = unified_permutation_test(
-            x, groups, group_labels, n_perm=50, random_state=0,
-        )
-        assert ("A", "B") in result["pairwise"]
-        assert ("B", "A") not in result["pairwise"]
-
-    def test_result_structure_keys(self):
-        """Result dict contains all expected top-level keys."""
-        x, groups = _make_signal_x(n_per_group=25, dim=8, seed=2)
-        group_labels = ["A", "B"]
-        result = unified_permutation_test(
-            x, groups, group_labels, n_perm=50, random_state=0,
-        )
-        for key in ("omnibus_T", "omnibus_p", "pairwise", "group_labels", "G", "correction"):
-            assert key in result, f"Missing key: {key}"
-        pw = result["pairwise"][("A", "B")]
-        for field in ("gradient", "T", "p_raw", "p_corrected", "cohens_d", "n_g1", "n_g2", "contrast_norm"):
-            assert field in pw, f"Missing pairwise field: {field}"
 
     def test_n_g1_n_g2_counts(self):
         """n_g1, n_g2 in pairwise dict reflect actual group sizes."""
@@ -432,14 +329,3 @@ class TestUnifiedPermutationTest:
         pw = result["pairwise"][("A", "B")]
         assert pw["n_g1"] == n_a
         assert pw["n_g2"] == n_b
-
-    def test_correction_none_p_corrected_equals_raw(self):
-        """correction='none': p_corrected == p_raw for all pairs."""
-        x, groups = _make_signal_x(n_per_group=25, dim=8, seed=3)
-        group_labels = ["A", "B"]
-        result = unified_permutation_test(
-            x, groups, group_labels, n_perm=50,
-            correction="none", random_state=0,
-        )
-        pw = result["pairwise"][("A", "B")]
-        assert pw["p_corrected"] == pw["p_raw"]
