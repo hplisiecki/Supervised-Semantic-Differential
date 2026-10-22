@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 
@@ -14,6 +14,7 @@ from ssdiff.results.format import (
     fmt_p,
     fmt_r,
 )
+from ssdiff.results.multi_container import _MultiContainer
 from ssdiff.results.report import (
     Report,
     Section,
@@ -28,6 +29,7 @@ from ssdiff.results.schema import (
     FitInfo,
     Snippet,
     Stats,
+    TermTest,
     Word,
 )
 from ssdiff.results.single_result import _SingleResult
@@ -260,7 +262,7 @@ class ClustersViewSided(View[Cluster]):
     def _fill_top_snippets(self) -> None:
         """Populate ``top_snippet`` on every row from the cluster-snippet cache.
 
-        No-op if already filled, or if the parent has no corpus / embeddings.
+        No-op if already filled, or if the parent has no text / embeddings.
         On a cold cache this triggers full ``_cluster_snippets_for`` extraction
         (SIF + cosine over all docs) — that's the documented cost of opting
         ``top_snippet`` into a render or export.
@@ -268,7 +270,7 @@ class ClustersViewSided(View[Cluster]):
         import dataclasses
         if self._top_snippet_filled:
             return
-        if getattr(self._parent, "corpus", None) is None:
+        if getattr(self._parent, "text", None) is None:
             return
         if getattr(self._parent, "embeddings", None) is None:
             return
@@ -402,21 +404,21 @@ class ClustersViewSided(View[Cluster]):
     def _top_snippets_subtable(self) -> str | None:
         """Build the text sub-table for the zoom view. Returns None if not zoomed.
 
-        Returns the fallback string if no corpus / embeddings are attached.
+        Returns the fallback string if no text / embeddings are attached.
         """
         if self._cluster_id is None:
             return None
         n = self._resolve_top_snippets_n()
-        if getattr(self._parent, "corpus", None) is None \
+        if getattr(self._parent, "text", None) is None \
                 or getattr(self._parent, "embeddings", None) is None:
-            return f"Top {n} snippets: (attach corpus to populate)"
+            return f"Top {n} snippets: (attach texts to populate)"
         try:
             snips_view = self._parent._cluster_snippets_for(
                 self._side,
                 **{k: v for k, v in self._params.items() if k != "side"},
             )
         except Exception:
-            return f"Top {n} snippets: (attach corpus to populate)"
+            return f"Top {n} snippets: (attach texts to populate)"
         rows = [s for s in snips_view._all_side_rows
                 if s.cluster_id == self._cluster_id]
         rows.sort(key=lambda s: s.cosine, reverse=True)
@@ -433,10 +435,10 @@ class ClustersViewSided(View[Cluster]):
         if self._cluster_id is None:
             return None
         n = self._resolve_top_snippets_n()
-        if getattr(self._parent, "corpus", None) is None \
+        if getattr(self._parent, "text", None) is None \
                 or getattr(self._parent, "embeddings", None) is None:
             return (f"<pre>Top {n} snippets: "
-                    f"(attach corpus to populate)</pre>")
+                    f"(attach texts to populate)</pre>")
         try:
             snips_view = self._parent._cluster_snippets_for(
                 self._side,
@@ -444,7 +446,7 @@ class ClustersViewSided(View[Cluster]):
             )
         except Exception:
             return (f"<pre>Top {n} snippets: "
-                    f"(attach corpus to populate)</pre>")
+                    f"(attach texts to populate)</pre>")
         rows = [s for s in snips_view._all_side_rows
                 if s.cluster_id == self._cluster_id]
         rows.sort(key=lambda s: s.cosine, reverse=True)
@@ -807,7 +809,7 @@ class SnippetsView(View[Snippet]):
         "snippet_id", "side", "doc_id", "cosine", "seed",
         "start_token_idx", "end_token_idx", "start_sent_idx", "end_sent_idx",
         "text_window", "text_surface", "text_lemmas",
-        "cluster_id", "post_id", "contrast",
+        "cluster_id", "contrast",
     )
 
     def __init__(self, rows: list[Snippet], params: dict | None = None,
@@ -989,7 +991,7 @@ class DocsView(View[Doc]):
         Parameters
         ----------
         doc_id : int
-            Document index (aligns with the corpus row index).
+            Document index (aligns with the text's document index).
 
         Raises
         ------
@@ -1000,7 +1002,9 @@ class DocsView(View[Doc]):
         if not matches:
             raise KeyError(f"No doc with doc_id={doc_id}")
         raw_text = _lookup_raw_text(self._parent, doc_id)
-        return DocDetailView(matches[0], raw_text)
+        text = getattr(self._parent, "text", None)
+        tokens = text is not None and text.pre_docs is None
+        return DocDetailView(matches[0], raw_text, from_tokens=tokens)
 
     def to_text(self, max_rows: int | None = None, cols=None) -> str:
         from ssdiff.results.core import DEFAULT_MAX_ROWS
@@ -1022,33 +1026,27 @@ class DocsView(View[Doc]):
 
 
 def _lookup_raw_text(parent, doc_id: int):
-    """Pull pre-lemmatization text for `doc_id` from parent.corpus, if available."""
-    if parent is None:
-        return None
-    corpus = getattr(parent, "corpus", None)
-    if corpus is None:
-        return None
-    pre = getattr(corpus, "pre_docs", None)
+    """Original text of `doc_id` from parent.text, or None for token-list texts."""
+    text = getattr(parent, "text", None)
+    pre = getattr(text, "pre_docs", None)
     if not pre or doc_id < 0 or doc_id >= len(pre):
         return None
-    entry = pre[doc_id]
-    if hasattr(entry, "raw"):
-        return entry.raw
-    if hasattr(entry, "raw_posts"):
-        return list(entry.raw_posts)
-    return None
+    return pre[doc_id].raw
 
 
 class DocDetailView(ScalarView):
-    """Single-doc view: stats + original pre-lemma text (when corpus attached)."""
+    """Single-doc view: stats + original pre-lemma text (when texts attached)."""
 
     _name = "doc"
     _columns = ("doc_id", "y_true", "y_hat", "residual", "alignment_score")
 
-    def __init__(self, doc: Doc, raw_text):
+    def __init__(self, doc: Doc, raw_text, from_tokens: bool = False):
         super().__init__()
         self._doc = doc
         self._raw_text = raw_text
+        self._no_text = (
+            "the texts came in as token lists" if from_tokens else "attach texts to see original text"
+        )
 
     def __iter__(self):
         yield {f: getattr(self._doc, f) for f in self._columns}
@@ -1056,23 +1054,14 @@ class DocDetailView(ScalarView):
     def to_text(self, max_rows: int | None = None, cols=None) -> str:
         body = super().to_text(max_rows=max_rows, cols=cols)
         if self._raw_text is None:
-            return body + "\n\nText:  (attach corpus to see original text)"
-        if isinstance(self._raw_text, list):
-            text_block = "\n".join(
-                f"  [post {i}] {p}" for i, p in enumerate(self._raw_text)
-            )
-        else:
-            text_block = "  " + str(self._raw_text).replace("\n", "\n  ")
+            return body + f"\n\nText:  ({self._no_text})"
+        text_block = "  " + str(self._raw_text).replace("\n", "\n  ")
         return body + "\n\nText:\n" + text_block
 
     def to_html(self, cols=None) -> str:
         base = super().to_html(cols=cols)
         if self._raw_text is None:
-            tail = "<p><i>(attach corpus to see original text)</i></p>"
-        elif isinstance(self._raw_text, list):
-            import html as _h
-            items = "".join(f"<li>{_h.escape(p)}</li>" for p in self._raw_text)
-            tail = f"<h4>Text</h4><ol>{items}</ol>"
+            tail = f"<p><i>({self._no_text})</i></p>"
         else:
             import html as _h
             tail = f"<h4>Text</h4><pre>{_h.escape(str(self._raw_text))}</pre>"
@@ -1162,27 +1151,76 @@ class CovariatesView(View[CovariateRow]):
         return self._rows[i]
 
 
+class RegressionTestView(View[TermTest]):
+    _name = "test"
+    _columns = ("label", "name", "pvalue", "statistic", "df", "df_resid", "r2_delta")
+
+    def __init__(self, rows, *, _no_trunc: bool = False):
+        super().__init__(_no_trunc=_no_trunc)
+        self._rows = rows
+
+    def __iter__(self): return iter(self._rows)
+    def __len__(self): return len(self._rows)
+
+    def __getitem__(self, i):
+        if isinstance(i, slice):
+            return RegressionTestView(self._rows[i], _no_trunc=True)
+        return self._rows[i]
+
+
+def _summary_text(s, effects) -> str:
+    """The compact summary: glmm's summary *s* plus an SSD effects table.
+
+    *effects* has one ``(label, r2_label, r2, p)`` per row; ``p`` is ``None``
+    for a test that was not run.
+    """
+    from glmm.summary import stars
+
+    lines = s.text().rstrip("\n").split("\n")
+    # Column widths and the closing "---" mirror the fixed-effects
+    # table of glmm's Summary.text() (glmm 0.6.0) - change together.
+    # The label column also fits the SSD effects labels.
+    name_w = max(12, max(len(e[0]) for e in effects),
+                 max((len(n) for n in s.coef_names), default=4))
+    widths = [12, 12] + ([10] if s.coef_df is not None else []) + [10, 10]
+    blank = [""] * (len(widths) - 2)
+    header = [next((e[1] for e in effects if e[1]), ""), *blank, "p"]
+    end = lines.index("---")
+    lines[end:end] = [
+        "",
+        "SSD effects:",
+        f"{'':<{name_w}} " + " ".join(f"{h:>{w}}" for h, w in zip(header, widths)),
+        *(
+            f"{label:<{name_w}} "
+            + " ".join(f"{c:>{w}}" for c, w in zip([r2, *blank, "not run" if p is None else fmt_p(p)], widths))
+            + ("" if p is None else f" {stars(p)}")
+            for label, _r2_label, r2, p in effects
+        ),
+    ]
+    return "\n".join(lines)
+
+
 class PLSTestView(TestView):
-    """`.test` for PLSResult — split_exact confirmatory test at the fitted k."""
+    """`.test` for PLSResult — plskit's ``test_method="auto"`` confirmatory test at the fitted k."""
 
     _columns = ("name", "pvalue", "split_r2", "n_splits", "random_state")
-    _default_name = "split_exact"
+    _default_name = "auto"
 
-    _DEFAULTS = {
-        "split_exact": dict(n_splits=50, seed=None, verbose=False),
-    }
+    _DEFAULTS = dict(n_splits=50, seed=None, verbose=False)
 
     def _run(self, name, params):
-        """Dispatch to plskit and return ('split_exact', info_dict)."""
+        """Dispatch to plskit and return (method that ran, info_dict)."""
         import plskit
 
-        if name is not None and name != "split_exact":
+        # The stored name is the method "auto" picked last time; "auto"
+        # picks it again, since the choice depends on X alone.
+        if name not in ("auto", self._test_name):
             raise TypeError(
-                f"PLSTestView only supports method='split_exact' "
+                f"PLSTestView only runs plskit's test_method='auto' "
                 f"(got {name!r}). Pass kwargs only: "
                 f".test(n_splits=..., seed=...)."
             )
-        merged = {**self._DEFAULTS["split_exact"], **params}
+        merged = {**self._DEFAULTS, **params}
         parent = self._parent
         n_comp = parent.fit_info.p_at_k or parent.fit_info.n_components or 1
         # A fit with a formula is tested on its residualized x and y.
@@ -1191,7 +1229,7 @@ class PLSTestView(TestView):
             diag.get("x_resid", parent.x).astype(float, copy=False),
             diag.get("y_resid", parent.y).astype(float, copy=False),
             int(n_comp),
-            test_method="split_exact",
+            test_method="auto",
             args={"n_splits": int(merged["n_splits"])},
             pre_standardized=False,
             seed=merged["seed"],
@@ -1204,7 +1242,7 @@ class PLSTestView(TestView):
             "n_splits": r.n_splits,
             "random_state": r.seed,
         }
-        return "split_exact", info
+        return r.test_method, info
 
     def _on_rerun(self):
         """Propagate the updated p-value back to parent stats after a rerun."""
@@ -1238,6 +1276,11 @@ class PCAOLSTestView(TestView):
         return f"Rerun: .test({self._test_name!r})   # only test available for this fit"
 
 
+def _is_text_coef(name: str) -> bool:
+    """True for a coefficient with a text component column among its ``:`` parts."""
+    return any(part.startswith("_ssd_") for part in name.split(":"))
+
+
 # ---------- ContinuousResult ----------
 class ContinuousResult(_SingleResult):
     """Shared base for continuous-outcome results (PLS / PCA+OLS).
@@ -1245,15 +1288,15 @@ class ContinuousResult(_SingleResult):
     Attributes
     ----------
     beta : ndarray of shape (D,)
-        Raw regression direction in embedding space (β_K in Plisiecki et
-        al., 2026). Carries magnitude — use this when scale matters:
-        prediction (``d_i · beta`` ≈ outcome on standardized scale),
-        effect size via ``beta_norm``, regression-style reasoning.
+        Raw regression direction in embedding space. Carries magnitude — use
+        this when scale matters: prediction (``d_i · beta`` ≈ outcome on
+        standardized scale), effect size via ``beta_norm``, regression-style
+        reasoning.
     gradient : ndarray of shape (D,)
-        Unit-length version of ``beta`` — the **semantic gradient** in
-        Plisiecki et al. (2026). Direction most strongly associated with
-        higher outcome. Use this when only direction matters: cosine
-        similarity, nearest-neighbor lookup, clustering of semantic poles.
+        Unit-length version of ``beta`` — the **semantic gradient**.
+        Direction most strongly associated with higher outcome. Use this when
+        only direction matters: cosine similarity, nearest-neighbor lookup,
+        clustering of semantic poles.
     beta_norm : float
         Magnitude ‖β_K‖ of the regression direction. Effect-size summary:
         how much the standardized outcome changes per unit move along
@@ -1277,14 +1320,15 @@ class ContinuousResult(_SingleResult):
         y: np.ndarray,
         _y_mean: np.ndarray, _y_scale: np.ndarray, _x_mean: np.ndarray,
         r2: float, pvalue: float, r2_adj: float | None = None,
-        embeddings=None, corpus=None,
-        lexicon: set | None = None, window: int = 3, sif_a: float | None = 1e-3, lang: str = "pl",
+        embeddings=None, text=None,
+        lexicon: set | None = None, window: int = 3, sif_a: float | None = 1e-3,
         sif_counts: tuple[dict[str, int], int] | None,
         use_full_doc: bool = False,
         fit_info: FitInfo | dict | None = None,
         raw_diagnostics: dict | None = None,
         model=None,
         residuals: np.ndarray | None = None,
+        y_hat: np.ndarray | None = None,
     ):
         """Construct a continuous result from backend outputs.
 
@@ -1298,8 +1342,8 @@ class ContinuousResult(_SingleResult):
         beta : ndarray of shape (D,)
             Raw regression direction in embedding space.
         keep_mask : ndarray of shape (n_raw,) of bool
-            Boolean mask over all ``n_raw`` corpus documents; True for those
-            retained (valid outcome and a document vector).  Used to align ``doc_id`` with corpus row indices.
+            Boolean mask over all ``n_raw`` documents; True for those
+            retained (valid outcome and a document vector).  Used to align ``doc_id`` with the text's document indices.
         n_raw, n_kept, n_dropped : int
             Document counts before and after filtering.
         y : ndarray of shape (n_kept,)
@@ -1319,8 +1363,8 @@ class ContinuousResult(_SingleResult):
             Adjusted R² (PCA+OLS only; ``None`` for PLS).
         embeddings : Embeddings or None
             Word-embedding model for nearest-neighbor and cluster views.
-        corpus : Corpus or None
-            Text corpus for snippet extraction.
+        text : SSD or None
+            The text the result was fit on, for snippet extraction.
         lexicon : set or None
             Optional seed tokens that constrain snippet extraction.
         window : int
@@ -1328,8 +1372,6 @@ class ContinuousResult(_SingleResult):
         sif_a : float or None
             SIF smoothing parameter for snippet vector computation; ``None``
             means no SIF weighting.
-        lang : str
-            Language code used for token filtering in neighbor search.
         sif_counts : (word_counts, total_tokens) or None
             SIF word counts of the training documents, reused by
             :meth:`predict`. ``None`` when ``sif_a`` is None.
@@ -1350,11 +1392,15 @@ class ContinuousResult(_SingleResult):
             ``docs.residual``, in y's units, when the backend computes it
             itself; takes precedence over ``model``. ``None`` gives
             ``y − y_hat``, or ``model``'s residual when a model is given.
+        y_hat : ndarray of shape (n,) or None
+            ``docs.y_hat``, in y's units, when ``beta`` is only one term of
+            the model's fit; ``stats.y_corr_pred`` is then ``|corr(y, y_hat)|``.
+            ``None`` predicts from ``beta``.
         """
         super().__init__(
             x=x, beta=beta,
-            embeddings=embeddings, corpus=corpus,
-            lexicon=lexicon, window=window, sif_a=sif_a, lang=lang,
+            embeddings=embeddings, text=text,
+            lexicon=lexicon, window=window, sif_a=sif_a,
         )
         self._keep_mask = keep_mask
         self.y = y
@@ -1382,6 +1428,8 @@ class ContinuousResult(_SingleResult):
         # A non-Gaussian model's beta is on the link scale; y_hat is its fitted mean on the response scale.
         linear = model is None or (model.family == "gaussian" and model.link == "identity")
         yhat_raw = self._predict_x(x) if linear else np.asarray(model.fitted, dtype=float)
+        if y_hat is not None:
+            yhat_raw = yhat_std = np.asarray(y_hat, dtype=float)
 
         denom = float(np.std(y) * np.std(yhat_std))
         corr = float(np.corrcoef(y, yhat_std)[0, 1]) if denom > 0 else 0.0
@@ -1436,8 +1484,8 @@ class ContinuousResult(_SingleResult):
 
         One row per coefficient (a factor gives one per level after the
         first), on y's scale, or on the link scale for a non-Gaussian
-        ``fit_regression`` model. The text's own rows (``_ssd_*``) are left
-        out: ``test`` tests the text. Empty without a formula.
+        ``fit_regression`` model. The text's own rows (``_ssd_*``, also
+        inside an interaction) are left out: ``test`` tests the text. Empty without a formula.
         """
         if self.model is None or self.fit_info.formula is None:
             return CovariatesView([])
@@ -1449,14 +1497,14 @@ class ContinuousResult(_SingleResult):
                 statistic=float(s.statistic[i]), p_value=float(s.p_value[i]),
                 ci_low=float(ci[i, 0]), ci_high=float(ci[i, 1]),
             )
-            for i, term in enumerate(s.coef_names) if not term.startswith("_ssd_")
+            for i, term in enumerate(s.coef_names) if not _is_text_coef(term)
         ])
 
     def summary(self) -> str:
         """Print the compact model summary and return it as text.
 
-        glmm's summary of ``model`` without the text's own rows (``_ssd_*``)
-        in the fixed effects and their correlations, with an SSD effects
+        glmm's summary of ``model`` without the text's own rows (``_ssd_*``,
+        also inside an interaction) in the fixed effects and their correlations, with an SSD effects
         row for the text's test below the fixed-effects rows. The other
         blocks (fit criteria, residuals, random effects, R²) describe the
         full model, text included. ``model.summary()`` prints the full glmm
@@ -1467,30 +1515,11 @@ class ContinuousResult(_SingleResult):
             text = (f"{self.stats.backend} fit [ssdiff]\nNumber of obs: {self.stats.n_kept}"
                     "\n\n" + self._text_block())
         else:
-            from glmm.summary import stars
-
-            s = self._model_summary_without_text()
-            lines = s.text().rstrip("\n").split("\n")
-            # Column widths and the closing "---" mirror the fixed-effects
-            # table of glmm's Summary.text() (glmm 0.6.0) - change together.
-            # The label column also fits the text's own label.
-            label = self._text_name or "text"
-            name_w = max(12, len(label), max((len(n) for n in s.coef_names), default=4))
-            widths = [12, 12] + ([10] if s.coef_df is not None else []) + [10, 10]
-            blank = [""] * (len(widths) - 2)
             r2_label, r2, p = self._effect_cells()
-            header = [r2_label, *blank, "p"]
-            row = [r2, *blank, "not run" if p is None else fmt_p(p)]
-            end = lines.index("---")
-            lines[end:end] = [
-                "",
-                "SSD effects:",
-                f"{'':<{name_w}} " + " ".join(f"{h:>{w}}" for h, w in zip(header, widths)),
-                f"{label:<{name_w}} "
-                + " ".join(f"{c:>{w}}" for c, w in zip(row, widths))
-                + ("" if p is None else f" {stars(p)}"),
-            ]
-            text = "\n".join(lines)
+            text = _summary_text(
+                self._model_summary_without_text(),
+                [(self.text.name or "text", r2_label, r2, p)],
+            )
         print(text)
         return text
 
@@ -1499,22 +1528,18 @@ class ContinuousResult(_SingleResult):
 
         Relies on the field names of glmm's ``Summary`` dataclass (glmm 0.6.0).
         """
-        import re
         from dataclasses import replace
 
         s = self.model.summary_object()
-        keep = np.array([not n.startswith("_ssd_") for n in s.coef_names])
+        keep = np.array([not _is_text_coef(n) for n in s.coef_names])
         idx = np.flatnonzero(keep)
         aliased = np.asarray(s.aliased)[keep]
         corr = None
         if s.corr_fixed is not None and len(idx) >= 2:
             corr = np.asarray(s.corr_fixed)[np.ix_(idx, idx)]
-        # The _ssd_* terms come last in the formula fit_regression builds.
-        rhs = re.sub(r"\s*\+\s*_ssd_\w+", "", s.formula.split("~", 1)[1])
-        formula = f"{self._y_name or 'y'} ~{rhs} + {self._text_name or 'text'}"
         return replace(
             s,
-            formula=formula,
+            formula=self._formula_shown,
             coef_names=[s.coef_names[i] for i in idx],
             estimate=np.asarray(s.estimate)[keep],
             std_error=np.asarray(s.std_error)[keep],
@@ -1542,12 +1567,10 @@ class ContinuousResult(_SingleResult):
 
         Parameters
         ----------
-        texts : Corpus, list of str, or list of list of str
-            A ``Corpus`` tokenized for this result's embeddings. For a fit on
-            a wordpack, raw texts (``list[list[str]]`` for profiles) also
-            work; they are tokenized with that wordpack and its default
-            stopwords. For a training corpus built with ``stopwords=`` or
-            ``pretokenized=True``, pass a ``Corpus`` built the same way.
+        texts : list of str or list of token lists
+            In the form of the fit's text: strings for a fit on strings
+            (tokenized with the result's wordpack and its stopwords), token
+            lists for a fit on token lists.
 
         Returns
         -------
@@ -1559,9 +1582,7 @@ class ContinuousResult(_SingleResult):
         Raises
         ------
         TypeError
-            Raw texts for a fit whose embeddings are not a wordpack.
-        ValueError
-            A ``Corpus`` tokenized for other embeddings.
+            Texts in the other form than the fit's (strings vs token lists).
         NotImplementedError
             A fit with a formula, or a ``fit_regression`` fit with a model
             other than Gaussian identity-link. Its prediction needs the
@@ -1569,7 +1590,6 @@ class ContinuousResult(_SingleResult):
             model's intercept and inverse link, which the result does not
             apply.
         """
-        from ssdiff.corpus import Corpus, _check_tokenizer
         from ssdiff.utils.vectors import build_and_normalize_doc_vectors
 
         if self.stats.backend == "PCA+GLMM" or self.fit_info.formula is not None:
@@ -1578,33 +1598,20 @@ class ContinuousResult(_SingleResult):
                 "fit_regression() only with the Gaussian family."
             )
         self._require_resource("embeddings", "predict()")
-        if isinstance(texts, Corpus):
-            corpus = texts
-        elif getattr(self.embeddings, "_pack", None) is not None:
-            corpus = Corpus(texts, embeddings=self.embeddings)
-        else:
-            # The result does not record the spaCy model, nlp object or
-            # stopwords of the training corpus, so it cannot rebuild one.
-            raise TypeError(
-                "predict() takes raw texts only for a fit on a wordpack. Pass a "
-                "Corpus built like the training corpus, e.g. Corpus(texts, lang=...)."
-            )
-        _check_tokenizer(self.embeddings, corpus)
-        embeddings = self.embeddings.with_corpus(corpus)
+        new = self._text_from(texts, self.embeddings)
         X, keep = build_and_normalize_doc_vectors(
-            corpus.docs, embeddings, self.lexicon,
+            new.docs, new.embeddings, self.lexicon,
             window=self.window, sif_a=self.sif_a,
             use_full_doc=self.use_full_doc, sif_counts=self._sif_counts,
         )
-        out = np.full(len(corpus.docs), np.nan)
+        out = np.full(len(new), np.nan)
         if X.shape[0]:
             out[keep] = self._predict_x(X)
         return out
 
     model = None
-    # The column names y and the texts were given as; the compact summary shows them.
-    _y_name = None
-    _text_name = None
+    # The model formula the summary shows; set by fit_regression.
+    _formula_shown = None
     _access = (
         "stats", "fit_info", "words", "clusters", "snippets", "docs", "test",
         "summary()",
@@ -1721,7 +1728,7 @@ class ContinuousResult(_SingleResult):
                 clusters_view = getattr(self.clusters, side)
 
                 def _snippet_provider(_side=side):
-                    if getattr(self, "corpus", None) is None:
+                    if getattr(self, "text", None) is None:
                         return None
                     try:
                         return self._cluster_snippets_for(_side)
@@ -1752,7 +1759,7 @@ class ContinuousResult(_SingleResult):
 
         doc_snip_idx: dict[int, str] | None = None
         pre_docs = None
-        if (ed or md) and getattr(self, "corpus", None) is not None:
+        if (ed or md) and getattr(self, "text", None) is not None:
             try:
                 best: dict[int, tuple[float, str]] = {}
                 for sn in self.snippets:
@@ -1761,7 +1768,7 @@ class ContinuousResult(_SingleResult):
                     if cur is None or score > cur[0]:
                         best[sn.doc_id] = (score, sn.text_window)
                 doc_snip_idx = {k: v[1] for k, v in best.items()}
-                pre_docs = getattr(self.corpus, "pre_docs", None)
+                pre_docs = getattr(self.text, "pre_docs", None)
             except Exception:
                 doc_snip_idx = None
                 pre_docs = None
@@ -1917,11 +1924,11 @@ class PLSResult(ContinuousResult):
     def keys(self) -> list:
         return list(self._leaves.keys())
 
-    def attach(self, corpus=None, embeddings=None):
-        """``Result.attach``, then the same corpus and embeddings on every gradient leaf."""
-        super().attach(corpus=corpus, embeddings=embeddings)
+    def attach(self, texts=None, embeddings=None):
+        """``Result.attach``, then the same text and embeddings on every gradient leaf."""
+        super().attach(texts=texts, embeddings=embeddings)
         for leaf in self._leaves.values():
-            leaf.corpus = self.corpus
+            leaf.text = self.text
             leaf.embeddings = self.embeddings
         return self
 
@@ -1987,8 +1994,8 @@ class PCAOLSResult(ContinuousResult):
         covariate coefficients, random effects, ``.summary()``.
     sweep_result : PCAKSelectionResult | None
         Full PCA sweep diagnostics. The **PCA sweep** procedure selects K
-        by joint interpretability+stability score (see Plisiecki, Leniarska
-        et al., 2026). ``None`` when ``fit_regression(fixed_k=...)`` was used.
+        by joint interpretability+stability score. ``None`` when
+        ``fit_regression(fixed_k=...)`` was used.
     pca_k : int
         Number of PCA components used.
     pca_components : ndarray of shape (K, D)
@@ -2135,3 +2142,113 @@ class PCAOLSResult(ContinuousResult):
             plt.show()
 
         return fig
+
+
+# ---------- RegressionResult ----------
+class RegressionResult(_MultiContainer):
+    """One ``PCAOLSResult`` leaf per text term of a ``fit_regression`` formula.
+
+    Typical use::
+
+        res = ssd.fit_regression("y ~ age + group*ssd()")
+        res.keys()                     # ['ssd(essay)', 'grouplow:ssd(essay)', ...]
+        res["grouplow:ssd(essay)"].words
+
+    A leaf's ``beta`` is the gradient of its term alone: the gradient of a
+    group is the sum of ``res["ssd(essay)"].beta`` and that group's leaf.
+    ``model``, ``fit_info``, ``sweep`` and ``covariates`` are the same for
+    every leaf.
+
+    From ``ssdiff.fit_regression`` with several texts the result is keyed by
+    text name; each entry is a ``RegressionResult`` keyed by term, or a
+    ``PCAOLSResult`` for a text with one term. ``text`` is ``None``, and
+    ``fit_info``, ``sweep`` and ``n_no_vector`` are dicts keyed by text name.
+    """
+
+    _access = (
+        "stats", "fit_info", "sweep", "covariates", "test", "model",
+        "words", "clusters", "snippets",
+        "beta", "gradient", "beta_norm", "alignment_scores", "attach(...)",
+    )
+
+    def __init__(
+        self,
+        leaves: dict[str, PCAOLSResult | RegressionResult],
+        tests: list[TermTest],
+        *,
+        by_text: bool = False,
+    ):
+        super().__init__()
+        self._leaves = dict(leaves)
+        self.test = RegressionTestView(list(tests))
+        first = self._first_leaf()
+        self.model = first.model
+        self.fit_args = first.fit_args
+        self._formula_shown = first._formula_shown
+        self.stats = first._stats_view_cls(
+            replace(first.stats._stats, beta_norm=None, delta=None, iqr_effect=None)
+        )
+        self._by_text = by_text
+        if by_text:
+            # Each entry is one text: its own settings, sweep and counts.
+            self.text = None
+            self.embeddings = None
+            self.fit_info = {k: v.fit_info for k, v in self._leaves.items()}
+            self.sweep = {k: v.sweep for k, v in self._leaves.items()}
+            self.n_no_vector = {k: v.n_no_vector for k, v in self._leaves.items()}
+        else:
+            self.text = first.text
+            self.embeddings = first.embeddings
+            self.lexicon, self.window, self.sif_a = first.lexicon, first.window, first.sif_a
+            self.fit_info = first.fit_info
+            self.sweep = first.sweep
+            self.n_no_vector = first.n_no_vector
+
+    def _first_leaf(self) -> PCAOLSResult:
+        first = next(iter(self._leaves.values()))
+        return first._first_leaf() if isinstance(first, RegressionResult) else first
+
+    def attach(self, texts=None, embeddings=None):
+        """``Result.attach`` for a one-text result; for several texts, ``texts`` and
+        ``embeddings`` are dicts keyed by text name, each forwarded to that text's entry."""
+        if not self._by_text:
+            return super().attach(texts=texts, embeddings=embeddings)
+        for given in (texts, embeddings):
+            if given is not None and not isinstance(given, dict):
+                raise TypeError(
+                    "attach() on a result of several texts takes dicts keyed by text "
+                    f"name, e.g. texts={{'essay': ...}}; got {type(given).__name__}."
+                )
+        for name, entry in self._leaves.items():
+            entry.attach(
+                texts=(texts or {}).get(name), embeddings=(embeddings or {}).get(name)
+            )
+        return self
+
+    @property
+    def covariates(self) -> CovariatesView:
+        """The formula's coefficients with the text terms held fixed; see ``PCAOLSResult.covariates``."""
+        return self._first_leaf().covariates
+
+    def summary(self) -> str:
+        """Print the compact model summary and return it as text.
+
+        As ``PCAOLSResult.summary()``, with one SSD effects row per ``test``
+        row; the all-text row is labelled with the text's name.
+        """
+        effects = []
+        for t in self.test:
+            has_r2 = t.r2_delta is not None and np.isfinite(t.r2_delta)
+            effects.append((
+                t.label or ("all texts" if self._by_text else self.text.name or "text"),
+                "ΔR²" if has_r2 else "",
+                fmt_r(t.r2_delta, digits=3) if has_r2 else "",
+                t.pvalue,
+            ))
+        text = _summary_text(self._first_leaf()._model_summary_without_text(), effects)
+        print(text)
+        return text
+
+    def _summary(self) -> str:
+        return (f"RegressionResult  {self._formula_shown}\n"
+                f"  {'texts' if self._by_text else 'terms'}: {', '.join(self._leaves)}")

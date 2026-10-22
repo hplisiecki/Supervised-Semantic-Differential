@@ -19,14 +19,14 @@ What it writes into this directory:
   - ``golden.json``    — frozen PLS result (R², counts, top words).
 
 Crucial invariant: the golden is generated from the embedding **reloaded from
-``embedding.bin``** and a ``pretokenized`` corpus — the exact artifacts the
+``embedding.bin``** and the same 1-token documents — the exact artifacts the
 test consumes — so there is zero generator-vs-test divergence.
 
-Inputs (in-repo, relative to the SSDLite root):
+Inputs (in-repo, relative to the repository root):
   - examples/data/glove_300_en_top20k_ratings.bin
   - examples/data/Ratings_EN.csv
 
-Run from the SSDLite project root:
+Run from the repository root:
     python tests/fixtures/golden_warriner/generate_fixtures.py
 """
 
@@ -38,7 +38,7 @@ import os
 import numpy as np
 import pandas as pd
 
-from ssdiff import SSD, Corpus, Embeddings
+from ssdiff import SSD, Embeddings
 
 # --- Configuration ---------------------------------------------------------
 N_DOCS = 6000                            # rated words to keep (seeded subsample)
@@ -52,10 +52,10 @@ N_WORDS = 20                             # top words per pole stored in golden
 
 # --- Paths -----------------------------------------------------------------
 HERE = os.path.dirname(os.path.abspath(__file__))
-SSDLITE_ROOT = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
-EMB_SRC = os.path.join(SSDLITE_ROOT, "examples", "data",
+REPO_ROOT = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
+EMB_SRC = os.path.join(REPO_ROOT, "examples", "data",
                        "glove_300_en_top20k_ratings.bin")
-RATINGS = os.path.join(SSDLITE_ROOT, "examples", "data", "Ratings_EN.csv")
+RATINGS = os.path.join(REPO_ROOT, "examples", "data", "Ratings_EN.csv")
 
 EMB_STEM = os.path.join(HERE, "embedding")      # → embedding.bin
 CORPUS_JSON = os.path.join(HERE, "corpus.json")
@@ -109,10 +109,9 @@ def main() -> None:
     with open(CORPUS_JSON, "w", encoding="utf-8") as f:
         json.dump(corpus_data, f, ensure_ascii=False)
 
-    # 5. Fit and freeze the golden (from reloaded emb + pretokenized corpus).
-    corpus = Corpus([[w] for w in words], pretokenized=True, lang="en")
-    ssd = SSD(emb, corpus, y, use_full_doc=True)
-    res = ssd.fit_pls(k=K, n_splits=N_SPLITS, random_state=RANDOM_STATE)
+    # 5. Fit and freeze the golden (from reloaded emb + 1-token docs).
+    ssd = SSD(emb, [[w] for w in words], use_full_doc=True)
+    res = ssd.fit_pls(y, k=K, n_splits=N_SPLITS, random_state=RANDOM_STATE)
 
     golden = {
         "k": K,

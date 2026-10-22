@@ -14,7 +14,7 @@ _REPR_HINTS_ENABLED: bool = True
 def set_repr_hints(enabled: bool) -> None:
     """Toggle save-hint footers in __repr__ / _repr_html_ output.
 
-    Default: True. Disable for log-stream consumers (SSD_APP).
+    Default: True. Disable for log-stream consumers.
     """
     if not isinstance(enabled, bool):
         raise TypeError(f"enabled must be bool, got {type(enabled).__name__}")

@@ -93,7 +93,7 @@ class SeedSuggestionsView(SuggestionsView):
 # ---------- LexiconResult ----------
 
 class LexiconResult(Result):
-    """Result from Corpus.suggest_lexicon() or Corpus.evaluate_lexicon().
+    """Result from suggest_lexicon() or evaluate_lexicon().
 
     Attributes
     ----------
@@ -117,10 +117,10 @@ class LexiconResult(Result):
         suggestions: list[Suggestion],
         summary: Summary | None = None,
         seeded: bool = False,
-        corpus=None,
+        text=None,
     ):
         super().__init__()
-        self.corpus = corpus
+        self.text = text
 
         self.stats = LexiconStatsView(
             var_type=var_type, n_docs=n_docs, n_tokens=n_tokens,

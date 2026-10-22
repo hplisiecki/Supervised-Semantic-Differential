@@ -28,26 +28,14 @@ def _as_float_array(y: Iterable) -> np.ndarray:
 def _to_unit_tokens(unit) -> list[str]:
     """Convert a single text unit to a flat token list.
 
-    Handles str, list[str], list[list[str]] (profiles), and None.
+    Handles str, list[str] and None.
     """
     if unit is None:
         return []
     if isinstance(unit, str):
         return unit.split()
     if isinstance(unit, (list, tuple)):
-        if not unit:
-            return []
-        first = unit[0]
-        if isinstance(first, str):
-            return list(unit)
-        if isinstance(first, (list, tuple)):
-            out: list[str] = []
-            for post in unit:
-                if isinstance(post, (list, tuple)):
-                    out.extend(t for t in post if isinstance(t, str))
-                elif isinstance(post, str):
-                    out.extend(post.split())
-            return out
+        return list(unit)
     return str(unit).split()
 
 
@@ -55,8 +43,7 @@ def _texts_to_token_lists(texts: Sequence) -> list[list[str]]:
     """Batch-convert text units to token lists.
 
     Fast path for homogeneous str or list[str] inputs;
-    falls back to per-element :func:`_to_unit_tokens` for profiles
-    and mixed inputs.
+    falls back to per-element :func:`_to_unit_tokens` for mixed inputs.
     """
     if not texts:
         return []
@@ -271,7 +258,7 @@ def _rank_for_token_stats(
 
 
 # -------------------------
-# Shared helpers (used by Corpus methods)
+# Shared helpers (used by the SSD lexicon methods)
 # -------------------------
 
 
@@ -328,7 +315,7 @@ def _rank_tokens(
     y : ndarray
         Outcome variable (already cleaned).
     top_k, min_docs, n_bins, corr_cap, var_type :
-        Same as ``Corpus.suggest_lexicon``.
+        Same as ``SSD.suggest_lexicon``.
 
     Returns
     -------
@@ -400,7 +387,7 @@ def _seed_neighbours(
     top_k: int,
     min_docs: int,
 ) -> list[tuple[str, str, float]]:
-    """Corpus tokens to list for *seeds*, as ``(seed, token, cos)`` rows.
+    """Tokens of the text to list for *seeds*, as ``(seed, token, cos)`` rows.
 
     A candidate is a token that is in at least *min_docs* documents and is a
     key of *embeddings*. Each seed lists itself with cosine 1 when it is a

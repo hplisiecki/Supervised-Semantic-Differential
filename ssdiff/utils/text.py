@@ -1,144 +1,9 @@
-"""Text preprocessing: spaCy (lemmas) or a wordpack's tokenizer (surface keys), stopwords."""
+"""Text preprocessing: a wordpack's tokenizer (surface keys) and stopwords."""
 
 from __future__ import annotations
 
-import re
 from collections.abc import Sequence
 from dataclasses import dataclass
-from functools import lru_cache
-from importlib import resources
-from typing import TYPE_CHECKING, Union
-
-from ssdiff.lang_config import get_config, lang_to_model  # noqa: F401 — re-export
-
-if TYPE_CHECKING:
-    from spacy.language import Language
-
-# ---------- Stopwords ----------
-
-
-@lru_cache(maxsize=16)
-def load_stopwords(lang: str = "pl", *, lowercase: bool = True) -> list[str]:
-    """Load stopwords.
-
-    If the language has a bundled stopword file (configured in
-    ``lang_config.LANGUAGES``), loads from that file. Otherwise falls
-    back to spaCy's built-in stopwords.
-    """
-    lang = (lang or "pl").strip().lower()
-
-    cfg = get_config(lang)
-    if cfg.stopwords_file is not None:
-        ref = resources.files("ssdiff.utils").joinpath(cfg.stopwords_file)
-        text = ref.read_text(encoding="utf-8")
-        words = [s.strip() for s in text.splitlines() if s.strip()]
-        return [w.lower() for w in words] if lowercase else words
-
-    from ssdiff.results.core import _require
-
-    spacy = _require("spacy", extra="spacy")
-    nlp_blank = spacy.blank(lang)
-    sw = getattr(nlp_blank.Defaults, "stop_words", None)
-    if not sw:
-        raise LookupError(f"No stopwords available in spaCy for language '{lang}'.")
-    words = list(sw)
-    return [w.lower() for w in words] if lowercase else words
-
-
-# ---------- spaCy loader ----------
-
-class SpacyModelNotInstalledError(RuntimeError):
-    """Raised when a requested spaCy model is not installed.
-
-    Callers can catch this to offer auto-download. The missing model name is
-    available on the ``.model`` attribute.
-    """
-
-    def __init__(self, model: str):
-        self.model = model
-        super().__init__(
-            f"spaCy model '{model}' is not installed. "
-            f"Install with: python -m spacy download {model}"
-        )
-
-
-def load_spacy(
-    model: str,
-    *,
-    disable: Sequence[str] = ("ner",),
-) -> Language:
-    """Load a spaCy model with optional pipeline component disabling.
-
-    Parameters
-    ----------
-    model : str
-        spaCy model name (e.g. ``"pl_core_news_lg"``).
-    disable : sequence of str, optional
-        Pipeline components to disable, by default ``("ner",)``.
-
-    Returns
-    -------
-    spacy.language.Language
-        Loaded model with a sentencizer added if no parser is present.
-
-    Raises
-    ------
-    SpacyModelNotInstalledError
-        If the model is not installed. Callers can catch this to offer
-        auto-download.
-    RuntimeError
-        If the model exists but fails to load for any other reason.
-    """
-    if not model or not isinstance(model, str) or not model.strip():
-        raise ValueError("Provide a spaCy model name (e.g. 'pl_core_news_lg').")
-    from ssdiff.results.core import _require
-
-    spacy = _require("spacy", extra="spacy")
-    if not spacy.util.is_package(model):
-        raise SpacyModelNotInstalledError(model)
-    try:
-        nlp = spacy.load(model, disable=list(disable))
-        if "parser" not in nlp.pipe_names and "sentencizer" not in nlp.pipe_names:
-            nlp.add_pipe("sentencizer")
-        return nlp
-    except Exception as e:
-        raise RuntimeError(
-            f"Could not load spaCy model '{model}': {e}. See https://spacy.io/models"
-        ) from e
-
-
-def download_spacy_model(model: str) -> None:
-    """Download a spaCy model via ``spacy.cli.download``."""
-    from ssdiff.results.core import _require
-
-    _require("spacy", extra="spacy")
-    from spacy.cli import download as _spacy_download
-    _spacy_download(model)
-
-
-# ---------- Token filter ----------
-
-_URL = re.compile(r"https?://\S+")
-_AT = re.compile(r"@\S+")
-
-
-def _keep_token(tok, stopset: set[str]) -> bool:
-    """Return True if *tok* should be retained after filtering.
-
-    Rejects whitespace, punctuation, quotes, currency symbols, URLs (@-prefixed
-    handles), digits, empty lemmas, and stopwords.
-    """
-    if tok.is_space or tok.is_punct or tok.is_quote or tok.is_currency:
-        return False
-    if _URL.match(tok.text) or _AT.match(tok.text):
-        return False
-    if tok.is_digit:
-        return False
-    lem = tok.lemma_.lower()
-    if not lem or lem in stopset:
-        return False
-    return True
-
 
 # ---------- Data structures ----------
 
@@ -161,7 +26,7 @@ class PreprocessedDoc:
     token_to_sent : list[int]
         Maps each token index in doc_lemmas to its sentence index.
     sents_kept_idx : list[list[int]]
-        Per-sentence indices of kept tokens within the spaCy sentence.
+        Per-sentence indices of kept tokens within the sentence, counting stopwords.
     """
 
     raw: str
@@ -173,55 +38,17 @@ class PreprocessedDoc:
     sents_kept_idx: list[list[int]]
 
 
-@dataclass
-class PreprocessedProfile:
-    """Preprocessed multi-post profile (e.g. social media user with multiple posts).
-
-    Each field is a list indexed by post position.
-
-    Attributes
-    ----------
-    raw_posts : list[str]
-        Original text of each post.
-    post_sents_surface : list[list[str]]
-        Surface-form sentences per post.
-    post_sents_lemmas : list[list[list[str]]]
-        Lemmatized tokens per sentence per post.
-    post_doc_lemmas : list[list[str]]
-        Flat lemma list per post.
-    post_sent_char_spans : list[list[tuple[int, int]]]
-        Character spans per sentence per post.
-    post_token_to_sent : list[list[int]]
-        Token-to-sentence mapping per post.
-    post_sents_kept_idx : list[list[list[int]]]
-        Kept token indices per sentence per post.
-    """
-
-    raw_posts: list[str]
-    post_sents_surface: list[list[str]]
-    post_sents_lemmas: list[list[list[str]]]
-    post_doc_lemmas: list[list[str]]
-    post_sent_char_spans: list[list[tuple[int, int]]]
-    post_token_to_sent: list[list[int]]
-    post_sents_kept_idx: list[list[list[int]]]
-
-
 # ---------- Helpers ----------
 
-def _pipe(nlp, texts: Sequence[str], batch_size: int, n_process: int):
-    """Run *texts* through *nlp.pipe*, ensuring a sentencizer is attached first."""
-    if "parser" not in nlp.pipe_names and "sentencizer" not in nlp.pipe_names:
-        nlp.add_pipe("sentencizer")
-    return nlp.pipe(texts, batch_size=batch_size, n_process=n_process)
-
-
 def _extract_from_tokens(t, stopset: set[str], lower):
-    """The 6-tuple of :func:`_extract_from_doc`, from a wordpack reader's ``Tokens``.
+    """Sentence-level and flat token data from a wordpack reader's ``Tokens``.
+
+    Returns ``(sents_surface, sents_lemmas, doc_lemmas, sent_char_spans,
+    token_to_sent, sents_kept_idx)``.
 
     *lower* is the pack's own lowercasing (``pack.chars.lower``), so a cased
     key matches a lowercase stopword the same way in every reader.
-    ``sents_kept_idx`` counts every token of the sentence, stopwords included,
-    as the spaCy route counts every spaCy token.
+    ``sents_kept_idx`` counts every token of the sentence, stopwords included.
     """
     s_surface = [t.text[a:b] for a, b in t.sents]
     s_lemmas: list[list[str]] = [[] for _ in t.sents]
@@ -238,212 +65,64 @@ def _extract_from_tokens(t, stopset: set[str], lower):
     return s_surface, s_lemmas, doc_lemmas, list(t.sents), token_to_sent, s_kept_idx
 
 
-def _extract_from_doc(doc, stopset: set[str]):
-    """Extract sentence-level and flat token data from a spaCy *doc*.
+# ---------- Public API ----------
 
-    Returns a 6-tuple: (sents_surface, sents_lemmas, doc_lemmas,
-    sent_char_spans, token_to_sent, sents_kept_idx).
+def _assemble_preprocessed(texts, extract) -> list[PreprocessedDoc]:
+    """Shape per-text extraction results into ``PreprocessedDoc`` objects.
+
+    *extract* takes a list of strings and yields, for each string in order,
+    ``(raw, fields)``, where *fields* is the 6-tuple returned by
+    :func:`_extract_from_tokens`.
     """
-    s_surface, s_lemmas, s_spans, s_kept_idx = [], [], [], []
-    doc_lemmas, token_to_sent = [], []
-    for si, sent in enumerate(doc.sents):
-        s_surface.append(sent.text)
-        s_spans.append((sent.start_char, sent.end_char))
-        kept_lemmas, kept_idx = [], []
-        for j, tok in enumerate(sent):
-            if _keep_token(tok, stopset):
-                kept_lemmas.append(tok.lemma_.lower())
-                kept_idx.append(j)
-        s_lemmas.append(kept_lemmas)
-        s_kept_idx.append(kept_idx)
-        start_flat = len(doc_lemmas)
-        doc_lemmas.extend(kept_lemmas)
-        token_to_sent.extend([si] * (len(doc_lemmas) - start_flat))
-    return s_surface, s_lemmas, doc_lemmas, s_spans, token_to_sent, s_kept_idx
-
-
-def _is_profile_input(texts) -> bool:
-    """Return True if *texts* looks like profile input (each element is a list of posts)."""
-    for x in texts:
-        if x is None:
+    texts_str = []
+    for i, t in enumerate(texts):
+        if isinstance(t, (list, tuple)):
+            raise TypeError(
+                f"texts[{i}] is a {type(t).__name__}; each element of texts must be "
+                "one document's text. For several posts per participant, join each "
+                "participant's posts into one text, or keep one row per post and add "
+                "a random effect for the participant in fit_regression()."
+            )
+        if t is None or (isinstance(t, float) and t != t):
+            texts_str.append("")
             continue
-        return not isinstance(x, (str, bytes))
-    return False
+        if isinstance(t, bytes):
+            t = t.decode(errors="ignore")
+        texts_str.append(t if isinstance(t, str) else str(t))
 
-
-def _sanitize_posts(posts) -> list[str]:
-    """Decode bytes, strip whitespace, and drop empty strings from a post list."""
-    out: list[str] = []
-    for p in posts or []:
-        if isinstance(p, bytes):
-            p = p.decode(errors="ignore")
-        if isinstance(p, str):
-            s = p.strip()
-            if s:
-                out.append(s)
+    out: list[PreprocessedDoc] = []
+    for raw, fields in extract(texts_str):
+        s_surface, s_lemmas, doc_lemmas, s_spans, token_to_sent, s_kept_idx = fields
+        out.append(
+            PreprocessedDoc(
+                raw=raw,
+                sents_surface=s_surface,
+                sents_lemmas=s_lemmas,
+                doc_lemmas=doc_lemmas,
+                sent_char_spans=s_spans,
+                token_to_sent=token_to_sent,
+                sents_kept_idx=s_kept_idx,
+            )
+        )
     return out
 
 
-# ---------- Public API ----------
-
-def _assemble_preprocessed(texts, extract) -> list:
-    """Shape per-text extraction results into ``PreprocessedDoc`` / ``PreprocessedProfile``.
-
-    Shared by the spaCy and wordpack routes. *extract* takes a list of
-    strings and yields, for each string in order, ``(raw, fields)``, where
-    *fields* is the 6-tuple returned by :func:`_extract_from_doc`.
-    """
-    out: list = []
-
-    if not _is_profile_input(texts):
-        texts_str = []
-        for t in texts:
-            if t is None or (isinstance(t, float) and t != t):
-                texts_str.append("")
-                continue
-            if isinstance(t, bytes):
-                t = t.decode(errors="ignore")
-            texts_str.append(t if isinstance(t, str) else str(t))
-
-        for raw, fields in extract(texts_str):
-            s_surface, s_lemmas, doc_lemmas, s_spans, token_to_sent, s_kept_idx = fields
-            out.append(
-                PreprocessedDoc(
-                    raw=raw,
-                    sents_surface=s_surface,
-                    sents_lemmas=s_lemmas,
-                    doc_lemmas=doc_lemmas,
-                    sent_char_spans=s_spans,
-                    token_to_sent=token_to_sent,
-                    sents_kept_idx=s_kept_idx,
-                )
-            )
-        return out
-
-    # Profile mode
-    posts_per_profile = [_sanitize_posts(p) for p in texts]
-    lengths = [len(p) for p in posts_per_profile]
-    flat_posts = [pp for plist in posts_per_profile for pp in plist]
-
-    out_profiles: list[PreprocessedProfile] = []
-    prof_idx = 0
-    remaining = lengths[0] if lengths else 0
-
-    def _empty_profile():
-        return PreprocessedProfile(
-            raw_posts=[], post_sents_surface=[], post_sents_lemmas=[],
-            post_doc_lemmas=[], post_sent_char_spans=[], post_token_to_sent=[],
-            post_sents_kept_idx=[],
-        )
-
-    while prof_idx < len(lengths) and remaining == 0:
-        out_profiles.append(_empty_profile())
-        prof_idx += 1
-        remaining = lengths[prof_idx] if prof_idx < len(lengths) else 0
-
-    cur_raw, cur_surface, cur_lemmas, cur_docs = [], [], [], []
-    cur_spans, cur_tok2sent, cur_kept_idx = [], [], []
-
-    for raw, fields in extract(flat_posts):
-        s_surface, s_lemmas, doc_lemmas, s_spans, token_to_sent, s_kept_idx = fields
-        cur_raw.append(raw)
-        cur_surface.append(s_surface)
-        cur_lemmas.append(s_lemmas)
-        cur_docs.append(doc_lemmas)
-        cur_spans.append(s_spans)
-        cur_tok2sent.append(token_to_sent)
-        cur_kept_idx.append(s_kept_idx)
-        remaining -= 1
-
-        if remaining == 0:
-            out_profiles.append(
-                PreprocessedProfile(
-                    raw_posts=cur_raw,
-                    post_sents_surface=cur_surface,
-                    post_sents_lemmas=cur_lemmas,
-                    post_doc_lemmas=cur_docs,
-                    post_sent_char_spans=cur_spans,
-                    post_token_to_sent=cur_tok2sent,
-                    post_sents_kept_idx=cur_kept_idx,
-                )
-            )
-            prof_idx += 1
-            cur_raw, cur_surface, cur_lemmas, cur_docs = [], [], [], []
-            cur_spans, cur_tok2sent, cur_kept_idx = [], [], []
-
-            if prof_idx < len(lengths):
-                remaining = lengths[prof_idx]
-                while prof_idx < len(lengths) and remaining == 0:
-                    out_profiles.append(_empty_profile())
-                    prof_idx += 1
-                    remaining = lengths[prof_idx] if prof_idx < len(lengths) else 0
-
-    while prof_idx < len(lengths):
-        out_profiles.append(_empty_profile())
-        prof_idx += 1
-
-    return out_profiles
-
-
-def preprocess_texts(
-    texts: Sequence[Union[str, Sequence[str]]],
-    nlp,
-    stopwords: Sequence[str] | None = None,
-    batch_size: int = 64,
-    n_process: int = 1,
-) -> list[Union[PreprocessedDoc, PreprocessedProfile]]:
-    """Preprocess texts into lemmatized tokens with sentence boundaries.
-
-    Handles both flat texts (``list[str]``) and profile mode
-    (``list[list[str]]``).  The mode is auto-detected from the input.
-
-    Parameters
-    ----------
-    texts : sequence of str or sequence of sequence of str
-        Input documents.  Plain strings for flat mode; nested lists of
-        strings (one inner list per post) for profile mode.
-    nlp : spacy.language.Language
-        Loaded spaCy model (see :func:`load_spacy`).
-    stopwords : sequence of str, optional
-        Stopword list; tokens whose lemma appears here are dropped.
-    batch_size : int, optional
-        Batch size forwarded to ``nlp.pipe()``, by default 64.
-    n_process : int, optional
-        Number of processes forwarded to ``nlp.pipe()``, by default 1.
-
-    Returns
-    -------
-    list[PreprocessedDoc] or list[PreprocessedProfile]
-        One entry per input element.  Returns ``PreprocessedDoc`` objects
-        in flat mode and ``PreprocessedProfile`` objects in profile mode.
-    """
-    if nlp is None:
-        raise ValueError("nlp is None. Call load_spacy(model) first.")
-    stopset = set(stopwords or [])
-
-    def extract(strings):
-        for doc in _pipe(nlp, strings, batch_size, n_process):
-            yield doc.text, _extract_from_doc(doc, stopset)
-
-    return _assemble_preprocessed(texts, extract)
-
-
 def preprocess_texts_wordpack(
-    texts: Sequence[Union[str, Sequence[str]]],
+    texts: Sequence[str],
     pack,
     stopwords: Sequence[str] | None = None,
-) -> list[Union[PreprocessedDoc, PreprocessedProfile]]:
-    """Preprocess texts with a wordpack's own tokenizer; no spaCy.
+) -> list[PreprocessedDoc]:
+    """Preprocess texts with a wordpack's own tokenizer.
 
-    Same output types as :func:`preprocess_texts`. Tokens are the pack's
-    lookup keys (surface forms for English, clitics split), not lemmas.
+    Tokens are the pack's lookup keys (surface forms for English, clitics
+    split), not lemmas.
     ``raw`` is the text after the reader's NFC normalisation and character
     fold, and every offset in ``sent_char_spans`` indexes it.
 
     Parameters
     ----------
-    texts : sequence of str or sequence of sequence of str
-        Flat texts or profiles, as for :func:`preprocess_texts`.
+    texts : sequence of str
+        Input documents, one string per document.
     pack : WordPack
         Open pack (``ssdiff.wordpack.reader.WordPack``).
     stopwords : sequence of str, optional
@@ -461,30 +140,21 @@ def preprocess_texts_wordpack(
 
 
 def build_docs_from_preprocessed(
-    pre_docs: list[Union[PreprocessedDoc, PreprocessedProfile]],
-) -> list:
-    """Extract flat token lists from preprocessed docs or profiles.
+    pre_docs: list[PreprocessedDoc],
+) -> list[list[str]]:
+    """Extract flat token lists from preprocessed docs.
 
-    Bridges the gap between :func:`preprocess_texts` output and downstream
-    consumers that expect plain ``list[list[str]]`` token lists.
+    Bridges the gap between :func:`preprocess_texts_wordpack` output and
+    downstream consumers that expect plain ``list[list[str]]`` token lists.
 
     Parameters
     ----------
-    pre_docs : list[PreprocessedDoc] or list[PreprocessedProfile]
-        Output of :func:`preprocess_texts`.  All elements must be the same
-        type (mixing is not supported).
+    pre_docs : list[PreprocessedDoc]
+        Output of :func:`preprocess_texts_wordpack`.
 
     Returns
     -------
-    list[list[str]] or list[list[list[str]]]
-        For ``PreprocessedDoc`` inputs: a flat list where each element is
-        ``doc_lemmas`` (``list[str]``).
-        For ``PreprocessedProfile`` inputs: a nested list where each element
-        is ``post_doc_lemmas`` (``list[list[str]]``).
+    list[list[str]]
+        ``doc_lemmas`` of each document.
     """
-    if not pre_docs:
-        return []
-    first = pre_docs[0]
-    if isinstance(first, PreprocessedDoc):
-        return [p.doc_lemmas for p in pre_docs]
-    return [[lemmas for lemmas in p.post_doc_lemmas] for p in pre_docs]
+    return [p.doc_lemmas for p in pre_docs]

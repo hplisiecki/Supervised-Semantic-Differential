@@ -1,7 +1,8 @@
 """Reader for .wordpack files, format version 1.
 
-Uses only the standard library and numpy. Every pack carries a self-test,
-which holds this reader and every other reader of the format to the same output.
+Uses only the standard library and numpy. Every pack carries a self-test
+that this reader runs on load; it checks that tokenizing and row decoding give
+the stored output.
 """
 
 from __future__ import annotations
@@ -235,13 +236,13 @@ class _Opts(NamedTuple):
     by_len: dict
     # Chunk text -> (keys, rows, spans relative to the chunk). A chunk's tokens
     # depend on nothing but its text and the pack, and most chunks repeat: in
-    # measuring_hate_speech 9% of 985k chunks are distinct, so tokenizing a
+    # one 985k-chunk corpus, 9% of chunks are distinct, so tokenizing a
     # corpus mostly reuses earlier answers.
     chunks: dict
 
 
 # The chunk cache is emptied when it reaches this size. An entry takes about
-# 455 bytes (measured on measuring_hate_speech), so the bound keeps it near
+# 455 bytes (measured on one 985k-chunk corpus), so the bound keeps it near
 # 115 MB, which matters under Pyodide's 4 GB; frequent chunks come back within
 # a few texts after a reset.
 _CHUNK_CACHE_MAX = 250_000

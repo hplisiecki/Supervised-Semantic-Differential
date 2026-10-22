@@ -1,6 +1,6 @@
 """Tests for GroupResult, PairResult, and related views.
 
-Consolidates invariants covering:
+Invariants covered:
 - Container structure (pairs count, canonical keys)
 - _ShimView instances (words, clusters, snippets)
 - Per-pair accessor equivalence
@@ -33,7 +33,7 @@ def _n_pairs(n_groups: int) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Invariant 1 — pairs count == C(G, 2)
+# pairs count == C(G, 2)
 # ---------------------------------------------------------------------------
 
 def test_pairs_count_2g(group_result_2g):
@@ -47,7 +47,7 @@ def test_pairs_count_3g(group_result_3g):
 
 
 # ---------------------------------------------------------------------------
-# Invariant 2 — canonical key lookup returns PairResult with correct contrast
+# canonical key lookup returns PairResult with correct contrast
 # ---------------------------------------------------------------------------
 
 def test_canonical_key_lookup_2g(group_result_2g):
@@ -70,7 +70,7 @@ def test_canonical_key_lookup_3g(group_result_3g):
 
 
 # ---------------------------------------------------------------------------
-# Invariant 3 — reverse-order tuple raises KeyError mentioning "canonical"
+# reverse-order tuple raises KeyError mentioning "canonical"
 # ---------------------------------------------------------------------------
 
 def test_reverse_order_raises_key_error(group_result_2g):
@@ -83,7 +83,7 @@ def test_reverse_order_raises_key_error(group_result_2g):
 
 
 # ---------------------------------------------------------------------------
-# Invariant 4 — unknown group raises KeyError
+# unknown group raises KeyError
 # ---------------------------------------------------------------------------
 
 def test_unknown_group_raises_key_error(group_result_2g):
@@ -93,7 +93,7 @@ def test_unknown_group_raises_key_error(group_result_2g):
 
 
 # ---------------------------------------------------------------------------
-# Invariant 5 — words/clusters/snippets are _ShimView instances
+# words/clusters/snippets are _ShimView instances
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("view_name", ["words", "clusters", "snippets"])
@@ -106,7 +106,7 @@ def test_shim_view_type(group_result_2g, view_name):
 
 
 # ---------------------------------------------------------------------------
-# Invariant 6 — gr.words[pair] same object as gr[pair].words
+# gr.words[pair] same object as gr[pair].words
 # ---------------------------------------------------------------------------
 
 def test_words_shim_matches_pair_words(group_result_2g):
@@ -125,7 +125,7 @@ def test_words_shim_matches_pair_words(group_result_2g):
 
 
 # ---------------------------------------------------------------------------
-# Invariant 7 — gr.beta is dict[pair_key, np.ndarray of shape (D,)]
+# gr.beta is dict[pair_key, np.ndarray of shape (D,)]
 # ---------------------------------------------------------------------------
 
 def test_beta_dict_shape_2g(group_result_2g):
@@ -149,7 +149,7 @@ def test_beta_dict_shape_3g(group_result_3g):
 
 
 # ---------------------------------------------------------------------------
-# Invariant 8 — PairResult.beta == mean(g1) - mean(g2) from raw x/groups
+# PairResult.beta == mean(g1) - mean(g2) from raw x/groups
 # ---------------------------------------------------------------------------
 
 def test_pair_result_beta_arithmetic(group_result_2g):
@@ -169,7 +169,7 @@ def test_pair_result_beta_arithmetic(group_result_2g):
 
 
 # ---------------------------------------------------------------------------
-# Invariant 9 — alignment_scores per pair has length n_kept and values in [-1, 1]
+# alignment_scores per pair has length n_kept and values in [-1, 1]
 # ---------------------------------------------------------------------------
 
 def test_alignment_scores_2g(group_result_2g):
@@ -187,7 +187,7 @@ def test_alignment_scores_2g(group_result_2g):
 
 
 # ---------------------------------------------------------------------------
-# Invariant 10 — 2-group gr.words.save("out.csv") → flat file (n=1 delegates)
+# 2-group gr.words.save("out.csv") → flat file (n=1 delegates)
 # ---------------------------------------------------------------------------
 
 def test_words_save_csv_2g(group_result_2g):
@@ -202,7 +202,7 @@ def test_words_save_csv_2g(group_result_2g):
 
 
 # ---------------------------------------------------------------------------
-# Invariant 11 — 3-group gr.words.save("out.csv") → subfolder fan-out
+# 3-group gr.words.save("out.csv") → subfolder fan-out
 # ---------------------------------------------------------------------------
 
 def test_words_save_csv_3g_fanout(group_result_3g):
@@ -226,7 +226,7 @@ def test_words_save_csv_3g_fanout(group_result_3g):
 
 
 # ---------------------------------------------------------------------------
-# Invariant 12 — 3-group gr.words.save("out.xlsx") → single workbook, C(3,2) sheets
+# 3-group gr.words.save("out.xlsx") → single workbook, C(3,2) sheets
 # ---------------------------------------------------------------------------
 
 def test_words_save_xlsx_3g(group_result_3g):
@@ -247,12 +247,10 @@ def test_words_save_xlsx_3g(group_result_3g):
 
 
 # ---------------------------------------------------------------------------
-# Invariant 12b — shim-view save(k=N) works for clusters/snippets, not just words
+# shim-view save(k=N) works for clusters/snippets, not just words
 # ---------------------------------------------------------------------------
-# Regression for an old gap: the fan-out tests only exercised ``gr.words.save``,
-# whose leaves are WordsView (slice-safe). The same logic for ``gr.clusters``
-# (leaves: ClustersView) was broken at the per-leaf ``_resized(k)`` step and
-# only surfaced in the desktop app's export path.
+# The fan-out tests below also cover ``gr.clusters`` and ``gr.snippets``, not
+# just ``gr.words``: their leaves need the per-leaf ``_resized(k)`` step.
 
 _SHIM_NAMES = ["words", "clusters", "snippets"]
 
@@ -300,7 +298,7 @@ def test_shim_save_csv_3g_fanout_with_k(group_result_3g, shim_name):
 
 
 # ---------------------------------------------------------------------------
-# Invariant 13 — report().to_text() contains "Omnibus" and "Pairwise"
+# report().to_text() contains "Omnibus" and "Pairwise"
 # ---------------------------------------------------------------------------
 
 def test_report_text_contains_omnibus_pairwise(group_result_2g):
@@ -311,7 +309,7 @@ def test_report_text_contains_omnibus_pairwise(group_result_2g):
 
 
 # ---------------------------------------------------------------------------
-# Invariant 14 — report().to_text() has "— pos" count equal number of pairs
+# report().to_text() has "— pos" count equal number of pairs
 # (Only when words are available; otherwise skip)
 # ---------------------------------------------------------------------------
 

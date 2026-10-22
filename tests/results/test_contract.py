@@ -3,7 +3,7 @@
 Covers core.py (cache API, View, ScalarView), schema.py (frozen dataclasses),
 single_result.py (_SingleResult invariants), and lexicon_result.py.
 
-One test per invariant — 15 tests total.
+One test per invariant.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from dataclasses import FrozenInstanceError
 import numpy as np
 import pytest
 
+from ssdiff.ssd import SSD
 from ssdiff.results.core import Result, ScalarView, View
 from ssdiff.results.lexicon_result import LexiconResult
 from ssdiff.results.schema import (
@@ -65,7 +66,7 @@ def _make_simple_result() -> Result:
 
 
 def _make_scalar_view() -> ScalarView:
-    """Minimal concrete ScalarView for invariant-5 testing."""
+    """Minimal concrete ScalarView for ScalarView tests."""
 
     class _MinScalar(ScalarView):
         _name = "mini"
@@ -99,7 +100,7 @@ def _make_lexicon_result(*, sort_descending=True) -> LexiconResult:
 
 
 # ---------------------------------------------------------------------------
-# Invariant 1: _cache_get — first call computes, second call is identical object
+# _cache_get — first call computes, second call is identical object
 # ---------------------------------------------------------------------------
 
 def test_cache_get_identity_on_second_call():
@@ -111,7 +112,7 @@ def test_cache_get_identity_on_second_call():
 
 
 # ---------------------------------------------------------------------------
-# Invariant 2: Stale-cache regression — different params coexist independently
+# Stale-cache regression — different params coexist independently
 # ---------------------------------------------------------------------------
 
 def test_cache_different_params_coexist():
@@ -129,7 +130,7 @@ def test_cache_different_params_coexist():
 
 
 # ---------------------------------------------------------------------------
-# Invariant 3: clear_cache("words") removes only "words" entries
+# clear_cache("words") removes only "words" entries
 # ---------------------------------------------------------------------------
 
 def test_clear_cache_named_view_selective():
@@ -149,7 +150,7 @@ def test_clear_cache_named_view_selective():
 
 
 # ---------------------------------------------------------------------------
-# Invariant 4: View.__getitem__ and iteration work consistently
+# View.__getitem__ and iteration work consistently
 # ---------------------------------------------------------------------------
 
 def test_view_getitem_and_iteration_consistent():
@@ -192,7 +193,7 @@ def test_view_getitem_and_iteration_consistent():
 
 
 # ---------------------------------------------------------------------------
-# Invariant 5: ScalarView attr-access and dict-access return same values
+# ScalarView attr-access and dict-access return same values
 # ---------------------------------------------------------------------------
 
 def test_scalar_view_attr_and_dict_access_agree():
@@ -212,21 +213,18 @@ def test_scalar_view_attr_and_dict_access_agree():
 
 
 # ---------------------------------------------------------------------------
-# Invariant 6: attach(embeddings=...) wires _embeddings attribute correctly
+# attach(embeddings=...) wires _embeddings attribute correctly
 # ---------------------------------------------------------------------------
 
-def test_attach_embeddings_wires_attribute(pls_result, tiny_kv):
+def test_attach_embeddings_wires_attribute(pls_result, parity_emb):
     """result.attach(embeddings=new_emb) sets result.embeddings to new_emb."""
-    # Use a different Embeddings-like object to verify identity
-    from tests.conftest import make_kv
-    new_emb = make_kv(["a", "b"], dim=4, seed=7)
-
-    pls_result.attach(embeddings=new_emb)
-    assert pls_result.embeddings is new_emb, \
-        "embeddings must be wired by identity after attach()"
+    original = pls_result.embeddings
+    pls_result.attach(embeddings=parity_emb)
+    assert pls_result.embeddings.name == parity_emb.name
+    assert pls_result.embeddings.abtt == parity_emb.abtt
 
     # Restore original embeddings so other tests are not affected
-    pls_result.attach(embeddings=tiny_kv)
+    pls_result.attach(embeddings=original)
 
 
 def test_attach_embeddings_at_other_abtt_raises(pls_result, tiny_kv):
@@ -241,16 +239,16 @@ def test_attach_embeddings_at_other_abtt_raises(pls_result, tiny_kv):
 
 
 # ---------------------------------------------------------------------------
-# Invariant 7: result.words before attach raises RuntimeError mentioning "attach"
+# result.words before attach raises RuntimeError mentioning "attach"
 # ---------------------------------------------------------------------------
 
-def test_words_without_embeddings_raises_runtime_error(ssd_instance):
+def test_words_without_embeddings_raises_runtime_error(ssd_instance, parity_df):
     """Accessing .words when embeddings=None raises RuntimeError with 'attach'.
 
     Note: Result.attach(embeddings=None) is a no-op (guarded by `if embeddings is not None`).
     To simulate the un-attached state we directly set the attribute and clear the cache.
     """
-    result = ssd_instance.fit_pls(k=1, n_splits=20, random_state=0)
+    result = ssd_instance.fit_pls(parity_df["y"], k=1, n_splits=20, random_state=0)
 
     # Save original embeddings so we can restore after the test
     original_emb = result.embeddings
@@ -268,7 +266,7 @@ def test_words_without_embeddings_raises_runtime_error(ssd_instance):
 
 
 # ---------------------------------------------------------------------------
-# Invariant 8: Pickle round-trip preserves stats and cache
+# Pickle round-trip preserves stats and cache
 # ---------------------------------------------------------------------------
 
 def test_pickle_round_trip_preserves_state(pls_result):
@@ -293,7 +291,7 @@ def test_pickle_round_trip_preserves_state(pls_result):
 
 
 # ---------------------------------------------------------------------------
-# Invariant 9: Every @dataclass in schema.py is frozen (mutation raises)
+# Every @dataclass in schema.py is frozen (mutation raises)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("cls,kwargs", [
@@ -318,7 +316,7 @@ def test_schema_dataclasses_are_frozen(cls, kwargs):
 
 
 # ---------------------------------------------------------------------------
-# Invariant 10: Snippet.cluster_id is Optional[int] — constructible with None
+# Snippet.cluster_id is Optional[int] — constructible with None
 # ---------------------------------------------------------------------------
 
 def test_snippet_cluster_id_optional():
@@ -333,7 +331,7 @@ def test_snippet_cluster_id_optional():
 
 
 # ---------------------------------------------------------------------------
-# Invariant 11: alignment_scores[i] == cos(x[i], beta)
+# alignment_scores[i] == cos(x[i], beta)
 # ---------------------------------------------------------------------------
 
 def test_alignment_scores_formula():
@@ -363,7 +361,7 @@ def test_alignment_scores_formula():
 
 
 # ---------------------------------------------------------------------------
-# Invariant 12: beta_norm == np.linalg.norm(beta)
+# beta_norm == np.linalg.norm(beta)
 # ---------------------------------------------------------------------------
 
 def test_beta_norm_equals_norm_of_beta(pls_result):
@@ -374,7 +372,7 @@ def test_beta_norm_equals_norm_of_beta(pls_result):
 
 
 # ---------------------------------------------------------------------------
-# Invariant 13: LexiconResult — effect-size field (corr) in [0, 1]
+# LexiconResult — effect-size field (corr) in [0, 1]
 # ---------------------------------------------------------------------------
 
 def test_lexicon_result_effect_size_in_range():
@@ -386,7 +384,7 @@ def test_lexicon_result_effect_size_in_range():
 
 
 # ---------------------------------------------------------------------------
-# Invariant 14: LexiconResult.suggestions returns tokens in rank-descending order
+# LexiconResult.suggestions returns tokens in rank-descending order
 # ---------------------------------------------------------------------------
 
 def test_lexicon_suggestions_order_descending_by_rank():
@@ -399,7 +397,7 @@ def test_lexicon_suggestions_order_descending_by_rank():
 
 
 # ---------------------------------------------------------------------------
-# Invariant 15: LexiconResult.report().to_text() contains candidate token names
+# LexiconResult.report().to_text() contains candidate token names
 # ---------------------------------------------------------------------------
 
 def test_lexicon_report_to_text_contains_token_names():
@@ -458,43 +456,35 @@ def test_seeded_lexicon_report_has_seed_and_cos_columns():
 # docs view and counts when documents are dropped
 # ---------------------------------------------------------------------------
 
-def _ssd_from_texts(tiny_kv, lexicon, docs, y):
-    from ssdiff.corpus import Corpus
-    from ssdiff.ssd import SSD
-    from tests.conftest import FakeNlp
-
-    texts = [" ".join(d) for d in docs]
-    corpus = Corpus(texts, nlp=FakeNlp(), lang="pl", stopwords=[])
-    return SSD(tiny_kv, corpus, y, lexicon), corpus
+def _parity_text_with_empty_last(parity_emb, parity_df, parity_lexicon, n=12):
+    """First ``n`` parity texts plus one whose words are all out of vocabulary."""
+    texts = list(parity_df["text"][:n]) + ["zzzqqq"]
+    return SSD(parity_emb, texts, parity_lexicon), texts
 
 
-def test_docs_doc_id_and_text_match_corpus_row_with_nan_y(
-    tiny_kv, sample_docs, sample_y_with_nan, lexicon
+def test_docs_doc_id_and_text_match_text_row_with_nan_y(
+    parity_emb, parity_df, parity_lexicon
 ):
-    """A missing y and a document without a vector both leave later doc_ids on their corpus rows."""
-    docs = [list(d) for d in sample_docs] + [["zzz_not_in_vocab"]]
-    y = np.append(sample_y_with_nan, 1.0)
-    ssd, corpus = _ssd_from_texts(tiny_kv, lexicon, docs, y)
-    res = ssd.fit_pls(k=2, n_splits=20, random_state=42)
+    """A missing y and a document without a vector both leave later doc_ids on their text rows."""
+    ssd, texts = _parity_text_with_empty_last(parity_emb, parity_df, parity_lexicon)
+    y = np.append(parity_df["y"].to_numpy()[:12], 1.0)
+    y[3] = np.nan
+    res = ssd.fit_pls(y, k=2, n_splits=20, random_state=42)
 
-    expected_rows = [i for i in range(len(docs)) if i not in (3, len(docs) - 1)]
+    expected_rows = [i for i in range(len(texts)) if i not in (3, len(texts) - 1)]
     assert [d.doc_id for d in res.docs] == expected_rows
     for row in expected_rows:
-        assert res.docs.id(row)._raw_text == corpus.pre_docs[row].raw
-    assert (res.stats.n_raw, res.stats.n_kept, res.stats.n_dropped) == (9, 7, 2)
-    assert ssd.n_raw == len(docs)
-    assert ssd._keep_mask.shape == (len(docs),)
+        assert res.docs.id(row)._raw_text == texts[row]
+    assert (res.stats.n_raw, res.stats.n_kept, res.stats.n_dropped) == (13, 11, 2)
+    assert res._keep_mask.shape == (len(texts),)
 
 
-def test_keep_mask_spans_corpus_with_missing_group_label(
-    tiny_kv, sample_docs, lexicon
+def test_counts_span_text_with_missing_group_label(
+    tiny_kv, large_docs, large_groups_2, lexicon
 ):
-    """Documents with a None label are dropped from the full-corpus mask and counts."""
-    groups = np.array(["A", "A", None, "A", "B", "B", "B", "B"], dtype=object)
-    ssd, _ = _ssd_from_texts(tiny_kv, lexicon, sample_docs, groups)
+    """Documents with a None label are dropped from the counts."""
+    groups = large_groups_2.copy()
+    groups[2] = None
+    res = SSD(tiny_kv, large_docs, lexicon).fit_groups(groups, n_perm=10, random_state=0)
 
-    assert ssd._keep_mask.shape == (len(sample_docs),)
-    assert not ssd._keep_mask[2]
-    assert ssd._keep_mask.sum() == ssd.n_kept == 7
-    assert (ssd.n_raw, ssd.n_dropped) == (8, 1)
-    assert list(ssd.y) == ["A", "A", "A", "B", "B", "B", "B"]
+    assert res.stats.n_kept == 49

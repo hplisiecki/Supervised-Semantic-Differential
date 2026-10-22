@@ -12,9 +12,8 @@ def compute_global_sif(docs) -> tuple[dict[str, int], int]:
 
     Parameters
     ----------
-    docs : list[list[str]] or list[list[list[str]]]
-        Flat token lists (documents or sentences), or grouped profiles
-        (a list of posts per document).
+    docs : list[list[str]]
+        Token lists (documents or sentences).
 
     Returns
     -------
@@ -24,13 +23,9 @@ def compute_global_sif(docs) -> tuple[dict[str, int], int]:
         Sum of all word counts.
     """
     wc: dict[str, int] = {}
-    for item in docs:
-        if not item:
-            continue
-        posts = [item] if isinstance(item[0], str) else item
-        for post in posts:
-            for t in post:
-                wc[t] = wc.get(t, 0) + 1
+    for doc in docs:
+        for t in doc:
+            wc[t] = wc.get(t, 0) + 1
     return wc, sum(wc.values())
 
 
@@ -95,8 +90,8 @@ def build_doc_vectors(
 
     Parameters
     ----------
-    docs : list[list[str]] or list[list[list[str]]]
-        Flat token lists or grouped profiles.
+    docs : list[list[str]]
+        Token lists, one per document.
     embeddings : Embeddings
         Word embeddings.
     lexicon : set[str]
@@ -122,59 +117,24 @@ def build_doc_vectors(
     X_list = []
     keep_mask = []
 
-    # Detect flat vs grouped docs
-    is_flat = None
-    for item in docs:
-        if item:
-            is_flat = isinstance(item[0], str)
-            break
-    if is_flat is None:
-        return np.zeros((0, embeddings.vector_size), dtype=np.float64), np.zeros(0, dtype=bool)
-
-    if is_flat:
-        for d in docs:
-            if not d:
+    for d in docs:
+        if not d:
+            keep_mask.append(False)
+            continue
+        if use_seeds:
+            occ = _occ_vectors_in_doc(d, embeddings, lexicon, global_wc, total_tokens, window, sif_a)
+            if not occ:
                 keep_mask.append(False)
-                continue
-            if use_seeds:
-                occ = _occ_vectors_in_doc(d, embeddings, lexicon, global_wc, total_tokens, window, sif_a)
-                if not occ:
-                    keep_mask.append(False)
-                else:
-                    keep_mask.append(True)
-                    X_list.append(np.mean(occ, axis=0).astype(np.float64))
             else:
-                v = _full_doc_vector(d, embeddings, global_wc, total_tokens, sif_a)
-                if v is None:
-                    keep_mask.append(False)
-                else:
-                    keep_mask.append(True)
-                    X_list.append(v)
-    else:
-        for posts in docs:
-            if not posts:
+                keep_mask.append(True)
+                X_list.append(np.mean(occ, axis=0).astype(np.float64))
+        else:
+            v = _full_doc_vector(d, embeddings, global_wc, total_tokens, sif_a)
+            if v is None:
                 keep_mask.append(False)
-                continue
-            if use_seeds:
-                occ_all = []
-                for p in posts:
-                    if p:
-                        occ_all.extend(
-                            _occ_vectors_in_doc(p, embeddings, lexicon, global_wc, total_tokens, window, sif_a)
-                        )
-                if not occ_all:
-                    keep_mask.append(False)
-                else:
-                    keep_mask.append(True)
-                    X_list.append(np.mean(occ_all, axis=0).astype(np.float64))
             else:
-                tokens_all = [t for p in posts for t in p]
-                v = _full_doc_vector(tokens_all, embeddings, global_wc, total_tokens, sif_a)
-                if v is None:
-                    keep_mask.append(False)
-                else:
-                    keep_mask.append(True)
-                    X_list.append(v)
+                keep_mask.append(True)
+                X_list.append(v)
 
     X = np.vstack(X_list) if X_list else np.zeros((0, embeddings.vector_size), dtype=np.float64)
     return X, np.array(keep_mask, dtype=bool)
@@ -197,9 +157,8 @@ def build_and_normalize_doc_vectors(
 
     Parameters
     ----------
-    docs : list[list[str]] or list[list[list[str]]]
-        Tokenized documents. Either flat token lists or grouped profiles
-        (list of posts per document).
+    docs : list[list[str]]
+        Tokenized documents.
     embeddings : Embeddings
         Word embedding model providing vector lookups.
     lexicon : set[str]

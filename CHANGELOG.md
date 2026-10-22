@@ -1,7 +1,32 @@
 # Changelog
 
+## 4.0.0
+
+A breaking release. `SSD` now holds one text and nothing about the outcome; each fit names its outcome.
+
+- `SSD(embeddings, texts, lexicon=None, *, window=3, sif_a=1e-3, use_full_doc=False)` takes the texts directly. Strings are tokenized by the embeddings' wordpack and its stopwords. Any other embeddings take token lists, which are used as given. Strings with embeddings that are not a wordpack raise `TypeError`. The `y=` and `data=` arguments are gone.
+- `Corpus` is removed, and so is spaCy: the `[spacy]` extra, spaCy loading and preprocessing, `load_stopwords`, the Polish stopword file and the per-language spaCy table. Wordpacks exist for English only for now, so texts in other languages come in as token lists the caller lemmatized.
+- Every fit takes the outcome as its first argument: values, a column name read from `data=`, or, for `fit_regression()` and `fit_pls()`, a formula whose left side names the outcome column. `fit_multipls()` takes 2-D values or a list of column names. `fit_groups()` takes labels or one column name. Rows with a missing outcome or no document vector are dropped at fit time.
+- New `ssd.with_lexicon(lexicon, *, window=..., sif_a=..., use_full_doc=...)` returns a new `SSD` that shares the tokens, so one tokenization can be tried with several lexicons.
+- The lexicon helpers move from `Corpus` to `SSD`: `suggest_lexicon`, `token_stats`, `coverage_summary` and `evaluate_lexicon`. Their outcome argument works like the fits'.
+- New `ssd.n_kept`: the number of documents that have a vector. Each fit reports its own `n`.
+- SIF word counts are computed on all documents, not only on those with a valid outcome, so the weights no longer change with missing outcome values.
+- `fit_regression()` takes the text as a formula term, `ssd()`: `fit_regression("score ~ age + sex*ssd()", data=df)`. A formula without `ssd(...)` gets `+ ssd()` appended. K is chosen by the PCA sweep without interactions. Each text term gets its own gradient, with `words`, `clusters` and `snippets`; under treatment coding `ssd()` is the gradient at the reference level, and `sexM:ssd()` the difference from it.
+- With more than one text term, `fit_regression()` returns a `RegressionResult` keyed by term (`res["sexM:ssd(essay)"]`). With one text term it returns a `PCAOLSResult`, as before.
+- `fit_regression()` results' `test` gains a `label` column and one row per term label. The first row is the test of all text terms, a refit compared with `glmm.compare`. Each term row is one Wald test of that term's coefficients (`Fit.contrast_test`), so terms contained in an interaction are tested too.
+- New `ssdiff.fit_regression(formula, data, **texts)` fits several texts in one regression: `ssdiff.fit_regression("score ~ ssd(essay) + sex*ssd(diary)", data=df, essay=essay, diary=diary)`. Each text has its own embeddings, lexicon, PCA basis and K. A row stays only if it has a vector in every text. The result is keyed by text, and `test` adds one row per text.
+- New `ssdiff.contrast(g1, g2, embeddings, *, labels=("g1", "g2"))` returns a `ContrastResult`: the normalized difference of the two unit gradients, with `words`, `clusters` and `stats` (`cos_g1_g2`, `diff_norm`). It has no test, no snippets and no documents.
+- `summary()` shows the formula as written, `ssd()` terms included.
+- Results carry `text` (the `SSD` they were fit on) in place of `corpus`, and no longer carry `lang`. A pickled result leaves out its text's embeddings and document vectors.
+- `result.predict(texts)` and `result.attach(texts=..., embeddings=...)` take texts in the form the fit used: strings for a fit on strings, token lists for a fit on token lists. `attach(corpus=...)` is gone.
+- Results from token-list texts have no snippets.
+- The neighbour filter of embeddings other than a wordpack skips a word that contains a digit or starts with an uppercase letter, in every script. Uppercase Greek words are now skipped too.
+- The results page moves to report format 2. It shows each text the result uses, one unit per text term, the per-term and per-text tests, and the contrast page. Documents from token lists show their tokens.
+- `glmm` >= 0.6.2 is required.
+
 ## 3.3.0
 
+- `Corpus(lang=..., model=...)` is renamed `Corpus(spacy_lang=..., spacy_model=...)`: both only choose the spaCy pipeline. The old names raise `TypeError`.
 - `fit_ols()` is renamed `fit_regression()`. The old name still works with the same arguments and warns with `FutureWarning`. Without a formula the results are the same as before.
 - `fit_regression(formula, family=..., link=...)` controls for covariates and nesting: `fit_regression("~ age + gender + (1 | ID)")`. K is still chosen by the PCA sweep; the final model at that K is fit by `glmm`, with the K component scores added to the formula. The p-value tests the components together (F-test for OLS and for Gamma and inverse-Gaussian GLMs, likelihood-ratio test otherwise), and `result.model` holds the glmm fit. `predict()` is not available after a fit with a formula or a non-Gaussian family.
 - `fit_pls(formula)` controls for fixed covariates: `fit_pls("~ age + gender")` regresses y and every column of the document vectors on the formula by OLS and runs PLS and its test on the residuals (Kennedy permutation). Random effects raise `ValueError`.
@@ -14,7 +39,10 @@
 - New `result.save_page(path)` on `fit_pls()`, `fit_regression()`, `fit_groups()` and `fit_multipls()` results writes one HTML file with the result's tables that opens in a browser from disk, with no network. `result.page_data()` returns the same content as a dict.
 - New `fit_pls(ssd_gradients=N)` also returns N rotated gradients from one outcome, as leaves `result["dim-1"]` … `result["dim-N"]` with `.stats` (`score_corr`, `cov_share`), `.words`, `.clusters` and `.snippets`; `rotate="words"` (default) or `None`, rotation diagnostics in `result.pls_info`. The standard fit (p-value, `beta`, `r2`, `docs`, `predict()`) does not change. `report()` and `save_page()` show the gradients. `fit_info` gains `ssd_gradients` and `rotate`.
 - `fit_multipls(k=...)` is now `fit_multipls(ssd_gradients=...)`, and it defaults to the number of outcomes (with `outcome_groups`, to the number of rotation target rows). The `k` column of `stats` and `pls_info` is now `ssd_gradients`. `rotate="outcomes"` now works with every outcome kept: each dimension then loads on one outcome.
+- `fit_pls()` and `fit_multipls()` (and their `result.test(...)` reruns) test with plskit's default `test_method="auto"` instead of always `split_exact`: plskit runs `split_exact` or `split_nb`, chosen from X alone, and `result.test.name` says which ran. With n below 250 it is `split_exact`, as before.
 - Sparse PLS is removed: `fit_pls(keep=...)`, the `"split_nb_seq"` test and `fit_info.keep` are gone.
+- k-means, the `fit_groups()` permutation test and the `median_split` tie-break draw from a new random generator shared with the R package (ssdiff), so clusters, the chosen K of a `fit_regression()` sweep, `fit_groups()` p-values and `median_split` groups differ from earlier versions for the same seed.
+- Profile mode is removed: in `Corpus(texts)` without `pretokenized=True`, an element of `texts` that is a list raises `TypeError`. For several posts per participant, join each participant's posts into one text, or use one row per post with a participant random effect in `fit_regression()`. The snippets table loses `post_id`.
 
 ## 3.2.0
 

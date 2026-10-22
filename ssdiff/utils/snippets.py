@@ -2,8 +2,7 @@
 """
 Snippet extraction along beta and cluster centroids.
 
-Ported from ssdiff.snippets — all pandas usage replaced with plain Python types.
-Mathematical logic is identical.
+Plain Python types only; no pandas.
 """
 from __future__ import annotations
 
@@ -15,7 +14,7 @@ from typing import Any
 import numpy as np
 
 from ssdiff.utils.math import unit_vector
-from ssdiff.utils.text import PreprocessedDoc, PreprocessedProfile
+from ssdiff.utils.text import PreprocessedDoc
 from ssdiff.utils.vectors import compute_global_sif
 
 
@@ -36,57 +35,37 @@ def _centroid_unit_from_cluster_words(words: list, embeddings) -> np.ndarray:
     return unit_vector(c)
 
 
-# a lightweight "doc-like" view used for both single-doc and per-post in profiles
 class _DocLike:
-    """Lightweight struct holding the fields needed by snippet helpers.
-
-    Used as a uniform interface for both single documents (from
-    ``PreprocessedDoc``) and individual posts within a profile.
-    """
+    """Lightweight struct holding the fields needed by snippet helpers."""
 
     __slots__ = (
+        "doc_id",
         "doc_lemmas",
-        "post_id",
-        "profile_id",
         "sents_surface",
         "token_to_sent",
     )
 
     def __init__(
         self,
-        profile_id: int,
-        post_id: int,
+        doc_id: int,
         sents_surface: list[str],
         doc_lemmas: list[str],
         token_to_sent: list[int],
     ) -> None:
         """Initialise all fields directly from caller-supplied values."""
-        self.profile_id = profile_id  # for PreprocessedDoc: equals doc_id
-        self.post_id = post_id  # for PreprocessedDoc: 0
+        self.doc_id = doc_id
         self.sents_surface = sents_surface
         self.doc_lemmas = doc_lemmas
         self.token_to_sent = token_to_sent
 
 
-def _iter_doclikes(
-    pre_docs: list[PreprocessedDoc | PreprocessedProfile],
-) -> Iterator[_DocLike]:
-    """
-    Iterate over all docs/posts as _DocLike objects.
-    Yields one _DocLike per PreprocessedDoc and one per post of a PreprocessedProfile.
-    """
+def _iter_doclikes(pre_docs: list[PreprocessedDoc]) -> Iterator[_DocLike]:
+    """Yield one _DocLike per document."""
     if not pre_docs:
         return
     for di, P in enumerate(pre_docs):
-        if isinstance(P, PreprocessedDoc):
-            yield _DocLike(profile_id=di, post_id=0, sents_surface=P.sents_surface,
-                           doc_lemmas=P.doc_lemmas, token_to_sent=P.token_to_sent)
-            continue
-        for pj, (sents, lemmas, tok2sent) in enumerate(
-            zip(P.post_sents_surface, P.post_doc_lemmas, P.post_token_to_sent)
-        ):
-            yield _DocLike(profile_id=di, post_id=pj, sents_surface=sents,
-                           doc_lemmas=lemmas, token_to_sent=tok2sent)
+        yield _DocLike(doc_id=di, sents_surface=P.sents_surface,
+                       doc_lemmas=P.doc_lemmas, token_to_sent=P.token_to_sent)
 
 
 def _build_global_sif(pre_docs) -> tuple[dict[str, int], int]:
@@ -184,8 +163,7 @@ def _precompute_doc_arrays(
         hit=hit,
         token_to_sent=D.token_to_sent,
         sents_surface=D.sents_surface,
-        profile_id=D.profile_id,
-        post_id=D.post_id,
+        doc_id=D.doc_id,
     )
 
 
@@ -237,8 +215,7 @@ def _collect_occurrences_for_doc(
     essay_lemmas = " ".join(toks)
 
     return dict(
-        profile_id=DA["profile_id"],
-        post_id=DA["post_id"],
+        doc_id=DA["doc_id"],
         occ_mat=occ_mat,
         meta=meta,
         essay_surface=essay_surface,
@@ -256,8 +233,7 @@ class _DL_proxy(_DocLike):
 
     def __init__(self, DA: dict[str, Any]) -> None:
         """Build proxy from a precomputed doc-array dict returned by ``_precompute_doc_arrays``."""
-        self.profile_id = DA["profile_id"]
-        self.post_id = DA["post_id"]
+        self.doc_id = DA["doc_id"]
         self.sents_surface = DA["sents_surface"]
         self.doc_lemmas = DA["toks"]
         self.token_to_sent = DA["token_to_sent"]
@@ -405,8 +381,7 @@ def _collect_sentence_occurrences_for_doc(
     essay_lemmas = " ".join(toks)
 
     return dict(
-        profile_id=DA["profile_id"],
-        post_id=DA["post_id"],
+        doc_id=DA["doc_id"],
         occ_mat=occ_mat,
         meta=meta,
         essay_surface=essay_surface,
@@ -477,8 +452,7 @@ def _collect_doc_occurrences_for_doc(
     essay_lemmas = " ".join(toks)
 
     return dict(
-        profile_id=DA["profile_id"],
-        post_id=DA["post_id"],
+        doc_id=DA["doc_id"],
         occ_mat=occ_mat,
         meta=meta,
         essay_surface=essay_surface,
@@ -492,7 +466,7 @@ def _collect_doc_occurrences(
     verbose: bool = False,
     desc: str = "Snippets: docs",
 ) -> list[dict[str, Any]]:
-    """One occurrence per doc/post, based on *whole text*."""
+    """One occurrence per doc, based on *whole text*."""
     return _parallel_collect(
         _collect_doc_occurrences_for_doc,
         doc_arrays, n_jobs, verbose, desc,
@@ -502,7 +476,7 @@ def _collect_doc_occurrences(
 ############################
 
 
-# ---------- sorting / top-k helpers (replacing pandas) ----------
+# ---------- sorting / top-k helpers ----------
 def _sort_rows_by_cosine_desc(rows: list[dict]) -> list[dict]:
     """Sort list of dicts by 'cosine' key, descending."""
     return sorted(rows, key=lambda r: r["cosine"], reverse=True)
@@ -546,7 +520,7 @@ def cluster_snippets_by_centroids(
 
     Returns dict with 'pos' and 'neg' keys, each a list of dicts.
     Each dict has keys:
-        centroid_label, profile_id, post_id, cosine, seed,
+        centroid_label, doc_id, cosine, seed,
         start_token_idx, end_token_idx, start_sent_idx, end_sent_idx,
         snippet_anchor, essay_text_surface, essay_text_lemmas
 
@@ -617,7 +591,7 @@ def cluster_snippets_by_centroids(
     )
 
     # 2) collect occurrences:
-    #    - if we have seeds -> seed-based windows (old behavior)
+    #    - if we have seeds -> seed-based windows
     #    - if no seeds      -> fallback to *whole-text* occurrences
     if seeds_set:
         occs = _collect_all_occurrences(
@@ -646,8 +620,7 @@ def cluster_snippets_by_centroids(
                 rows.append(
                     dict(
                         centroid_label=lab,
-                        profile_id=occ["profile_id"],
-                        post_id=occ["post_id"],
+                        doc_id=occ["doc_id"],
                         cosine=float(cos_row[k]),
                         seed=seed,
                         start_token_idx=max(0, L),
@@ -691,7 +664,7 @@ def snippets_along_beta(
 
     Returns dict with 'pos' and 'neg' keys, each a list of dicts.
     Each dict has keys:
-        side, profile_id, post_id, cosine, seed,
+        side, doc_id, cosine, seed,
         start_token_idx, end_token_idx, start_sent_idx, end_sent_idx,
         snippet_anchor, essay_text_surface, essay_text_lemmas
 
@@ -766,8 +739,7 @@ def snippets_along_beta(
                 rows_pos.append(
                     dict(
                         side="pos",
-                        profile_id=occ["profile_id"],
-                        post_id=occ["post_id"],
+                        doc_id=occ["doc_id"],
                         cosine=cp,
                         seed=seed,
                         start_token_idx=max(0, L),
@@ -783,8 +755,7 @@ def snippets_along_beta(
                 rows_neg.append(
                     dict(
                         side="neg",
-                        profile_id=occ["profile_id"],
-                        post_id=occ["post_id"],
+                        doc_id=occ["doc_id"],
                         cosine=cn,
                         seed=seed,
                         start_token_idx=max(0, L),

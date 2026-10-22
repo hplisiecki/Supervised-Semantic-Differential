@@ -2,7 +2,7 @@
 
 Covers:
   - compute_global_sif: SIF weight ordering, empty input
-  - build_doc_vectors: seed mode, full mode, profile mode, keep_mask
+  - build_doc_vectors: seed mode, full mode, keep_mask
   - build_and_normalize_doc_vectors: unit norm, use_full_doc path, sif_a=None
 """
 
@@ -158,52 +158,6 @@ def test_build_doc_vectors_full_mode_known_fixture(tiny_kv, lexicon):
 
     X, keep_mask = build_doc_vectors(
         docs, tiny_kv, lexicon, wc, total, window=3, sif_a=sif_a, mode="full"
-    )
-
-    assert keep_mask.tolist() == [True]
-    np.testing.assert_allclose(X[0], expected, atol=1e-10)
-
-
-# ---------------------------------------------------------------------------
-# build_doc_vectors — profile mode (list[list[list[str]]])
-# ---------------------------------------------------------------------------
-
-
-def test_build_doc_vectors_profile_mode_known_fixture(tiny_kv, lexicon):
-    """Profile-mode (grouped posts): doc vector equals mean of per-profile occ vectors.
-
-    Two profiles for one 'document' (person).
-    Profile 0: ['kraj', 'piekny', 'dom']   — seed 'kraj' at idx 0
-    Profile 1: ['narod', 'silny', 'wielki'] — seed 'narod' at idx 0
-    window=1 → context of 'kraj' = ['piekny'], context of 'narod' = ['silny'].
-    """
-    profiles = [
-        [["kraj", "piekny", "dom"], ["narod", "silny", "wielki"]]
-    ]
-    all_flat = ["kraj", "piekny", "dom", "narod", "silny", "wielki"]
-    sif_a = 1e-3
-    window = 1
-
-    wc, total = compute_global_sif([all_flat])  # one flat sentence for global counts
-
-    def _occ(seed_idx, doc, context_tokens_at_window):
-        sum_v = np.zeros(tiny_kv.vector_size, dtype=np.float64)
-        w_sum = 0.0
-        for c in context_tokens_at_window:
-            a = _sif_weight(sif_a, wc.get(c, 0), total)
-            sum_v += a * tiny_kv[c]
-            w_sum += a
-        return sum_v / w_sum if w_sum > 0 else None
-
-    # Profile 0: 'kraj' at idx 0, window=1 → range [0,2), skip j=0 → j=1='piekny'
-    occ0 = _occ(0, ["kraj", "piekny", "dom"], ["piekny"])
-    # Profile 1: 'narod' at idx 0, window=1 → range [0,2), skip j=0 → j=1='silny'
-    occ1 = _occ(0, ["narod", "silny", "wielki"], ["silny"])
-
-    expected = np.mean([occ0, occ1], axis=0).astype(np.float64)
-
-    X, keep_mask = build_doc_vectors(
-        profiles, tiny_kv, lexicon, wc, total, window, sif_a, mode="seed"
     )
 
     assert keep_mask.tolist() == [True]

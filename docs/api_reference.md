@@ -2,9 +2,9 @@
 
 Public API of the `ssdiff` package: main classes, their methods, and arguments.
 
-**Install**: `pip install ssdiff` (core), `pip install ssdiff[spacy]` (spaCy tokenization with `Corpus(texts, lang=...)`, `model=...` or `nlp=...`), `pip install ssdiff[results]` (pandas/Excel/docx/matplotlib export).
-**Python**: 3.11 – 3.15. The `ssdiff[spacy]` extra installs on 3.11 – 3.14 only, because spaCy 3.8 requires Python < 3.15.
-**Imports**: `from ssdiff import Embeddings, Corpus, SSD`.
+**Install**: `pip install ssdiff` (core), `pip install ssdiff[results]` (pandas/Excel/docx/matplotlib export).
+**Python**: 3.11 – 3.15.
+**Imports**: `from ssdiff import Embeddings, SSD, fit_regression, contrast`.
 
 For choosing and loading embeddings see [`embeddings.md`](embeddings.md).
 For result objects (views, exports, reports) see [`results.md`](results.md).
@@ -16,16 +16,15 @@ For internals see [`architecture.md`](architecture.md).
 ## Quick start
 
 ```python
-from ssdiff import Embeddings, Corpus, SSD
+from ssdiff import Embeddings, SSD
 
 emb = Embeddings.load()                    # the default English wordpack, downloaded once
-corpus = Corpus(texts, embeddings=emb)     # the pack's tokenizer and stopwords; no spaCy
-ssd = SSD(emb, corpus, y=scores, lexicon=["happy", "sad", "joy", "anger"])
+ssd = SSD(emb, df["text"], lexicon=["happy", "sad", "joy", "anger"])   # one text, no outcome
 
-result = ssd.fit_regression()  # PCA regression
-# result = ssd.fit_pls()       # PLS
-# result = ssd.fit_groups()    # categorical y
-# result = ssd.fit_multipls()  # several outcomes (y as a DataFrame), PLS3
+result = ssd.fit_regression("score", data=df)   # PCA regression
+# result = ssd.fit_pls("score", data=df)        # PLS
+# result = ssd.fit_groups("condition", data=df) # categorical outcome
+# result = ssd.fit_multipls(["a", "b"], data=df) # several outcomes, PLS3
 
 print(result.stats)
 print(result.words)
@@ -50,7 +49,7 @@ emb = Embeddings.load(path="default", *, verbose=False, parallel=False)
 | `verbose` | `bool` | `False` | Show a tqdm progress bar when loading `.txt`/`.vec`/`.bin`. |
 | `parallel` | `bool` | `False` | Multiprocess loading for `.txt`/`.vec`. |
 
-Supported formats: `.wordpack` (tokenizer, stopwords and ABTT included; needs no spaCy), `.kv` (gensim pickle; no gensim required on load), `.bin` (fastText binary), `.txt`/`.vec` (text), all with optional `.gz` compression. The deprecated `.ssdembed` format no longer loads.
+Supported formats: `.wordpack` (tokenizer, stopwords and ABTT included; takes strings), `.kv` (gensim pickle; no gensim required on load), `.bin` (fastText binary), `.txt`/`.vec` (text), all with optional `.gz` compression.
 
 ### Normalize
 
@@ -88,7 +87,7 @@ vec = emb.get_vector("word", norm=False)    # norm=True → L2-normalized
 "word" in emb                               # membership
 len(emb)                                    # vocab size
 emb.vector_size                             # dimensionality
-emb.vocab_size                              # alias for len(emb)
+emb.vocab_size                              # same as len(emb)
 
 emb.similar_by_vector(vec, topn=10, restrict_vocab=None)
 # → list[tuple[str, float]]  (word, cosine similarity)
@@ -96,111 +95,63 @@ emb.similar_by_vector(vec, topn=10, restrict_vocab=None)
 
 ---
 
-## `Corpus`
+## `SSD`
 
-Tokenizes text via spaCy (lemmas; `pip install ssdiff[spacy]`) or a wordpack's tokenizer (the pack's keys); exposes lexicon helpers.
+Holds one text, tokenized once, and builds personal concept vectors (PCVs) from it and a lexicon on first use. It knows nothing about an outcome: every fit names its own. Several fits, with different outcomes or backends, run on the same `SSD` without rebuilding the vectors.
 
 ### Constructor
 
 ```python
-corpus = Corpus(texts, *, lang=None, model=None, nlp=None,
-                stopwords=None, pretokenized=False, embeddings=None)
+ssd = SSD(embeddings, texts, lexicon=None, *,
+          window=3, sif_a=1e-3, use_full_doc=False)
 ```
 
 | Argument | Type | Default | Description |
 |---|---|---|---|
-| `texts` | `Sequence[str \| list[str]]` | — | Raw strings, or token lists if `pretokenized=True`. |
-| `lang` | `str \| None` | `None` | Language code (`"en"`, `"pl"`, `"de"`, …). Resolves to the default spaCy model. |
-| `model` | `str \| None` | `None` | Explicit spaCy model name. Overrides `lang`. |
-| `nlp` | `spacy.Language \| None` | `None` | Pre-loaded spaCy pipeline. Overrides `lang` / `model`. |
-| `stopwords` | `Sequence[str] \| None` | `None` | Custom stopword list. Falls back to bundled defaults for the resolved language. |
-| `pretokenized` | `bool` | `False` | Skip spaCy — `texts` are already token lists. |
-| `embeddings` | `Embeddings \| None` | `None` | Embeddings loaded from a `.wordpack`: tokenize with the pack's tokenizer and stopwords; no spaCy. Cannot be combined with `lang`, `model`, `nlp` or `pretokenized`. |
+| `embeddings` | `Embeddings` | — | L2-normalized word embeddings. Strings need a wordpack. |
+| `texts` | sequence of `str`, or sequence of token lists | — | One entry per document. Strings are tokenized with the wordpack's tokenizer and stopwords; an empty, `None` or NaN entry is an empty document. Token lists are used as given and are the way to use any embedding that is not a wordpack. A pandas Series gives the text its name. |
+| `lexicon` | `Sequence[str] \| set[str] \| None` | `None` | Seed words for context-window extraction. Needed for document vectors unless `use_full_doc=True`. The lexicon helpers do not need it. |
+| `window` | `int` | `3` | Context window size (tokens) around each seed. |
+| `sif_a` | `float` or `None` | `1e-3` | SIF smoothing. Must be > 0; `None` turns SIF off (plain mean of word vectors). |
+| `use_full_doc` | `bool` | `False` | Use full-document vectors instead of seed-windowed contexts. |
+
+A single string as `texts` raises `TypeError`, and so do strings with embeddings that are not a wordpack. Embeddings that are not L2-normalized raise `RuntimeError`; call `emb.normalize()`.
+
+```python
+ssd = SSD(emb, df["essay"], lexicon)                 # strings, wordpack embeddings
+ssd = SSD(emb, token_lists, lexicon)                 # token lists, any embeddings
+ssd2 = ssd.with_lexicon(other_lexicon)               # same tokens, another lexicon
+```
+
+`ssd.with_lexicon(lexicon, *, window=3, sif_a=1e-3, use_full_doc=False)` returns a new `SSD` on the same tokens with another lexicon and settings. The text is not tokenized again.
 
 Attributes:
 
 | Property | Type | Description |
 |---|---|---|
-| `corpus.docs` | `list[list[str]]` | Tokens per document (stopwords removed): lemmas for spaCy, the pack's keys for a wordpack. |
-| `corpus.pre_docs` | `list[PreprocessedDoc] \| None` | Sentence-level structure for snippet extraction. |
-| `corpus.lang` | `str \| None` | Resolved language code. |
-| `corpus.tokenizer` | `str \| None` | `"spacy:<model>"`, `"wordpack:<name>-<version>"`, or `None` for `pretokenized=True`. |
-| `corpus.n_texts`, `len(corpus)` | `int` | Document count. |
+| `ssd.docs` | `list[list[str]]` | Tokens of each document. |
+| `ssd.pre_docs` | list or `None` | Sentence structure for snippets; `None` for token-list texts. |
+| `ssd.name` | `str \| None` | The text's column name when `texts` is a pandas Series. |
+| `ssd.tokenizer` | `str \| None` | `"wordpack:<name>-<version>"` for strings, `None` for token lists. |
+| `ssd.embeddings` | `Embeddings` | The embeddings the vectors are built in. |
+| `ssd.lexicon`, `ssd.window`, `ssd.sif_a`, `ssd.use_full_doc` | — | Echoes of the settings. |
+| `ssd.n_kept`, `len(ssd)` | `int` | Documents that have a vector, and documents in the text. |
 
-Supported languages out of the box: ca, da, de, el, en, es, fr, hr, it, lt, mk, nb, nl, pl, pt, ro, ru, sl, sv, uk.
+### The outcome argument
 
-### Lexicon helpers
+The first argument of every fit is the outcome, and each fit takes `data=` (a DataFrame or a `dict` of 1-D arrays with one row per document, in the order of the texts):
 
-Both return a `LexiconResult` (see [`results.md`](results.md)).
+- **Values**: an array, list or Series with one value per document.
+- **A column name**: `"score"`, with `data=df`.
+- **A formula** (`fit_regression`, `fit_pls`): `"score ~ age + gender"`, with `data=df`. The left side is the outcome column.
+- **Several outcomes** (`fit_multipls`): a list of column names, a DataFrame, or a 2-D array.
 
-```python
-corpus.suggest_lexicon(y, *, seeds=None, embeddings=None, top_k=30, min_docs=5,
-                       n_bins=4, corr_cap=0.30, var_type="continuous")
-
-corpus.evaluate_lexicon(y, lexicon, *, n_bins=4, corr_cap=0.30,
-                        var_type="continuous")
-```
-
-`suggest_lexicon` ranks corpus tokens for use as seeds; `evaluate_lexicon` scores an existing lexicon, returning per-token diagnostics (`.suggestions`) and aggregate coverage (`.summary`).
-
-With `seeds`, `suggest_lexicon` lists each seed, its `top_k` closest corpus tokens, and the seed with an English ending (`-s`, `-es`, `-d`, `-ed`, `-ing`, `-ies`, `-ied`), in one table sorted by cosine. A token listed for several seeds has one row, with the seed it is closest to and the cosine to that seed. Only tokens in at least `min_docs` documents and in `embeddings` are listed. A lexicon matches exact tokens, so plural forms must be listed.
-
-```python
-lex = corpus.suggest_lexicon(y, seeds=["immigrant", "muslim"], embeddings=emb)
-ssd = SSD(emb, corpus, y, lexicon=["immigrant", "immigrants", "muslim", "muslims"])
-```
-
-| Argument | Type | Default | Description |
-|---|---|---|---|
-| `y` | array-like or `None` | — | Outcome aligned with `corpus.docs`. NaN / `None` entries filtered. `None` keeps every document and returns only the statistics that need no outcome; the outcome columns (`cov_bal`, `corr`, `pvalue`, `direction`, `rank`, and `q1`, `q4`, `corr_any` in `.summary`) are `None`. `suggest_lexicon` takes `None` only with `seeds`. |
-| `lexicon` | iterable[str] | — | Tokens to score (`evaluate_lexicon`). |
-| `seeds` | sequence[str] | `None` | Seed words, each a key of `embeddings` (`suggest_lexicon`). |
-| `embeddings` | `Embeddings` | `None` | Embeddings the cosines are taken in; required with `seeds`. |
-| `top_k` | `int` | `30` | Maximum candidates to return (`suggest_lexicon`). With `seeds`, neighbours listed per seed. |
-| `min_docs` | `int` | `5` | Minimum document frequency (`suggest_lexicon`). |
-| `n_bins` | `int` | `4` | Quantile bins for balanced coverage (continuous). |
-| `corr_cap` | `float` | `0.30` | Cap applied to `|corr|` in the rank penalty. |
-| `var_type` | `str` | `"continuous"` | `"continuous"` or `"categorical"`. |
-
----
-
-## `SSD`
-
-Builds personal concept vectors (PCVs) from the corpus + lexicon, then fits a backend.
-
-### Constructor
-
-```python
-ssd = SSD(embeddings, corpus, y, lexicon, *,
-          window=3, sif_a=1e-3, use_full_doc=False, data=None)
-```
-
-| Argument | Type | Default | Description |
-|---|---|---|---|
-| `embeddings` | `Embeddings` | — | Word-embedding model. |
-| `corpus` | `Corpus` | — | Tokenized corpus aligned with `y`. |
-| `y` | array-like, `str` or `list[str]` | — | Outcome. 1-D numeric for `fit_pls` / `fit_regression`; 1-D categorical labels accepted for `fit_groups`. A DataFrame or 2-D array `(n, q)` of numeric outcomes is for `fit_multipls` only (`SSD.outcome_names` holds the column names). NaN / invalid entries drop their documents silently; with several outcomes a row is dropped if any outcome is missing. With `data`, a column name, or a list of column names for `fit_multipls`. |
-| `lexicon` | `Sequence[str] \| set[str]` | — | Seed words for context-window extraction. |
-| `window` | `int` | `3` | Context window size (tokens) around each seed. |
-| `sif_a` | `float` or `None` | `1e-3` | SIF smoothing. Must be > 0; `None` turns SIF off (plain mean of word vectors). |
-| `use_full_doc` | `bool` | `False` | Use full-document vectors instead of seed-windowed contexts. |
-| `data` | DataFrame or `dict` of 1-D arrays | `None` | One row per corpus document: outcome columns named by `y` and the columns used in `fit_regression` and `fit_pls` formulas. Must have `len(corpus)` rows. |
-
-Attributes after construction:
-
-| Property | Type | Description |
-|---|---|---|
-| `ssd.x` | `ndarray (n_kept, D)` | Document vectors. |
-| `ssd.y` | `ndarray (n_kept,)` or `(n_kept, q)` | Outcome aligned with retained documents; 2-D for several outcomes. |
-| `ssd.outcome_names` | `list[str] \| None` | Outcome column names for 2-D `y` (DataFrame columns, else `"y1"`, …); `None` for 1-D `y`. |
-| `ssd.data` | DataFrame, `dict` or `None` | `data` restricted to the retained documents, one row per row of `ssd.x`. |
-| `ssd.n_raw`, `ssd.n_kept`, `ssd.n_dropped` | `int` | Corpus documents, documents retained, and documents dropped (invalid outcome or no document vector). |
-| `ssd.lexicon`, `ssd.window`, `ssd.sif_a`, `ssd.lang` | — | Echoes of constructor input. |
+A document drops out of a fit when its outcome is missing or when it has no vector. Column names that start with `_ssd_` are reserved.
 
 ### `fit_regression()` — PCA regression
 
 ```python
-result = ssd.fit_regression(formula=None, *,
+result = ssd.fit_regression(outcome, *, data=None,
     family="gaussian", link=None,
     fixed_k=None,
     k_min=2, k_max=120, k_step=2,
@@ -211,34 +162,78 @@ result = ssd.fit_regression(formula=None, *,
 
 | Argument | Type | Default | Description |
 |---|---|---|---|
-| `formula` | `str \| None` | `None` | Right-hand side over columns of `data`, e.g. `"~ age + gender + (1 \| ID)"`. A left-hand side is allowed only as `y` or the column name `y` was given as. Column names starting with `_ssd_` are reserved. |
+| `outcome` | `array-like \| str` | — | Numeric outcome values, a column name of `data`, or a formula over columns of `data`, e.g. `"score ~ age + gender + (1 \| ID)"`. The text is the formula term `ssd()`; a formula without it gets `+ ssd()` added at the end. Without a formula the model is intercept plus components. |
+| `data` | DataFrame or `dict` | `None` | One row per document: the outcome column, covariates and grouping factors. |
 | `family` | `str` | `"gaussian"` | Any `glmm` family of the final model, e.g. `"binomial"` for a 0/1 outcome. |
 | `link` | `str \| None` | `None` | Link function; `None` takes glmm's default for the family. |
 | `fixed_k` | `int \| None` | `None` | Fixed number of PCA components. `None` selects K via the interpretability + stability sweep. |
 | `k_min`, `k_max`, `k_step` | `int` | `2`, `120`, `2` | Sweep range (ignored when `fixed_k` is set). |
 | `verbose` | `bool` | `False` | Print progress. |
-| `pca_sweep_args` | `dict \| None` | `None` | Extra keyword arguments for the PCA-K sweep (e.g. `cluster_topn`, `auck_radius`, `save_tables`, `out_dir`). Ignored when `fixed_k` is set. Otherwise a key `fit_regression` sets itself (`Xs`, `X_scale`, `x`, `ys`, `embeddings`, `pca_k_values`, `verbose`, `lang`) raises `ValueError`. |
+| `pca_sweep_args` | `dict \| None` | `None` | Extra keyword arguments for the PCA-K sweep (e.g. `cluster_topn`, `auck_radius`, `save_tables`, `out_dir`). Ignored when `fixed_k` is set. A key that `fit_regression` sets itself (`Xs`, `X_scale`, `x`, `ys`, `embeddings`, `pca_k_values`, `verbose`) raises `ValueError`. |
 
-Returns a `PCAOLSResult`. K is chosen by the sweep (OLS on standardized y, whatever the family). The final model at that K is fit by `glmm` with the K component scores added to the formula, and `result.model` holds that fit (response `_ssd_y`, components `_ssd_pca_1` … `_ssd_pca_K`). The p-value tests the K components together: the formula alone against the formula plus the components, both fit by ML on the same rows. An OLS model (Gaussian, no random effects) gives the F-test (`test.name == "f_test"`), and so do Gamma and inverse-Gaussian GLMs (Wald F); every other model gives the likelihood-ratio test (`"lrt"`). A column the formula uses must have no missing values in the retained documents. Sweep diagnostics and `result.plot_sweep(path=None, dpi=300)` are available when `fixed_k is None`.
+K is chosen by the sweep (OLS on standardized outcome, whatever the family, without interactions). The final model at that K is fit by `glmm`: the K component scores replace the `ssd()` term in the formula, and `result.model` holds that fit (response `_ssd_y`, components `_ssd_pca_1` … `_ssd_pca_K`). The p-value tests the text terms together: the formula without them against the full formula, both fit by ML on the same rows. An OLS model (Gaussian, no random effects) gives the F-test (`test.name == "f_test"`), and so do Gamma and inverse-Gaussian GLMs (Wald F); every other model gives the likelihood-ratio test (`"lrt"`). A column the formula uses must have no missing values in the retained documents. `ssd()` cannot go inside a random-effect term. Sweep diagnostics and `result.plot_sweep(path=None, dpi=300)` are available when `fixed_k is None`.
 
-For a Gaussian identity-link fit, `beta` is on the standardized-y scale; for other families it is on the link scale (e.g. log-odds). With a formula, `r2` / `r2_adj` are the whole model's, covariates included, and NaN for GLMs and mixed models. For a Gaussian identity-link fit, `docs.y_hat` uses `beta` only, not the covariates or random effects; for other families it is the model's fitted mean on the response scale (e.g. a probability), covariates included. `predict()` raises `NotImplementedError` after a fit with a formula or another family.
+For a Gaussian identity-link fit, `beta` is on the standardized-outcome scale; for other families it is on the link scale (e.g. log-odds). With a formula, `r2` / `r2_adj` are the whole model's, covariates included, and NaN for GLMs and mixed models. For a Gaussian identity-link fit, `docs.y_hat` uses `beta` only, not the covariates or random effects; for other families it is the model's fitted mean on the response scale (e.g. a probability), covariates included. `predict()` raises `NotImplementedError` after a fit with a formula or another family.
 
 ```python
-ssd = SSD(emb, corpus, y="rating", lexicon=lexicon, data=df)
-result = ssd.fit_regression("~ age + gender + (1 | ID)")
-result.stats.pvalue       # likelihood-ratio test of the K components
-result.covariates         # covariate coefficients, with the components held fixed
+result = ssd.fit_regression("rating ~ age + gender + (1 | ID)", data=df)
+result.stats.pvalue       # test of the text terms together
+result.covariates         # covariate coefficients, with the text held fixed
 result.summary()          # compact: glmm summary without the _ssd_* rows, plus the text's test
 result.model.summary()    # full glmm summary, component rows included
 ```
 
-`fit_ols(...)` is the old name: it takes the same keyword arguments and warns with `FutureWarning`.
+Returns a `PCAOLSResult` when the formula has one text term.
+
+#### Interactions
+
+The text can interact with covariates: `"score ~ age + sex*ssd()"`. `glmm` expands the interaction, and the result is a `RegressionResult` with one `PCAOLSResult` leaf per term that contains the text.
+
+```python
+res = ssd.fit_regression("score ~ age + sex*ssd()", data=df)
+res.keys()                       # ['ssd(essay)', 'sexM:ssd(essay)']
+res["sexM:ssd(essay)"].words     # leaf: how the gradient for sexM differs from the reference level
+res.test                         # all-text test, then one Wald test per term
+res.summary()
+```
+
+- A key is the term with `ssd()` written as `ssd(<text name>)`; it is `ssd()` when the text has no name.
+- A leaf's `beta` is the gradient of its term alone. The gradient of one level is the sum of the `beta` of the main text term and of that level's term.
+- `res.test` is a table with columns `label`, `name`, `pvalue`, `statistic`, `df`, `df_resid`, `r2_delta`. The row with an empty label tests all text terms together by comparing fits (`f_test` or `lrt`). The other rows are Wald tests (`wald_f` or `wald_chisq`) of one term's coefficients together, and they include lower-order terms such as `ssd(essay)`.
+- `res.model`, `res.covariates`, `res.fit_info`, `res.sweep`, `res.summary()`, `res.save_page(...)` and `res.attach(...)` belong to the whole fit. `res.report()` and `res.predict()` are on a leaf, not on the container.
+- Two texts cannot interact in one term.
+
+#### `ssdiff.fit_regression()` — several texts
+
+```python
+res = ssdiff.fit_regression(formula, data, *, family="gaussian", link=None,
+    fixed_k=None, k_min=2, k_max=120, k_step=2, verbose=False, pca_sweep_args=None,
+    **texts)
+```
+
+```python
+import ssdiff
+
+both = ssdiff.fit_regression(
+    "score ~ age + ssd(essay) + sex*ssd(diary)", df,
+    essay=essay_ssd, diary=diary_ssd,
+)
+both.keys()               # ['essay', 'diary']
+both["essay"].words       # a text with one term is a PCAOLSResult
+both["diary"].keys()      # ['ssd(diary)', 'sexM:ssd(diary)']
+both.test                 # all texts, then one row per text, then one Wald row per term
+```
+
+Each keyword is a text, named in the formula as `ssd(name)`. The formula needs an outcome on the left and `data`; a bare `ssd()` is not allowed, and the formula must name each text that is passed. The texts and `data` must have the same number of rows, in the same order. A row stays when it has an outcome and a vector in every text. Each text gets its own standardization, PCA and K. `fixed_k`, `k_min`, `k_max`, `k_step` and `pca_sweep_args` apply to every text. The per-text test row compares the full formula with the formula without that text's terms. With one text the result has no text level, as from `SSD.fit_regression`.
+
+`fit_ols(...)` is a deprecated alias of `fit_regression`: same arguments, warns with `FutureWarning`.
 
 ### `fit_pls()` — PLS1
 
 ```python
 result = ssd.fit_pls(
-    formula=None, *,
+    outcome, *,
+    data=None,
     k="auto",
     k_max=5,
     ssd_gradients=1,
@@ -250,14 +245,15 @@ result = ssd.fit_pls(
 
 | Argument | Type | Default | Description |
 |---|---|---|---|
-| `formula` | `str \| None` | `None` | Fixed covariates over columns of `data`, e.g. `"~ age + gender"`. y and every column of the document vectors are regressed on them by OLS, and PLS and its test run on the residuals; the test permutes residuals against residuals (Kennedy, 1995) and can run slightly liberal when the covariates use many degrees of freedom relative to n. Random effects raise `ValueError` (use `fit_regression`). With a formula, `r2` is the R² of the residualized y, `docs.residual` has the covariates taken out, and `predict()` is not available. The covariates' own coefficients are not reported; use `fit_regression` for them. |
-| `k` | `int \| "auto"` | `"auto"` | Number of PLS components. `int` fits at exactly that k. `"auto"` calls `plskit.pls1_find_k_optimal` (selector `r2_se`). The p-value is the `split_exact` test (permutation-calibrated split-half) at the fitted `k`; with `k="auto"` it is the k=1 `split_exact` test. `split_nb` is only the diagnostic chain used to pick `k`. |
+| `outcome` | `array-like \| str` | — | The numeric outcome, one value per document: values, a column name of `data`, or a formula such as `"score ~ age + gender"`. A formula's left side is a column of `data` and its right side holds fixed covariates. The outcome and every column of the document vectors are regressed on them by OLS, and PLS and its test run on the residuals; the test permutes residuals against residuals (Kennedy, 1995) and can run slightly liberal when the covariates use many degrees of freedom relative to n. Random effects and an `ssd()` term raise `ValueError` (use `fit_regression`). With a formula, `r2` is the R² of the residualized outcome, `docs.residual` has the covariates taken out, and `predict()` is not available. The covariates' own coefficients are not reported; use `fit_regression` for them. Missing values drop the document. |
+| `data` | DataFrame or `dict` of 1-D arrays | `None` | One row per document: the outcome column and the formula's covariates. |
+| `k` | `int \| "auto"` | `"auto"` | Number of PLS components. `int` fits at exactly that k. `"auto"` calls `plskit.pls1_find_k_optimal` (selector `r2_se`). The p-value is plskit's default split-half test (`test_method="auto"`: `split_exact` or `split_nb`, chosen from X alone; `result.test.name` says which ran) at the fitted `k`; with `k="auto"` it is the k=1 test. The diagnostic chain used to pick `k` is `split_nb`. |
 | `k_max` | `int` | `5` | Cap for `k="auto"`, clamped to `min(k_max, n-1, D)`. Ignored when `k` is an int. |
 | `ssd_gradients` | `int` | `1` | Number of gradients returned, in `[1, min(n-1, D)]`. At 1 the result is the standard fit alone and `rotate` is ignored. At N > 1, an N-component PLS1 fit on the same standardized data gives N weight vectors, one leaf `result["dim-i"]` each. The standard fit (k selection, test, `beta`, `r2`, `docs`, `predict()`) does not depend on it. |
-| `rotate` | `"words" \| None` | `"words"` | With `ssd_gradients > 1`: `"words"` varimax-rotates the weight vectors against the projection of the leading vocabulary rows, orders them by the correlation of their scores with y (highest first) and flips each so that correlation is positive; it needs attached `Embeddings`. `None` keeps NIPALS order and signs; gradients 2…N then have zero covariance with y. Any other value raises `ValueError`. |
+| `rotate` | `"words" \| None` | `"words"` | With `ssd_gradients > 1`: `"words"` varimax-rotates the weight vectors against the projection of the leading vocabulary rows, orders them by the correlation of their scores with the outcome (highest first) and flips each so that correlation is positive; it needs attached `Embeddings`. `None` keeps NIPALS order and signs; gradients 2…N then have zero covariance with the outcome. Any other value raises `ValueError`. |
 | `n_splits` | `int` | `50` | Random splits for the split-half tests. |
 | `random_state` | `int` | `2137` | Seed. |
-| `test` | `bool` | `True` | Run the confirmatory `split_exact` test. `False` skips it: `pvalue` is NaN, and k selection for `k="auto"` still runs. `result.test(n_splits=..., seed=...)` runs it later; with no arguments it uses 50 splits and no seed. |
+| `test` | `bool` | `True` | Run the confirmatory test. `False` skips it: `pvalue` is NaN, and k selection for `k="auto"` still runs. `result.test(n_splits=..., seed=...)` runs it later; with no arguments it uses 50 splits and no seed. |
 | `verbose` | `bool` | `False` | Print progress. |
 
 Returns a `PLSResult`. Re-run the significance test via `result.test(...)` — see [`results.md`](results.md). With `ssd_gradients=N > 1` it also has:
@@ -272,7 +268,7 @@ Returns a `PLSResult`. Re-run the significance test via `result.test(...)` — s
 ### `fit_groups()` — categorical outcome
 
 ```python
-result = ssd.fit_groups(*,
+result = ssd.fit_groups(outcome, *, data=None,
     median_split=False,
     n_perm=5000,
     correction="holm",
@@ -282,24 +278,27 @@ result = ssd.fit_groups(*,
 
 | Argument | Type | Default | Description |
 |---|---|---|---|
-| `median_split` | `bool` | `False` | Split continuous `y` at the median into `"low"`/`"high"`. |
+| `outcome` | `array-like \| str` | — | One label per document: values, or a column name of `data`. A document with an empty or missing label drops out. |
+| `data` | DataFrame or `dict` | `None` | One row per document; holds the label column. |
+| `median_split` | `bool` | `False` | Split a continuous outcome at the median into `"low"`/`"high"`. |
 | `n_perm` | `int` | `5000` | Permutations for omnibus + pairwise tests. |
 | `correction` | `str` | `"holm"` | `"holm"`, `"bonferroni"`, `"fdr_bh"`, or `"none"`. |
 | `random_state` | `int` | `2137` | Seed. |
 | `verbose` | `bool` | `False` | Print progress. |
 
-Groups with < 20 documents are dropped with a warning. Fewer than 2 surviving groups raises `ValueError`. `fit_groups()` does not mutate `ssd.x` / `ssd.y`, so continuous fits remain callable on the same instance.
+Groups with < 20 documents are dropped with a warning. Fewer than 2 surviving groups raises `ValueError`. `fit_groups()` takes no formula and works on one text.
 
 Returns a `GroupResult`.
 
 ### `fit_multipls()` — several outcomes (PLS3)
 
-Fits the document vectors against several numeric outcomes at once. `SSD` must be built with a DataFrame or 2-D array `y` with at least two columns; for one outcome use `fit_pls`. Needs attached `Embeddings`.
+Fits the document vectors against several numeric outcomes at once. The outcomes are a list of column names of `data`, a DataFrame, or a 2-D array, with at least two columns; for one outcome use `fit_pls`. A row with a missing value in any outcome drops the document. Needs the embeddings attached to the `SSD`.
 
 PLS3 takes the SVD of the cross-covariance between document vectors and outcomes. Dimension `i` pairs one word-space direction with one vector of outcome loadings.
 
 ```python
-result = ssd.fit_multipls(*,
+result = ssd.fit_multipls(outcome, *,
+    data=None,
     ssd_gradients=None,              # None means q
     rotate=None,                     # None | "words" | "outcomes"
     outcome_groups=None,             # {"group": ["outcome_a", "outcome_b"], ...}
@@ -310,6 +309,8 @@ result = ssd.fit_multipls(*,
 
 | Argument | Type | Default | Description |
 |---|---|---|---|
+| `outcome` | `list[str] \| DataFrame \| array` | — | The outcomes: column names of `data`, a DataFrame (column names become outcome names), or a 2-D array (names are `"y1"`, `"y2"`, …). |
+| `data` | DataFrame or `dict` of 1-D arrays | `None` | One row per document; holds the outcome columns. |
 | `ssd_gradients` | `int \| None` | `None` | Number of dimensions, in `[1, min(q, n-1, D)]`. `None` means `q`, or with `outcome_groups` the number of rotation target rows. At `q` every component is kept, so `cov_explained` is 1 by construction. Raises if plskit keeps fewer components. |
 | `rotate` | `None \| "words" \| "outcomes"` | `None` | `None` keeps the SVD dimensions. `"words"`: varimax against the projection of the leading vocabulary rows (up to 50,000) onto the word-space directions. `"outcomes"`: varimax against the outcome loadings, or the group rows when `outcome_groups` is set. At `ssd_gradients = q` without groups it takes `R = V'` with no varimax, so each dimension loads 1 on one outcome. |
 | `outcome_groups` | `dict[str, list[str]] \| None` | `None` | Only with `rotate="outcomes"`. Each group is one rotation target row, the mean of its outcomes' loadings. Outcomes in no group keep their own row. An unknown name, an outcome in two groups, or an empty group raises. `ssd_gradients` cannot exceed the number of target rows. |
@@ -329,12 +330,80 @@ Returns a `MultiPLSResult`:
 - `result["dim-1"].stats` — `cov_share`, `score_corr`
 - `.stats` — `n`, `q`, `ssd_gradients`, `rotate`, `cov_explained`, `pvalue`
 - `.pls_info` — `ssd_gradients`, `rotate`, `order`, `signs`, `sweeps`, `V_converged`, `kaiser_normalized`, `random_state`
-- `.test` — split_exact PLS3 test at LV1, container level only; rerun with `.test(n_splits=..., n_perm=..., seed=...)`
+- `.test` — PLS3 test at LV1 (plskit `test_method="auto"`), container level only; rerun with `.test(n_splits=..., n_perm=..., seed=...)`
 - `.report(top_words={"n": 5})` — stats, rotation, per-dimension outcome and words tables
 
 The p-value tests the first dimension (LV1) and does not depend on `rotate`. Leaves have no p-value.
 
-Runnable example: [`examples/demo_multipls.py`](../examples/demo_multipls.py).
+Runnable example: [`examples/hate_multipls.py`](../examples/hate_multipls.py).
+
+---
+
+## `contrast()` — the difference of two gradients
+
+```python
+c = ssdiff.contrast(g1, g2, embeddings, *, labels=("g1", "g2"))
+```
+
+| Argument | Type | Default | Description |
+|---|---|---|---|
+| `g1`, `g2` | array-like | — | Two gradient vectors of the same length, e.g. `r.gradient` or the `beta` of a leaf. They live in the space of `embeddings`. |
+| `embeddings` | `Embeddings` | — | The embeddings the words are read from. The two gradients may come from different embeddings. |
+| `labels` | `tuple[str, str]` | `("g1", "g2")` | Names of the two gradients on the results page. |
+
+The contrast is `unit(g1) − unit(g2)`, normalized, so the scale of each gradient does not matter. It raises `ValueError` when the two gradients point the same way.
+
+```python
+r1 = ssd.fit_pls("score", data=df)
+r2 = ssd.fit_pls("age", data=df)
+c = ssdiff.contrast(r1.gradient, r2.gradient, emb, labels=("score", "age"))
+c.words.pos
+c.clusters.pos
+c.stats                 # cos_g1_g2, diff_norm
+c.save_page("contrast.html")
+```
+
+Returns a `ContrastResult` with `.words`, `.clusters`, `.stats`, `.beta`, `.gradient` and `.labels`. It has no test, and no documents, so `.snippets`, `.docs` and `.alignment_scores` raise `RuntimeError`.
+
+---
+
+## Lexicon helpers
+
+Methods on `SSD`. They score the tokens of the text, need no lexicon on the `SSD`, and return a `LexiconResult` (see [`results.md`](results.md)).
+
+```python
+ssd.suggest_lexicon(outcome=None, *, data=None, seeds=None, top_k=30, min_docs=5,
+                    n_bins=4, corr_cap=0.30, var_type="continuous")
+
+ssd.evaluate_lexicon(outcome, lexicon, *, data=None, n_bins=4, corr_cap=0.30,
+                     var_type="continuous")
+
+ssd.token_stats(outcome, lexicon, *, data=None, n_bins=4, corr_cap=0.30,
+                var_type="continuous")        # list of dicts: the per-token part
+ssd.coverage_summary(outcome, lexicon, *, data=None, n_bins=4,
+                     var_type="continuous")   # dict: the aggregate part
+```
+
+`suggest_lexicon` ranks tokens for use as seeds; `evaluate_lexicon` scores an existing lexicon, returning per-token diagnostics (`.suggestions`) and aggregate coverage (`.summary`).
+
+With `seeds`, `suggest_lexicon` lists each seed, its `top_k` closest tokens of the text, and the seed with an English ending (`-s`, `-es`, `-d`, `-ed`, `-ing`, `-ies`, `-ied`), in one table sorted by cosine. A token listed for several seeds has one row, with the seed it is closest to and the cosine to that seed. Only tokens in at least `min_docs` documents and in the embeddings are listed. A lexicon matches exact tokens, so plural forms must be listed.
+
+```python
+lex = ssd.suggest_lexicon("score", data=df, seeds=["immigrant", "muslim"])
+ssd = ssd.with_lexicon(["immigrant", "immigrants", "muslim", "muslims"])
+```
+
+| Argument | Type | Default | Description |
+|---|---|---|---|
+| `outcome` | array-like, column name, or `None` | — | Outcome values or a column name of `data`, one per document. NaN / `None` entries filtered. `None` keeps every document and returns only the statistics that need no outcome; the outcome columns (`cov_bal`, `corr`, `pvalue`, `direction`, `rank`, and `q1`, `q4`, `corr_any` in `.summary`) are `None`. `suggest_lexicon` takes `None` only with `seeds`. |
+| `data` | DataFrame | `None` | Holds the column `outcome` names. |
+| `lexicon` | iterable[str] | — | Tokens to score (`evaluate_lexicon`, `token_stats`, `coverage_summary`). |
+| `seeds` | sequence[str] | `None` | Seed words, each a key of the embeddings (`suggest_lexicon`). |
+| `top_k` | `int` | `30` | Maximum candidates to return (`suggest_lexicon`). With `seeds`, neighbours listed per seed. |
+| `min_docs` | `int` | `5` | Minimum document frequency (`suggest_lexicon`). |
+| `n_bins` | `int` | `4` | Quantile bins for balanced coverage (continuous). |
+| `corr_cap` | `float` | `0.30` | Cap applied to `|corr|` in the rank penalty. |
+| `var_type` | `str` | `"continuous"` | `"continuous"` or `"categorical"`. |
 
 ---
 
@@ -350,12 +419,16 @@ result.words / .clusters / .snippets / .docs    # continuous; also .words/.clust
 result.pairs                # groups only — PairsListView of Pair dataclass rows
 gr[('g1', 'g2')].words      # idiomatic per-pair zoom (also .clusters, .snippets, .stats, …)
 gr.pairs[('g1', 'g2')]      # raw Pair dataclass (fields: T, p_raw, p_corrected, cohens_d, contrast, …)
+res["sexM:ssd(essay)"].words    # one term of an interaction fit
 result.suggestions / .tokens / .summary         # LexiconResult
 result.summary()            # PLS / PCA regression — compact summary
+result.predict(new_texts)   # PLS / PCA regression without a formula
 result.save_page(path) / result.page_data()     # one offline HTML page / its content as a dict; not LexiconResult
-result.attach(corpus=..., embeddings=...)       # re-wire after un-pickling
+result.attach(texts=..., embeddings=...)        # re-wire after un-pickling
 result.clear_cache()
 ```
+
+A result keeps the text it was fit on as `result.text` (an `SSD`), which snippets and `docs.id()` read.
 
 ### Reports
 
@@ -388,12 +461,12 @@ r.save("report.md") # .md .txt .html .tex .docx .json
 ### Lexicon suggestions (also a result)
 
 ```python
-lex = corpus.suggest_lexicon(scores, top_k=30)
-lex.tokens           # list[str] — suggested tokens in table order, ready to pass back to SSD
+lex = ssd.suggest_lexicon("score", data=df, top_k=30)
+lex.tokens           # list[str] — suggested tokens in table order, ready to pass to SSD
 lex.suggestions      # per-token table
 lex.report().save("lexicon.md")
 
-eval_ = corpus.evaluate_lexicon(scores, lex.tokens[:10])
+eval_ = ssd.evaluate_lexicon("score", lex.tokens[:10], data=df)
 eval_.summary        # aggregate coverage
 ```
 
@@ -405,31 +478,38 @@ For the full results surface (views, to_dict / to_df / to_records, per-view `sav
 
 ```python
 import numpy as np
-from ssdiff import Embeddings, Corpus, SSD
+import ssdiff
+from ssdiff import Embeddings, SSD
 
-texts  = [...]                     # list[str]
-scores = np.array([...])           # continuous outcome
-groups = [...]                     # categorical labels
+# df: one row per document, with columns "text", "score", "age", "sex", "condition"
+emb = Embeddings.load()
 
-emb = Embeddings.load("glove_300d.bin").normalize(l2=True, abtt=1)
-corpus = Corpus(texts, lang="en")
-
-# Lexicon selection
-lex = corpus.suggest_lexicon(scores, top_k=30)
+# Lexicon selection: the SSD needs no lexicon yet
+ssd = SSD(emb, df["text"])
+lex = ssd.suggest_lexicon("score", data=df, top_k=30)
 lexicon = lex.tokens[:20]
 
 # Continuous fit — PCA regression
-ssd = SSD(emb, corpus, y=scores, lexicon=lexicon, window=3)
-ols = ssd.fit_regression()
+ssd = ssd.with_lexicon(lexicon, window=3)
+ols = ssd.fit_regression("score", data=df)
 ols.plot_sweep("sweep.png")
 ols.report(clusters={"n": 50, "n_words": 10, "n_snippets": 2}).save("report_ols.md")
 
+# The same, with a covariate and an interaction
+inter = ssd.fit_regression("score ~ age + sex*ssd()", data=df)
+inter.summary()
+inter.save_page("interaction.html")
+
 # Continuous fit — PLS on the same SSD
-pls = ssd.fit_pls(k="auto")
+pls = ssd.fit_pls("score", data=df, k="auto")
 pls.report(clusters={"n": 50, "n_words": 10, "n_snippets": 2}).save("report_pls.md")
 
 # Group comparison
-ssd_g = SSD(emb, corpus, y=groups, lexicon=lexicon)
-gr = ssd_g.fit_groups(n_perm=5000, correction="holm")
+gr = ssd.fit_groups("condition", data=df, n_perm=5000, correction="holm")
 gr.report().save("report_groups.md")
+
+# What differs between two fitted gradients
+age = ssd.fit_pls("age", data=df)
+c = ssdiff.contrast(pls.gradient, age.gradient, emb, labels=("score", "age"))
+c.words.pos
 ```

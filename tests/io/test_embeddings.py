@@ -365,18 +365,17 @@ def test_load_does_not_falsely_set_unit_flag(tmp_path):
     assert reloaded.l2_normalized is False
 
 
-def test_ssd_init_raises_on_unnormed_embedding(tiny_kv, sample_docs, sample_y, lexicon):
+def test_ssd_init_raises_on_unnormed_embedding(tiny_kv, sample_docs, lexicon):
     """SSD requires L2-normalised embeddings."""
     import pytest
 
-    from ssdiff import SSD, Corpus
+    from ssdiff import SSD
     # Force the flag off to simulate a raw (un-normalised) embedding.
     tiny_kv_raw = type(tiny_kv).__new__(type(tiny_kv))
     tiny_kv_raw.__dict__.update(tiny_kv.__dict__)
     tiny_kv_raw.l2_normalized = False
-    corpus = Corpus(sample_docs, lang="pl", pretokenized=True)
     with pytest.raises(RuntimeError, match="L2-normalised embeddings"):
-        SSD(tiny_kv_raw, corpus, sample_y, lexicon)
+        SSD(tiny_kv_raw, sample_docs, lexicon)
 
 
 def test_get_vector_norm_true_raises_on_unnormed():
@@ -404,7 +403,7 @@ def test_similar_by_vector_raises_on_unnormed():
 
 
 def test_lazy_normaliser_state_removed():
-    """The lazy normaliser API and its hidden state are gone."""
+    """Embeddings has no lazy normaliser API (get_normed_vectors) and no _is_unit_normed state."""
     import numpy as np
 
     from ssdiff.embeddings import Embeddings

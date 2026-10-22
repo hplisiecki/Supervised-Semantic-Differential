@@ -1,6 +1,6 @@
 """Tests for View.save(), ScalarView.save(), and Report.save() / Report.to_text().
 
-Consolidates 5 old IO test files. Tests all 8 tabular extensions (csv, json,
+Tests all 8 tabular extensions (csv, json,
 xlsx, md, txt, html, tex, docx) and 6 narrative Report extensions (md, txt,
 html, tex, docx, json). Optional deps (openpyxl, python-docx) are
 conditionally skipped via pytest.importorskip.
@@ -11,8 +11,10 @@ from __future__ import annotations
 import csv
 import json
 
+import numpy as np
 import pytest
 
+from ssdiff import SSD
 from ssdiff.results.display import NARRATIVE_EXTS, TABULAR_EXTS
 from ssdiff.results.report import Report, Section
 
@@ -46,7 +48,7 @@ def _minimal_report() -> Report:
 
 
 # ---------------------------------------------------------------------------
-# Invariant 1 – parametrize over all supported tabular extensions
+# parametrize over all supported tabular extensions
 # ---------------------------------------------------------------------------
 
 # Extensions that require optional deps; guarded with importorskip inside test
@@ -89,7 +91,7 @@ def test_view_save_csv_roundtrip(pls_result, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Invariant 2 – save(path=None) creates file in cwd using default name
+# save(path=None) creates file in cwd using default name
 # ---------------------------------------------------------------------------
 
 def test_view_save_default_cwd(pls_result, tmp_path, monkeypatch):
@@ -107,7 +109,7 @@ def test_view_save_default_cwd(pls_result, tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Invariant 3 – save(Path("out.csv")) accepts a Path object
+# save(Path("out.csv")) accepts a Path object
 # ---------------------------------------------------------------------------
 
 def test_view_save_accepts_path_object(pls_result, tmp_path):
@@ -121,7 +123,7 @@ def test_view_save_accepts_path_object(pls_result, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Invariant 4 – save("out") with no extension raises ValueError
+# save("out") with no extension raises ValueError
 # ---------------------------------------------------------------------------
 
 def test_view_save_no_extension_raises(pls_result, tmp_path):
@@ -132,7 +134,7 @@ def test_view_save_no_extension_raises(pls_result, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Invariant 5 – save("out.xyz") with unknown extension raises ValueError
+# save("out.xyz") with unknown extension raises ValueError
 # ---------------------------------------------------------------------------
 
 def test_view_save_unknown_extension_raises(pls_result, tmp_path):
@@ -143,7 +145,7 @@ def test_view_save_unknown_extension_raises(pls_result, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Invariant 6 – save("out.csv", k=3) produces exactly 3 data rows
+# save("out.csv", k=3) produces exactly 3 data rows
 # ---------------------------------------------------------------------------
 
 def test_view_save_k_caps_rows(pls_result, tmp_path):
@@ -160,11 +162,10 @@ def test_view_save_k_caps_rows(pls_result, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Invariant 6b – save(path, k=N) contract holds for EVERY row-bearing view
+# save(path, k=N) contract holds for EVERY row-bearing view
 # ---------------------------------------------------------------------------
-# Regression for an old gap: only WordsView was tested with k=N, so a broken
-# __getitem__-on-slice in any sibling view (e.g. ClustersView returning a
-# bare list) only surfaced when a downstream caller exercised that path.
+# Every row-bearing view must honor save(path, k=N); a __getitem__ on a slice
+# that returns a bare list would only crash at write time.
 
 _ROW_VIEW_GETTERS = [
     ("words",                 lambda r: r.words),
@@ -226,7 +227,7 @@ def test_view_slice_returns_view_all_views(pls_result, label, getter):
 
 
 # ---------------------------------------------------------------------------
-# Invariant 7 – ScalarView.save("out.csv", k=0) is a silent no-op or pins
+# ScalarView.save("out.csv", k=0) is a silent no-op or pins
 # ---------------------------------------------------------------------------
 
 def test_scalar_view_save_k_zero(pls_result, tmp_path):
@@ -250,7 +251,7 @@ def test_scalar_view_save_k_zero(pls_result, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Invariant 9 – Report.save("out.md") starts with "# " (ATX header)
+# Report.save("out.md") starts with "# " (ATX header)
 # ---------------------------------------------------------------------------
 
 def test_report_save_md_starts_with_atx_header(tmp_path):
@@ -266,7 +267,7 @@ def test_report_save_md_starts_with_atx_header(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Invariant 10 – Report.save("out.xyz") raises ValueError
+# Report.save("out.xyz") raises ValueError
 # ---------------------------------------------------------------------------
 
 def test_report_save_unknown_extension_raises(tmp_path):
@@ -317,3 +318,16 @@ def test_report_save_json_roundtrip(tmp_path):
     data = json.loads(out.read_text(encoding="utf-8"))
     assert data["title"] == report.title
     assert "sections" in data
+
+
+def test_predict_takes_the_fit_form(tiny_kv, large_docs, lexicon, large_y):
+    r = SSD(tiny_kv, large_docs, lexicon).fit_regression(large_y, fixed_k=3)
+    kept = list(r.docs)[:4]
+    np.testing.assert_allclose(r.predict([large_docs[d.doc_id] for d in kept]), [d.y_hat for d in kept])
+    with pytest.raises(TypeError, match="token lists"):
+        r.predict([" ".join(d) for d in large_docs[:4]])
+
+
+def test_attach_texts_count_must_match(pls_result):
+    with pytest.raises(ValueError, match="documents"):
+        pls_result.attach(texts=["people work."])

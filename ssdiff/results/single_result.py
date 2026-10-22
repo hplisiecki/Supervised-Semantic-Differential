@@ -1,7 +1,7 @@
 """`_SingleResult` — leaf base for one gradient's views and derived arrays.
 
-Holds everything derivable from ``(beta, x, embeddings, corpus, lexicon,
-window, sif_a, lang)``. Key-agnostic: knows nothing about whether it lives
+Holds everything derivable from ``(beta, x, embeddings, text, lexicon,
+window, sif_a)``. Key-agnostic: knows nothing about whether it lives
 standalone (as ``ContinuousResult``) or inside a container (as ``PairResult``).
 
 Lazy views (`.words`, `.clusters`, `.snippets`, `cluster_snippets`) and the
@@ -27,7 +27,7 @@ class _SingleResult(Result):
 
     Subclasses are responsible for setting ``self.stats`` and (optionally)
     ``self.test``; this base handles only what's derivable from
-    ``(x, beta, embeddings, corpus, …)``.
+    ``(x, beta, embeddings, text, …)``.
     """
 
     def __init__(
@@ -36,19 +36,17 @@ class _SingleResult(Result):
         x: np.ndarray,
         beta: np.ndarray,
         embeddings: Any = None,
-        corpus: Any = None,
+        text: Any = None,
         lexicon: set | None = None,
         window: int = 3,
         sif_a: float | None = 1e-3,
-        lang: str | None = None,
     ):
         super().__init__()
         self.embeddings = embeddings
-        self.corpus = corpus
+        self.text = text
         self.lexicon = set(lexicon) if lexicon else set()
         self.window = int(window)
         self.sif_a = None if sif_a is None else float(sif_a)
-        self.lang = lang
 
         # Keep raw x; derive gradient/beta_norm up front (cheap).
         self._x = x
@@ -100,12 +98,11 @@ class _SingleResult(Result):
         from ssdiff.utils.neighbors import filtered_neighbors
 
         out: list[Word] = []
-        lang = self.lang or "pl"
         for side, vec, sign in [("pos", self.gradient, 1.0),
                                  ("neg", -self.gradient, -1.0)]:
             rank = 0
             for word, cos in filtered_neighbors(
-                self.embeddings, vec, topn=100, lang=lang,
+                self.embeddings, vec, topn=100,
             ):
                 signed_cos = float(cos) * sign
                 if (side == "pos" and signed_cos < 0) or \
@@ -144,7 +141,7 @@ class _SingleResult(Result):
         raw = cluster_top_neighbors(
             self.embeddings, self.gradient, topn=topn, k=k,
             k_min=k_min, k_max=k_max, random_state=random_state,
-            min_cluster_size=min_cluster_size, side=side, lang=self.lang or "pl",
+            min_cluster_size=min_cluster_size, side=side,
         )
         rows: list[Cluster] = []
         words_rows: list[ClusterWord] = []
@@ -181,7 +178,7 @@ class _SingleResult(Result):
         params = {**defaults, **extraction_params}
 
         def _compute():
-            self._require_resource("corpus", "snippets")
+            self._require_resource("text", "snippets")
             self._require_resource("embeddings", "snippets")
             return SnippetsView(
                 self._compute_snippets_rows(**params),
@@ -194,7 +191,7 @@ class _SingleResult(Result):
         from ssdiff.utils.snippets import snippets_along_beta
 
         out = snippets_along_beta(
-            pre_docs=self.corpus.pre_docs,
+            pre_docs=self.text.pre_docs,
             ssd=self,
             token_window=self.window,
             seeds=self.lexicon or None,
@@ -210,7 +207,7 @@ class _SingleResult(Result):
             for d in out[side]:
                 rows.append(Snippet(
                     snippet_id=sid, side=side,
-                    doc_id=int(d["profile_id"]),
+                    doc_id=int(d["doc_id"]),
                     cosine=float(d["cosine"]),
                     seed=d["seed"],
                     start_token_idx=int(d["start_token_idx"]),
@@ -222,7 +219,6 @@ class _SingleResult(Result):
                     text_lemmas=d["essay_text_lemmas"],
                     cluster_id=None,
                     contrast=contrast,
-                    post_id=d.get("post_id"),
                 ))
                 sid += 1
         return rows
@@ -254,7 +250,7 @@ class _SingleResult(Result):
         }
 
         def _compute():
-            self._require_resource("corpus", "cluster_snippets")
+            self._require_resource("text", "cluster_snippets")
             self._require_resource("embeddings", "cluster_snippets")
             words_by_cid: dict[int, list[dict]] = {}
             for cw in cluster_view._words_rows:
@@ -279,7 +275,7 @@ class _SingleResult(Result):
             neg_arg = clusters_arg if side == "neg" else None
 
             out = cluster_snippets_by_centroids(
-                pre_docs=self.corpus.pre_docs, ssd=shim,
+                pre_docs=self.text.pre_docs, ssd=shim,
                 pos_clusters=pos_arg, neg_clusters=neg_arg,
                 token_window=self.window, seeds=self.lexicon or None,
                 sif_a=self.sif_a, top_per_cluster=top_per_cluster,
@@ -294,7 +290,7 @@ class _SingleResult(Result):
                 rank = int(d["centroid_label"].rsplit("_", 1)[-1])
                 rows.append(Snippet(
                     snippet_id=sid, side=side,
-                    doc_id=int(d["profile_id"]),
+                    doc_id=int(d["doc_id"]),
                     cosine=float(d["cosine"]),
                     seed=d["seed"],
                     start_token_idx=int(d["start_token_idx"]),
@@ -306,7 +302,6 @@ class _SingleResult(Result):
                     text_lemmas=d["essay_text_lemmas"],
                     cluster_id=rank_to_cid.get(rank),
                     contrast=contrast,
-                    post_id=d.get("post_id"),
                 ))
             return SnippetsViewSided(side=side, all_rows=rows)
 

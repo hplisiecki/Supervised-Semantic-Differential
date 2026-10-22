@@ -2,13 +2,26 @@
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
 import numpy as np
 
-from ssdiff.lang_config import get_config
-
 from .math import kmeans, kmeans_auto_k, unit_vector
+
+_DIGIT = re.compile(r"\d")
+
+
+def skip_neighbor(embeddings, word: str) -> bool:
+    """Return True if ``word`` must not appear among neighbor words.
+
+    A wordpack's own filter (``embeddings.neighbor_filter``) decides when it
+    is set.  Otherwise a word is skipped if it contains a digit or starts
+    with an uppercase letter (proper nouns, numbers).
+    """
+    if embeddings.neighbor_filter is not None:
+        return embeddings.neighbor_filter.match(word) is not None
+    return _DIGIT.search(word) is not None or word[:1].isupper()
 
 
 def filtered_neighbors(
@@ -17,14 +30,12 @@ def filtered_neighbors(
     topn: int = 20,
     cand: int = 2000,
     restrict: int = 10000,
-    lang: str = "pl",
 ) -> list[tuple[str, float]]:
     """Return top cosine neighbors, filtering out numbers and capitalized tokens.
 
     Queries the embedding model for candidate neighbors, then discards tokens
     that contain digits or start with an uppercase letter, returning the first
-    ``topn`` clean results.  The filter pattern is language-aware (configured
-    in :mod:`ssdiff.lang_config`).
+    ``topn`` clean results.  The filter is :func:`skip_neighbor`.
 
     Parameters
     ----------
@@ -39,10 +50,6 @@ def filtered_neighbors(
         Must be >= ``topn`` to ensure enough results survive filtering.
     restrict : int, default 10000
         Restrict the search to the top-N most frequent words in the vocabulary.
-    lang : str, default ``"pl"``
-        Language code — selects the token-filter regex from
-        :func:`lang_config.get_config` when ``embeddings.neighbor_filter``
-        (a wordpack's own filter) is not set.
 
     Returns
     -------
@@ -50,11 +57,10 @@ def filtered_neighbors(
         Filtered neighbors as ``(word, cosine_similarity)`` pairs, sorted by
         descending similarity.
     """
-    bad_token = embeddings.neighbor_filter or get_config(lang).bad_token_re
     nbrs = embeddings.similar_by_vector(vec, topn=cand, restrict_vocab=restrict)
     out = []
     for w, sim in nbrs:
-        if not bad_token.match(w):
+        if not skip_neighbor(embeddings, w):
             out.append((w, sim))
             if len(out) >= topn:
                 break
@@ -73,7 +79,6 @@ def cluster_top_neighbors(
     random_state: int = 2137,
     min_cluster_size: int = 2,
     side: Literal["pos", "neg"] = "pos",
-    lang: str = "pl",
 ) -> list[dict]:
     """Cluster the top vocabulary neighbors of +/-beta into interpretable themes.
 
@@ -106,9 +111,6 @@ def cluster_top_neighbors(
     side : "pos" or "neg", default "pos"
         Which end of *beta* to query.  ``"pos"`` queries ``+beta``;
         ``"neg"`` queries ``-beta``.
-    lang : str, default "pl"
-        Language code for the token-filter regex (see
-        :func:`~ssdiff.lang_config.get_config`).
 
     Returns
     -------
@@ -126,7 +128,7 @@ def cluster_top_neighbors(
     bu = unit_vector(beta)
     vec = bu if side == "pos" else -bu
 
-    pairs = filtered_neighbors(embeddings, vec, topn=topn, restrict=restrict_vocab, lang=lang)
+    pairs = filtered_neighbors(embeddings, vec, topn=topn, restrict=restrict_vocab)
     words = [w for (w, _s) in pairs]
     if len(words) < max(2, k_min):
         raise ValueError("Not enough neighbors to cluster.")

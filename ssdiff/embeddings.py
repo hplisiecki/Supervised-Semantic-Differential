@@ -147,7 +147,7 @@ class Embeddings:
         """Load embeddings from a file, or a wordpack by tag or full name.
 
         Supports: .wordpack, .kv, .bin, .txt, .vec (and .gz variants of the
-        last four). The deprecated .ssdembed format no longer loads.
+        last four). The .ssdembed format is not supported.
 
         ``path`` is read in this order:
 
@@ -210,10 +210,9 @@ class Embeddings:
         emb = _load_embeddings(path, verbose=verbose, parallel=parallel)
         fmt = os.path.splitext(low.removesuffix(".gz"))[1] or "non-wordpack"
         warnings.warn(
-            f"Loading a {fmt} embedding: build the Corpus with spaCy "
-            "(`Corpus(texts, lang=...)`, needs `pip install ssdiff[spacy]`) or from "
-            "pretokenized texts (`Corpus(tokens, pretokenized=True)`). "
-            "A .wordpack embedding tokenizes texts itself, without spaCy.",
+            f"Loading a {fmt} embedding: build the text from token lists "
+            "(`SSD(emb, tokens)`). "
+            "A .wordpack embedding tokenizes strings itself.",
             UserWarning,
             stacklevel=2,
         )

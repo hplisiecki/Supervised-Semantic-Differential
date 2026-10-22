@@ -4,7 +4,7 @@ Covers:
 - format.py primitives: fmt_p, fmt_r, fmt_d, fmt_sig, fmt_count, fmt_pct, truncate,
   fmt_table, default_alignment
 - display.py: set_repr_hints, _save_hint_enabled
-- Result class reprs: PLSResult, PCAOLSResult, GroupResult, LexiconResult (one spec each)
+- Result class reprs: PLSResult, PCAOLSResult, GroupResult, LexiconResult (one repr test each)
 - View save-hint sanity: WordsView, ClustersView, SnippetsView, DocsView
 """
 
@@ -260,7 +260,7 @@ def test_repr_hints_bad_type_int_raises():
 
 
 # ---------------------------------------------------------------------------
-# Result-class repr spec examples (one per class)
+# Result-class repr examples (one per class)
 # ---------------------------------------------------------------------------
 
 def test_pls_result_repr(pls_result):

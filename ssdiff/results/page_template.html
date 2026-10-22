@@ -397,12 +397,12 @@ dl.kv dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywher
 </script>
 <script>
 "use strict";
-const REPORT_FORMAT = 1;
+const REPORT_FORMAT = 2;
 const { h, render, createContext } = preact;
 const { useState, useMemo, useContext, useEffect, useRef } = preactHooks;
 const html = htm.bind(h);
-// The browser app shows this page in a frame with data-embedded on <html>. It puts
-// the report's Export button in its own toolbar and calls window.ssdReport.export.
+// When a host page embeds this file in a frame, it sets data-embedded on <html>,
+// shows its own Export button and calls window.ssdReport.export(ext).
 const EMBEDDED = document.documentElement.hasAttribute("data-embedded");
 const REPORT_EXTS = ["html", "md", "txt", "tex", "json"];
 // The page as loaded, before rendering: the .html export writes this file again.
@@ -433,6 +433,17 @@ const cellText = (col, row) => {
   return isNumFmt(col.fmt) ? s : cut(s);
 };
 const embLabel = E => E && E.name ? E.name + (E.version ? " v" + E.version : "") : DASH;
+// every distinct embedding; with several texts each is prefixed by the names of the texts that use it
+const embLine = texts => {
+  const byLabel = new Map();
+  for (const t of texts) {
+    const label = embLabel(t.embeddings);
+    byLabel.set(label, [...(byLabel.get(label) || []), ...(t.name ? [t.name] : [])]);
+  }
+  return [...byLabel].map(([label, names]) => (texts.length > 1 && names.length ? names.join(", ") + ": " : "") + label)
+    .join(" \u00B7 ");
+};
+const NO_SNIPPETS = "No snippets: this text came in as token lists";
 
 // table JSON {columns, rows} -> array of row objects
 const objs = t => t ? t.rows.map(r => Object.fromEntries(t.columns.map((c, i) => [c, r[i]]))) : null;
@@ -594,20 +605,20 @@ function download(file) {
 // One place defines every table of every tab: the tabs render from these specs
 // and the whole-report export walks them, so both always agree.
 const C = (key, label, fmt, extra) => ({ key, label, fmt, ...extra });
-const KIND_LABEL = { pls: "PLS", pca_ols: "PCA+OLS", groups: "Groups", multipls: "MultiPLS" };
+const KIND_LABEL = { pls: "PLS", pca_ols: "PCA+OLS", groups: "Groups", multipls: "MultiPLS", contrast: "Contrast" };
 
 function buildSpecs(data, unit, ui) {
-  const T = unit.tables, kind = data.kind, specs = {};
+  const T = unit.tables, kind = data.kind, specs = {}, text = data.texts[unit.text];
+  const docCol = text.snippets === false ? "Tokens" : "Document Text";
   const add = (tab, s) => { if (s.rows) specs[s.id] = { tab, srcCols: s.srcCols, ...s }; };
   const sideName = side => side === "pos" ? unit.pos_label : unit.neg_label;
   // dim: a MultiPLS dimension, or one of the extra gradients of a PLS fit (every PLS unit but "main")
   const dim = kind === "multipls" || (kind === "pls" && unit.key !== "main");
-  const pyUnit = kind === "groups" ? `result[(${unit.key.split("_").map(g => JSON.stringify(g)).join(", ")})]`
-    : dim ? `result[${JSON.stringify(unit.key)}]` : "result";
+  const moderated = kind === "pca_ols" && unit.key.includes(":");  // a text term with a moderator
   const continuous = (kind === "pls" || kind === "pca_ols") && !dim;
-  // groups: each side is named by its group; dimensions: by their sign
-  const sideSub = side => continuous ? (side === "pos" ? "higher outcome" : "lower outcome")
-    : dim ? (side === "pos" ? "positive end" : "negative end") : null;
+  // groups: each side is named by its group; dimensions and moderated terms: by their sign
+  const sideSub = side => dim || moderated ? (side === "pos" ? "positive end" : "negative end")
+    : continuous ? (side === "pos" ? "higher outcome" : "lower outcome") : null;
 
   // Cluster Overview
   const clusters = objs(T.clusters), cwords = objs(T.cluster_words);
@@ -617,7 +628,7 @@ function buildSpecs(data, unit, ui) {
       return { ...c, "#": c.cluster_id + 1, top_n: members.length ? members.slice(0, ui.topWords).join(", ") : c.top_words };
     });
     add("overview", { id: "clusters_" + side, title: sideName(side), subtitle: sideSub(side),
-      file: "clusters_" + side, rows, srcCols: T.clusters.columns, py: `${pyUnit}.clusters.${side}`,
+      file: "clusters_" + side, rows, srcCols: T.clusters.columns,
       cols: [C("#", "#", "int"), C("size", "Size", "int"), C("coherence", "Coherence", "num3"),
              C("centroid_cos_beta", "Centroid cos(\u03b2)", "num3"), C("top_n", "Top Words", "text", { wide: true })] });
   }
@@ -627,7 +638,6 @@ function buildSpecs(data, unit, ui) {
     const rows = csn.filter(s => s.side === side && s.cluster_id === id).slice(0, ui.nSnips);
     add("overview", { id: "cluster_snippets", title: `Snippets \u2014 ${sideName(side)} cluster #${id + 1}`, fixed: true,
       file: `cluster_snippets_${side}_${id + 1}`, rows, srcCols: T.cluster_snippets.columns,
-      py: `${pyUnit}.clusters.${side}(${id}).snippets`,
       cols: [C("seed", "Seed", "seed"), C("cosine", "Cosine", "num"), C("doc_id", "Doc", "int"), C("text_window", "Snippet", "text", { wide: true })] });
   }
 
@@ -635,14 +645,13 @@ function buildSpecs(data, unit, ui) {
   const sn = objs(T.snippets);
   if (sn) add("snippets", { id: "snippets_" + ui.snipSide, title: sideName(ui.snipSide) + " snippets",
     file: "snippets_" + ui.snipSide, rows: sn.filter(s => s.side === ui.snipSide), srcCols: T.snippets.columns,
-    py: `${pyUnit}.snippets(top_per_side=200).${ui.snipSide}`,
     cols: [C("seed", "Seed", "seed"), C("cosine", "Cosine", "num"), C("doc_id", "Doc ID", "int"), C("text_window", "Snippet", "text", { wide: true })] });
 
   // Semantic Poles
   const words = objs(T.words);
   if (words) for (const side of ["pos", "neg"]) add("poles", { id: "words_" + side, title: sideName(side),
     subtitle: sideSub(side),
-    file: "words_" + side, rows: words.filter(w => w.side === side), srcCols: T.words.columns, py: `${pyUnit}.words.${side}`,
+    file: "words_" + side, rows: words.filter(w => w.side === side), srcCols: T.words.columns,
     cols: [C("rank", "Rank", "int"), C("word", "Word", "text"), C("cos_beta", "cos(\u03b2)", "num")] });
 
   // Document Scores, Extreme, Misdiagnosed
@@ -651,25 +660,24 @@ function buildSpecs(data, unit, ui) {
     const scoreCols = kind === "groups" ? [C("doc_id", "Doc #", "int"), C("group", "Group", "text"), C("alignment_score", "Cosine", "num")]
       : dim ? [C("doc_id", "Doc #", "int"), C("alignment_score", "Cosine", "num")]
       : [C("doc_id", "Doc #", "int"), C("alignment_score", "Cosine", "num"), C("y_hat", "Predicted", "num")];
-    const pyDocs = continuous ? "result.docs" : null;
-    add("scores", { id: "docs", title: "Documents", file: "docs", rows: docs, srcCols: T.docs.columns, py: pyDocs, cols: scoreCols });
+    add("scores", { id: "docs", title: "Documents", file: "docs", rows: docs, srcCols: T.docs.columns, cols: scoreCols });
 
     const byScore = docs.slice().sort((a, b) => b.alignment_score - a.alignment_score);
     const last = kind === "groups" ? C("group", "Group", "text") : dim ? null : C("y_true", "Actual Y", "num");
-    const extCols = [C("rank", "Rank", "int"), C("text", "Document Text", "text", { wide: true }), C("alignment_score", "Score", "num"), last].filter(Boolean);
+    const extCols = [C("rank", "Rank", "int"), C("text", docCol, "text", { wide: true }), C("alignment_score", "Score", "num"), last].filter(Boolean);
     const rank = rows => rows.map((r, i) => ({ ...r, rank: i + 1 }));
-    add("extreme", { id: "extreme_high", title: "Highest scores", fixed: true, file: "extreme_high", rows: rank(byScore.slice(0, 5)), srcCols: T.docs.columns, py: pyDocs, cols: extCols });
-    add("extreme", { id: "extreme_low", title: "Lowest scores", fixed: true, file: "extreme_low", rows: rank(byScore.slice(-5).reverse()), srcCols: T.docs.columns, py: pyDocs, cols: extCols });
+    add("extreme", { id: "extreme_high", title: "Highest scores", fixed: true, file: "extreme_high", rows: rank(byScore.slice(0, 5)), srcCols: T.docs.columns, cols: extCols });
+    add("extreme", { id: "extreme_low", title: "Lowest scores", fixed: true, file: "extreme_low", rows: rank(byScore.slice(-5).reverse()), srcCols: T.docs.columns, cols: extCols });
 
     if (continuous) {
       const byRes = docs.slice().sort((a, b) => a.residual - b.residual);
       // With a formula on a Gaussian fit, residual has the covariates taken out but y_hat is the
       // text's part only, so y_hat could contradict the over/under-predicted labels.
-      const formula = one(data.tables.fit_info).formula;
-      const misCols = [C("rank", "Rank", "int"), C("text", "Document Text", "text", { wide: true }), C("y_true", "Actual Y", "num"),
+      const formula = one(T.fit_info || data.tables.fit_info).formula;
+      const misCols = [C("rank", "Rank", "int"), C("text", docCol, "text", { wide: true }), C("y_true", "Actual Y", "num"),
         formula ? null : C("y_hat", "Predicted Y", "num"), C("residual", "Residual", "num")].filter(Boolean);
-      add("mis", { id: "mis_over", title: "Over-predicted", subtitle: "predicted higher than observed", fixed: true, file: "misdiagnosed_over", rows: rank(byRes.slice(0, 5)), srcCols: T.docs.columns, py: pyDocs, cols: misCols });
-      add("mis", { id: "mis_under", title: "Under-predicted", subtitle: "predicted lower than observed", fixed: true, file: "misdiagnosed_under", rows: rank(byRes.slice(-5).reverse()), srcCols: T.docs.columns, py: pyDocs, cols: misCols });
+      add("mis", { id: "mis_over", title: "Over-predicted", subtitle: "predicted higher than observed", fixed: true, file: "misdiagnosed_over", rows: rank(byRes.slice(0, 5)), srcCols: T.docs.columns, cols: misCols });
+      add("mis", { id: "mis_under", title: "Under-predicted", subtitle: "predicted lower than observed", fixed: true, file: "misdiagnosed_under", rows: rank(byRes.slice(-5).reverse()), srcCols: T.docs.columns, cols: misCols });
     }
   }
 
@@ -678,29 +686,34 @@ function buildSpecs(data, unit, ui) {
     // the pairs table holds canonical g1, g2; the units carry the original group names
     const names = Object.fromEntries(data.units.map(u => [u.key, [u.pos_label, u.neg_label]]));
     const rows = objs(data.tables.pairs).map(p => ({ ...p, g1: (names[p.contrast] || [p.g1])[0], g2: (names[p.contrast] || [, p.g2])[1] }));
-    add("details", { id: "pairs", title: "Pairs", file: "pairs", rows, srcCols: data.tables.pairs.columns, py: "result.pairs", fixed: true,
+    add("details", { id: "pairs", title: "Pairs", file: "pairs", rows, srcCols: data.tables.pairs.columns, fixed: true,
       cols: [C("g1", "Group A", "text"), C("g2", "Group B", "text"), C("n_g1", "n_A", "int"), C("n_g2", "n_B", "int"),
              C("contrast_norm", "Contrast norm", "num"), C("p_raw", "p", "p"), C("p_corrected", "p (corr)", "p"),
              C("cohens_d", "Cohen's d", "num3")] });
   }
   if (T.outcomes) add("details", { id: "outcomes", title: `Outcome loadings \u2014 ${unit.label}`, file: "outcomes_" + unit.key,
-    rows: objs(T.outcomes), srcCols: T.outcomes.columns, py: `${pyUnit}.outcomes`, fixed: true,
+    rows: objs(T.outcomes), srcCols: T.outcomes.columns, fixed: true,
     cols: [C("outcome", "Outcome", "text"), C("group", "Group", "text"), C("loading", "Loading", "num")] });
   if (data.tables.covariates) add("covariates", { id: "covariates", title: "Covariates", subtitle: "text held fixed",
-    file: "covariates", rows: objs(data.tables.covariates), srcCols: data.tables.covariates.columns, py: "result.covariates", fixed: true,
+    file: "covariates", rows: objs(data.tables.covariates), srcCols: data.tables.covariates.columns, fixed: true,
     cols: [C("term", "Term", "text"), C("estimate", "Estimate", "num"), C("se", "SE", "num"), C("statistic", "t / z", "num"),
            C("p_value", "p", "p"), C("ci_low", "95% CI low", "num"), C("ci_high", "95% CI high", "num")] });
-  if (data.tables.sweep) add("sweep", { id: "sweep", title: "Sweep", file: "pca_sweep", rows: objs(data.tables.sweep),
-    srcCols: data.tables.sweep.columns, py: "result.sweep", fixed: true,
-    cols: data.tables.sweep.columns.map(c => C(c, c, c === "k" || c === "n_clusters" || c === "total_size" ? "int" : "num")) });
+  const tests = objs(data.tables.test);
+  if (kind === "pca_ols" && tests && tests.length > 1) add("details", { id: "tests", title: "Tests", file: "tests",
+    rows: tests.slice(1), srcCols: data.tables.test.columns, fixed: true,
+    cols: [C("label", "Test", "text"), C("name", "Method", "text"), C("pvalue", "p", "p"), C("statistic", "Statistic", "num"),
+           C("df", "df", "num"), C("df_resid", "Residual df", "num"), C("r2_delta", "\u0394R\u00B2", "num")] });
+  if (text.sweep) add("sweep", { id: "sweep", title: "Sweep", file: "pca_sweep", rows: objs(text.sweep),
+    srcCols: text.sweep.columns, fixed: true,
+    cols: text.sweep.columns.map(c => C(c, c, c === "k" || c === "n_clusters" || c === "total_size" ? "int" : "num")) });
   return specs;
 }
 
-function tabsFor(data, specs) {
+function tabsFor(data, specs, text) {
   const k = data.kind, t = [["overview", "Cluster Overview"], ["details", "Details"]];
   if (specs.covariates) t.push(["covariates", "Covariates"]);
-  if (k === "pca_ols" && data.tables.sweep) t.push(["sweep", "PCA Sweep"]);
-  if (Object.values(specs).some(s => s.tab === "snippets")) t.push(["snippets", k === "groups" ? "Contrast Snippets" : "Beta Snippets"]);
+  if (k === "pca_ols" && specs.sweep) t.push(["sweep", "PCA Sweep"]);
+  if (Object.values(specs).some(s => s.tab === "snippets") || text.snippets === false) t.push(["snippets", k === "groups" ? "Contrast Snippets" : "Beta Snippets"]);
   t.push(["poles", "Semantic Poles"]);
   // results pickled before doc_ids existed carry no docs table for groups and MultiPLS
   if (specs.docs) {
@@ -723,10 +736,19 @@ function cardsFor(data, unit) {
     ["R\u00B2", fmtNum(s.r2)], ["p", fmtP(s.pvalue)], ["\u2016\u03b2\u2016", fmtNum(s.beta_norm)],
     ["\u0394y / +0.10 cos", fmtNum(s.delta)], ["Docs", fmtInt(s.n_kept)], ["IQR Effect", fmtNum(s.iqr_effect)],
     ["Corr(y, \u0177)", fmtNum(s.y_corr_pred)]];
-  if (k === "pca_ols") return [
-    ["R\u00B2", fmtNum(s.r2)], ["Adj. R\u00B2", fmtNum(s.r2_adj)], ["p", fmtP(s.pvalue)],
-    ["\u2016\u03b2\u2016", fmtNum(s.beta_norm)], ["Docs", fmtInt(s.n_kept)],
-    ["Selected K", fmtInt(one(data.tables.fit_info).n_components)], ["Corr(y, \u0177)", fmtNum(s.y_corr_pred)]];
+  if (k === "pca_ols") {
+    const u = unit.tables.stats ? one(unit.tables.stats) : s;  // a regression unit: its own term's stats
+    const tests = objs(data.tables.test) || [];
+    const pOf = label => { const t = label == null ? null : tests.find(r => r.label === label); return t ? fmtP(t.pvalue) : DASH; };
+    return [
+      ["R\u00B2", fmtNum(u.r2)], ["Adj. R\u00B2", fmtNum(u.r2_adj)],
+      [data.units.length > 1 ? "p (all text terms)" : "p", fmtP(u.pvalue)],
+      ...(data.units.length > 1 ? [["p (term)", pOf(unit.test)]] : []),
+      ...(data.texts.length > 1 ? [["p (text)", pOf(data.texts[unit.text].name)]] : []),
+      ["\u2016\u03b2\u2016", fmtNum(u.beta_norm)], ["Docs", fmtInt(u.n_kept)],
+      ["Selected K", fmtInt(data.texts[unit.text].k)], ["Corr(y, \u0177)", fmtNum(u.y_corr_pred)]];
+  }
+  if (k === "contrast") return [["cos(g1, g2)", fmtNum(s.cos_g1_g2)], ["\u2016unit(g1) \u2212 unit(g2)\u2016", fmtNum(s.diff_norm)]];
   if (k === "groups") {
     const pair = (objs(data.tables.pairs) || []).find(p => p.contrast === unit.key) || {};
     const nA = `n(${unit.pos_label})`, nB = `n(${unit.neg_label})`;
@@ -746,7 +768,7 @@ function reportParts(store) {
   const { data, specs, tabs, unit } = store;
   return {
     title: data.title || "SSD results",
-    meta: [["Analysis", KIND_LABEL[data.kind] + (unit.label ? ` (${unit.label})` : "")], ["Embedding", embLabel(data.embeddings)],
+    meta: [["Analysis", KIND_LABEL[data.kind] + (unit.label ? ` (${unit.label})` : "")], ["Embedding", embLine(data.texts)],
            ["Software", `${data.software.package} ${data.software.version}`], ["Created", data.created]],
     cards: cardsFor(data, unit),
     sections: tabs.map(([key, label]) => ({ label, tables: Object.values(specs).filter(s => s.tab === key) })).filter(s => s.tables.length),
@@ -784,7 +806,7 @@ function SnippetDetail({ s }) {
   </div>`;
 }
 
-function OverviewTab({ unit, specs, ui, setUi }) {
+function OverviewTab({ unit, specs, ui, setUi, text }) {
   const [showAll, setShowAll] = useState(false);
   const [snip, setSnip] = useState(null);
   const cw = objs(unit.tables.cluster_words) || [];
@@ -815,15 +837,16 @@ function OverviewTab({ unit, specs, ui, setUi }) {
         </div>
         ${specs.cluster_snippets ? html`<div class="box"><${DataTable} spec=${specs.cluster_snippets} short selectable
           rowKey=${r => r.snippet_id + ":" + r.doc_id} selectedKey=${snip ? snip.snippet_id + ":" + snip.doc_id : null} onSelect=${setSnip} /></div>
-          <${SnippetDetail} s=${snip} />` : null}
+          <${SnippetDetail} s=${snip} />` : text.snippets === false ? html`<div class="box"><div class="empty">${NO_SNIPPETS}</div></div>` : null}
       `}
     </div>
   </div>`;
 }
 
-function SnippetsTab({ unit, specs, ui, setUi }) {
+function SnippetsTab({ unit, specs, ui, setUi, text }) {
   const [snip, setSnip] = useState(null);
   const spec = specs["snippets_" + ui.snipSide];
+  if (text.snippets === false) return html`<div class="box"><div class="empty">${NO_SNIPPETS}</div></div>`;
   return html`<div class="stack">
     <div class="controls"><span class="muted">Side</span>
       <div class="seg" role="group" aria-label="Side">
@@ -862,7 +885,7 @@ function ScoresTab({ specs }) {
   </div>`;
 }
 
-// Rolling median, centred, window 7; the window shrinks at the ends (as the old app's plot did).
+// Rolling median, centred, window 7; the window shrinks at the ends.
 function rollingMedian(v, w = 7) {
   const h = Math.floor(w / 2);
   return v.map((_, i) => {
@@ -871,8 +894,8 @@ function rollingMedian(v, w = 7) {
   });
 }
 
-function SweepTab({ data, specs }) {
-  const rows = objs(data.tables.sweep), K = one(data.tables.fit_info).n_components;
+function SweepTab({ text, specs }) {
+  const rows = objs(text.sweep), K = text.k;
   const xs = rows.map(r => r.k), zl = rows.map(r => r.interp_resid_z), zr = rollingMedian(rows.map(r => r.beta_delta_1_minus_cos));
   const W = 800, H = 340, m = { l: 56, r: 64, t: 16, b: 40 };
   const ext = (v, extra = []) => { const f = v.concat(extra).filter(isNum); if (!f.length) return [0, 1]; const lo = Math.min(...f), hi = Math.max(...f); return lo === hi ? [lo - 1, hi + 1] : [lo, hi]; };
@@ -911,6 +934,7 @@ function PairTablesTab({ specs, tab }) {
 }
 
 const STAT_LABELS = {
+  cos_g1_g2: "cos(g1, g2)", diff_norm: "\u2016unit(g1) \u2212 unit(g2)\u2016",
   backend: "Backend", r2: "R\u00B2", r2_adj: "Adj. R\u00B2", pvalue: "p", n_raw: "Documents (raw)", n_kept: "Documents kept",
   n_dropped: "Documents dropped", y_mean: "Mean y", y_std: "SD y", beta_norm: "\u2016\u03b2\u2016", delta: "\u0394y / +0.10 cos",
   iqr_effect: "IQR effect", y_corr_pred: "Corr(y, \u0177)", n_components: "Components", p_at_k: "p at K",
@@ -929,8 +953,9 @@ function KV({ title, obj, skipNull }) {
     <dl class="kv">${entries.map(([k, v]) => html`<dt>${STAT_LABELS[k] || k}</dt><dd>${fmtAny(k, v)}</dd>`)}</dl></div>`;
 }
 
-function DetailsTab({ data, specs }) {
-  const st = one(data.tables.stats), S = data.settings, E = data.embeddings || {};
+function DetailsTab({ data, unit, specs, text }) {
+  const st = one(data.kind === "pca_ols" && unit.tables.stats ? unit.tables.stats : data.tables.stats), S = text.settings || {}, E = text.embeddings || {};
+  const boxTitle = t => text.name && data.texts.length > 1 ? `${t} \u2014 ${text.name}` : t;
   const pick = keys => Object.fromEntries(keys.filter(k => k in st).map(k => [k, st[k]]));
   const continuous = data.kind === "pls" || data.kind === "pca_ols";
   return html`<div class="grid3">
@@ -940,19 +965,20 @@ function DetailsTab({ data, specs }) {
         <${KV} title="Effect size" obj=${pick(["beta_norm", "delta", "iqr_effect", "y_mean", "y_std"])} />
         <${KV} title="Data retention" obj=${pick(["n_raw", "n_kept", "n_dropped"])} />`
       : html`<${KV} title="Summary" obj=${st} />`}
-      <${KV} title="Fit" obj=${one(data.tables.fit_info || data.tables.pls_info)} skipNull />
+      <${KV} title="Fit" obj=${one(unit.tables.fit_info || data.tables.fit_info || data.tables.pls_info)} skipNull />
       ${data.tables.fit_info && data.tables.pls_info ? html`<${KV} title="Gradients" obj=${one(data.tables.pls_info)} skipNull />` : null}
       <${KV} title="Test" obj=${one(data.tables.test)} skipNull />
       ${specs.pairs ? html`<${DataTable} spec=${specs.pairs} />` : null}
+      ${specs.tests ? html`<${DataTable} spec=${specs.tests} />` : null}
       ${specs.outcomes ? html`<${DataTable} spec=${specs.outcomes} />` : null}
     </div>
-    <div class="box"><h3>Concept</h3>
+    ${text.settings ? html`<div class="box"><h3>${boxTitle("Concept")}</h3>
       <${KV} obj=${{ Mode: S.use_full_doc ? "Full document" : "Lexicon", ...(S.lexicon ? { Lexicon: S.lexicon } : {}), Window: S.window, SIF: S.sif_a }} />
-    </div>
+    </div>` : null}
     <div class="box"><h3>Model</h3>
-      <${KV} title="Embedding" obj=${{ Name: E.name, Version: E.version, Language: E.language, Vocabulary: E.n, Dimensions: E.dims, ABTT: E.abtt }} />
-      <${KV} title="Fit arguments" obj=${S.fit} />
-      <${KV} title="Clustering arguments" obj=${S.clusters} />
+      <${KV} title=${boxTitle("Embedding")} obj=${{ Name: E.name, Version: E.version, Language: E.language, Vocabulary: E.n, Dimensions: E.dims, ABTT: E.abtt }} />
+      <${KV} title="Fit arguments" obj=${data.settings.fit} />
+      <${KV} title="Clustering arguments" obj=${data.settings.clusters} />
       ${data.dataset ? html`<${KV} title="Dataset" obj=${data.dataset} />` : null}
     </div>
   </div>`;
@@ -966,7 +992,7 @@ function App({ data }) {
   const [ui, setUiState] = useState({ topWords: 5, nSnips: 20, cluster: null, snipSide: "pos" });
   const unit = data.units[unitIdx];
   const specs = useMemo(() => buildSpecs(data, unit, ui), [unit, ui]);
-  const tabs = tabsFor(data, specs);
+  const tabs = tabsFor(data, specs, data.texts[unit.text]);
   // Units can have different tabs (a PLS gradient has no Misdiagnosed tab): fall back to the first one.
   const tab = tabs.some(([k]) => k === chosenTab) ? chosenTab : tabs[0][0];
   const setUi = patch => setUiState(u => ({ ...u, ...patch }));
@@ -976,11 +1002,11 @@ function App({ data }) {
   };
   window.ssdReport = { formats: REPORT_EXTS, export: ext => download(reportFile(store, ext)) };
   const body = {
-    overview: html`<${OverviewTab} unit=${unit} specs=${specs} ui=${ui} setUi=${setUi} />`,
-    details: html`<${DetailsTab} data=${data} specs=${specs} />`,
+    overview: html`<${OverviewTab} unit=${unit} text=${data.texts[unit.text]} specs=${specs} ui=${ui} setUi=${setUi} />`,
+    details: html`<${DetailsTab} data=${data} unit=${unit} text=${data.texts[unit.text]} specs=${specs} />`,
     covariates: html`<${PairTablesTab} specs=${specs} tab="covariates" />`,
-    sweep: html`<${SweepTab} data=${data} specs=${specs} />`,
-    snippets: html`<${SnippetsTab} unit=${unit} specs=${specs} ui=${ui} setUi=${setUi} />`,
+    sweep: html`<${SweepTab} text=${data.texts[unit.text]} specs=${specs} />`,
+    snippets: html`<${SnippetsTab} unit=${unit} text=${data.texts[unit.text]} specs=${specs} ui=${ui} setUi=${setUi} />`,
     poles: html`<${PolesTab} specs=${specs} />`,
     scores: html`<${ScoresTab} specs=${specs} />`,
     extreme: html`<${PairTablesTab} specs=${specs} tab="extreme" />`,
@@ -994,13 +1020,14 @@ function App({ data }) {
       ${EMBEDDED ? null : html`<${ExportMenu} report />`}
     </header>
     <div class="meta">
-      <span>Embedding <b>${embLabel(data.embeddings)}</b></span>
+      <span>Embedding <b>${embLine(data.texts)}</b></span>
       <span>${data.software.package} <b>${data.software.version}</b></span>
       <span>${new Date(data.created).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" })}</span>
     </div>
-    ${data.units.length > 1 ? html`<div class="unitbar"><label for="unit">${data.kind === "groups" ? "Pair" : "Dimension"}</label>
+    ${data.units.length > 1 ? html`<div class="unitbar"><label for="unit">${data.kind === "groups" ? "Pair" : data.kind === "pca_ols" ? "Term" : "Dimension"}</label>
       <select id="unit" value=${unitIdx} onChange=${e => { setUnitIdx(+e.target.value); setUi({ cluster: null, snipSide: "pos" }); }}>
-        ${data.units.map((u, i) => html`<option value=${i}>${u.label}</option>`)}</select></div>` : null}
+        ${data.texts.length > 1 ? data.texts.map((t, ti) => html`<optgroup label=${t.name || "Text " + (ti + 1)}>${data.units.map((u, i) => u.text === ti ? html`<option value=${i}>${u.label}</option>` : null)}</optgroup>`)
+          : data.units.map((u, i) => html`<option value=${i}>${u.label}</option>`)}</select></div>` : null}
     <section class="cards" aria-label="Summary">${cardsFor(data, unit).map(([n, v]) => html`<div class="card"><div class="v">${v}</div><div class="n">${n}</div></div>`)}</section>
     <nav class="tabs" role="tablist">${tabs.map(([k, label]) => html`<button class="tab" role="tab" aria-selected=${tab === k} onClick=${() => setTab(k)}>${label}</button>`)}</nav>
     <section class="tabpanel" role="tabpanel">${body}</section>

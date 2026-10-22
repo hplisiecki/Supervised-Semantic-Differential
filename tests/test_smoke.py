@@ -25,11 +25,10 @@ def test_no_heavy_imports_on_load():
 
 
 def test_public_api_importable():
-    """SSD, Corpus, and Embeddings must all be importable from ssdiff."""
-    from ssdiff import SSD, Corpus, Embeddings
+    """SSD and Embeddings must both be importable from ssdiff."""
+    from ssdiff import SSD, Embeddings
 
     assert callable(SSD), "SSD should be a callable class"
-    assert callable(Corpus), "Corpus should be a callable class"
     assert callable(Embeddings), "Embeddings should be a callable class"
 
 
@@ -45,42 +44,8 @@ def test_version_matches_pyproject():
     assert ssdiff.__version__ == match.group(1)
 
 def test_all_contains_core_names():
-    """ssdiff.__all__ must exist and include SSD, Corpus, and Embeddings."""
+    """ssdiff.__all__ must exist and include SSD and Embeddings."""
     assert hasattr(ssdiff, "__all__"), "ssdiff does not define __all__"
     all_names = ssdiff.__all__
-    for name in ("SSD", "Corpus", "Embeddings"):
+    for name in ("SSD", "Embeddings"):
         assert name in all_names, f"{name!r} missing from ssdiff.__all__"
-
-
-def test_wordpack_and_pretokenized_routes_never_import_spacy(wordpack_path):
-    code = (
-        "import sys\n"
-        "from ssdiff import Corpus, Embeddings\n"
-        f"emb = Embeddings.load({wordpack_path!r})\n"
-        "Corpus(['I like the dog.'], embeddings=emb)\n"
-        "Corpus([['dog']], pretokenized=True)\n"
-        "print('spacy' in sys.modules)\n"
-    )
-    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
-    assert proc.stdout.strip() == "False"
-
-
-def test_without_spacy_the_wordpack_route_works_and_lang_gives_the_install_hint(wordpack_path):
-    # A None entry in sys.modules makes `import spacy` raise ImportError,
-    # as on a machine where spaCy is not installed.
-    code = (
-        "import sys\n"
-        "sys.modules['spacy'] = None\n"
-        "from ssdiff import Corpus, Embeddings\n"
-        f"emb = Embeddings.load({wordpack_path!r})\n"
-        "print(Corpus(['I like the dog.'], embeddings=emb).docs)\n"
-        "try:\n"
-        "    Corpus(['x'], lang='en')\n"
-        "except ImportError as e:\n"
-        "    print(e)\n"
-    )
-    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
-    assert proc.stdout.splitlines() == [
-        "[['like', 'dog']]",
-        "spacy is required for this method; install with: pip install ssdiff[spacy]",
-    ]

@@ -83,7 +83,7 @@ class Cluster:
         Populated at cluster construction; empty string if not yet computed.
     top_snippet : str
         ``text_window`` of the highest-cosine snippet in this cluster.
-        Empty string when no corpus is attached or before view-level
+        Empty string when no text is attached or before view-level
         fill runs; populated by the view layer rebuilding the row via
         ``dataclasses.replace`` at first opt-in render.
     """
@@ -137,7 +137,7 @@ class Snippet:
     side : str
         ``"pos"`` or ``"neg"``.
     doc_id : int
-        Index into the parent corpus (aligns with ``Doc.doc_id``).
+        Index into the fit text (aligns with ``Doc.doc_id``).
     cosine : float
         Cosine similarity between the snippet's SIF-weighted vector and the
         semantic gradient.
@@ -157,8 +157,6 @@ class Snippet:
         Cluster this snippet's seed belongs to, if clusters were computed.
     contrast : str or None
         Group contrast key; ``None`` for continuous results.
-    post_id : int or None
-        Within-document post index for multi-post documents (e.g. forum data).
     """
     snippet_id: int
     side: str
@@ -174,7 +172,6 @@ class Snippet:
     text_lemmas: str
     cluster_id: int | None = None
     contrast: str | None = None
-    post_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -242,7 +239,7 @@ class Suggestion:
     Fields
     ------
     token : str
-        Lemma / surface form from the corpus vocabulary.
+        Lemma / surface form from the text vocabulary.
     freq : int
         Number of documents containing this token.
     cov_all : float
@@ -300,7 +297,7 @@ class Stats:
     pvalue : float
         P-value from the active statistical test.
     n_raw : int
-        Documents in the corpus.
+        Documents in the text.
     n_kept : int
         Documents retained after filtering (missing outcome, missing embeddings, short texts).
     n_dropped : int
@@ -371,7 +368,7 @@ class FitInfo:
 class Summary:
     """LexiconResult summary (present only after evaluate_lexicon).
 
-    Raw floats here; formatting is applied at render time (D11).
+    Raw floats here; formatting is applied at render time.
     ``q1``, ``q4`` and ``corr_any`` are ``None`` when computed with ``y=None``.
     """
     docs_any: int
@@ -384,3 +381,21 @@ class Summary:
     types_mean: float
     types_median: float
     group_cov: dict[str, float] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TermTest:
+    """One row of a regression's ``test`` table.
+
+    ``label`` is ``None`` for the all-text test, else the term label. A refit
+    row (``f_test`` or ``lrt``) carries ``r2_delta``; a Wald row (``wald_f``
+    or ``wald_chisq``) has ``r2_delta=None``, and ``wald_chisq`` has
+    ``df_resid=None``.
+    """
+    label: str | None
+    name: str
+    pvalue: float
+    statistic: float
+    df: float
+    df_resid: float | None
+    r2_delta: float | None

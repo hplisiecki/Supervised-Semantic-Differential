@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from ssdiff.utils.rng import Rng
+
 
 def _categorical_mask(y) -> np.ndarray:
     """Boolean mask: True for valid categorical entries (not None/NaN/empty)."""
@@ -133,7 +135,7 @@ def _sq_dists(X: np.ndarray, C: np.ndarray, X_sq: np.ndarray | None = None) -> n
     return D
 
 
-def _kmeans_plus_plus(X: np.ndarray, k: int, rng: np.random.Generator) -> np.ndarray:
+def _kmeans_plus_plus(X: np.ndarray, k: int, rng: Rng) -> np.ndarray:
     """K-means++ initialization with multi-candidate sampling."""
     n = X.shape[0]
     n_local_trials = 2 + int(np.log(k))
@@ -150,8 +152,9 @@ def _kmeans_plus_plus(X: np.ndarray, k: int, rng: np.random.Generator) -> np.nda
         if total == 0:
             idx = rng.integers(n)
         else:
-            probs = min_dists / total
-            candidates = rng.choice(n, size=n_local_trials, p=probs, replace=True)
+            # Unnormalized weights: dividing by total first would change the
+            # cumulative sums that the R package (ssdiff) must reproduce bit for bit.
+            candidates = rng.choice(min_dists, n_local_trials)
             best_idx = candidates[0]
             best_potential = np.inf
             for c in candidates:
@@ -195,7 +198,7 @@ def kmeans(
         Data matrix with one sample per row.
     k : int
         Number of clusters.
-    random_state : int or None, default None
+    random_state : int, default 2137
         Seed for the random number generator (reproducibility).
     max_iter : int, default 300
         Maximum number of Lloyd iterations per run.
@@ -213,7 +216,7 @@ def kmeans(
         Sum of squared distances from each sample to its assigned centroid
         (lower is better).
     """
-    rng = np.random.default_rng(random_state)
+    rng = Rng(random_state)
     n, d = X.shape
     if k > n:
         raise ValueError(f"Cannot request k={k} clusters from n={n} samples.")
@@ -353,7 +356,7 @@ def kmeans_auto_k(
         Minimum number of clusters to evaluate.
     k_max : int, default 5
         Maximum number of clusters to evaluate (clamped to ``n - 1``).
-    random_state : int or None, default None
+    random_state : int, default 2137
         Seed for the random number generator (reproducibility).
     n_init : int, default 1
         Number of independent K-Means runs per candidate *k*.
@@ -399,7 +402,7 @@ def kmeans_auto_k(
 
 
 # ---------------------------------------------------------------------------
-# F-distribution survival function (replaces scipy.stats.f.cdf)
+# F-distribution survival function (pure numpy, no SciPy)
 # ---------------------------------------------------------------------------
 
 

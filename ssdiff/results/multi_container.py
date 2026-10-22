@@ -168,11 +168,11 @@ class _MultiContainer(Result):
     def __getitem__(self, key):
         return self._leaves[key]
 
-    def attach(self, corpus=None, embeddings=None):
-        """``Result.attach`` on the container, then the same corpus and embeddings on every leaf."""
-        super().attach(corpus=corpus, embeddings=embeddings)
+    def attach(self, texts=None, embeddings=None):
+        """``Result.attach`` on the container, then the same text and embeddings on every leaf."""
+        super().attach(texts=texts, embeddings=embeddings)
         for leaf in self._leaves.values():
-            leaf.corpus = self.corpus
+            leaf.text = self.text
             leaf.embeddings = self.embeddings
         return self
 

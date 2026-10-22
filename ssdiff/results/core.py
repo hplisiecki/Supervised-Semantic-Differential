@@ -1,8 +1,8 @@
 """Result ABC, View / ScalarView protocols, parameter-keyed cache.
 
 The cache is a dict keyed on (view_name, frozen_params).
-Each distinct parameter set gets its own entry — this is how we
-fix the stale-cache bug documented in the spec (issue #2).
+Each distinct parameter set gets its own entry, so a view asked for with
+new parameters is never served a stale result.
 """
 
 from __future__ import annotations
@@ -32,9 +32,8 @@ from ssdiff.results.display import (
     build_view_save_hint,
 )
 
-# ``DEFAULT_COLS`` / ``DEFAULT_MAX_ROWS`` live in ``results.display`` as part
-# of the display-layer scaffolding. Re-exported here so existing internal
-# imports (``from ssdiff.results.core import DEFAULT_MAX_ROWS``) keep working.
+# ``DEFAULT_COLS`` / ``DEFAULT_MAX_ROWS`` are defined in ``results.display`` and
+# re-exported here.
 
 T = TypeVar("T")
 
@@ -68,7 +67,7 @@ def _import_pandas():
 # ---------------- cols validation --------------------------------------------
 
 def _validate_cols(cols, view: View) -> tuple[tuple[str, ...], str | None]:
-    """Enforce D9 rules on a `cols` argument.
+    """Validate a `cols` argument.
 
     Returns (keep, warning_message_or_None).
 
@@ -128,7 +127,7 @@ def _json_default(obj):
 
 # ---------------- save() extension helpers -----------------------------------
 # ``TABULAR_EXTS`` lives in ``display`` next to the filename / column registries.
-SUPPORTED_EXTS = TABULAR_EXTS  # backward-compat re-export
+SUPPORTED_EXTS = TABULAR_EXTS  # alias of TABULAR_EXTS
 
 
 def _get_ext(path: str) -> str:
@@ -230,7 +229,7 @@ class View(Generic[T]):
       - `params` property (for parameterized views; `{}` for paramless)
 
     Output methods (to_df, to_csv, …) are defined further down in this module
-    (Task 4) directly on `View` / `ScalarView`.
+    directly on `View` / `ScalarView`.
     """
 
     _name: str = ""
@@ -300,7 +299,7 @@ class View(Generic[T]):
             return body + "\n" + self._save_hint_html()
         return body
 
-    # -------- D8/D9 tabular output family --------------------------------
+    # -------- tabular output (to_dict, to_rows, to_df, save) -------------
     def to_dict(self, cols=None) -> list[dict]:
         """Return a list of row dicts, optionally restricted to ``cols``.
 
@@ -694,7 +693,7 @@ class Result(ABC):  # noqa: B024 — marker base class; subclasses share infra, 
     """
 
     embeddings: Any = None
-    corpus: Any = None
+    text: Any = None
     _access: tuple[str, ...] = ()
     _arrays: tuple[str, ...] = ()
 
@@ -786,7 +785,7 @@ class Result(ABC):  # noqa: B024 — marker base class; subclasses share infra, 
         """Two-form cache clearing.
 
         `clear_cache()` drops everything; `clear_cache("clusters")` drops
-        all entries whose view_name matches. No by-params form (D5).
+        all entries whose view_name matches. There is no form that clears by parameters.
         """
         if view is None:
             self._cache = {}
@@ -811,10 +810,13 @@ class Result(ABC):  # noqa: B024 — marker base class; subclasses share infra, 
         new.__dict__.update(copy.deepcopy(self.__dict__, memo))
         return new
 
-    def attach(self, corpus=None, embeddings=None) -> Result:
-        """Re-wire corpus / embeddings references after un-pickling.
+    def attach(self, texts=None, embeddings=None) -> Result:
+        """Re-wire the text / embeddings references after un-pickling.
 
-        ``embeddings`` is an ``Embeddings`` or a path to load. A result fit on
+        ``texts`` are strings, or token lists when the fit was on token lists,
+        with the same number of documents as the fit's text; they are
+        tokenized with the result's embeddings. ``embeddings`` is an
+        ``Embeddings`` or a path to load. A result fit on
         a wordpack is pickled without it: attach the same pack (name and
         version) at the fit's ABTT; a path is loaded at that ABTT. A result
         fit on another format keeps its Embeddings, and attach checks new ones
@@ -844,23 +846,55 @@ class Result(ABC):  # noqa: B024 — marker base class; subclasses share infra, 
                 "for the fit, e.g. Embeddings.load(path).normalize(l2=True, abtt=N), "
                 "and attach the Embeddings."
             )
-        new_corpus = corpus if corpus is not None else getattr(self, "corpus", None)
-        new_embeddings = embeddings if embeddings is not None else getattr(self, "embeddings", None)
-        if new_corpus is not None and new_embeddings is not None:
-            from ssdiff.corpus import _check_tokenizer
+        text = getattr(self, "text", None)
+        if texts is not None:
+            new_text = self._text_from(texts, embeddings if embeddings is not None else fit_emb)
+            if text is not None and len(new_text) != len(text):
+                raise ValueError(
+                    f"attach(texts=...) got {len(new_text)} documents; the fit's text has {len(text)} documents."
+                )
+            self.text = new_text
+        elif embeddings is not None and text is not None:
+            from ssdiff.ssd import _check_tokenizer
 
-            _check_tokenizer(new_embeddings, new_corpus)
-        if corpus is not None:
-            self.corpus = corpus
+            _check_tokenizer(embeddings, text)
         if embeddings is not None:
             self.embeddings = embeddings
-        if (corpus is not None or embeddings is not None) and (
-            getattr(self, "corpus", None) is not None and getattr(self, "embeddings", None) is not None
+        if (texts is not None or embeddings is not None) and (
+            getattr(self, "text", None) is not None and getattr(self, "embeddings", None) is not None
         ):
             # Snippets look up every token; a partial embedding would read each
             # row outside its RAM prefix from the file on every lookup.
-            self.embeddings = self.embeddings.with_corpus(self.corpus)
+            self.embeddings = self.embeddings.with_corpus(self.text)
+            if self.text.embeddings is None:
+                self.text.embeddings = self.embeddings
         return self
+
+    def _text_from(self, texts, embeddings):
+        """An ``SSD`` of *texts* in the form of the fit's text, with its lexicon and settings.
+
+        Raises ``TypeError`` for the other form (strings vs token lists).
+        """
+        from ssdiff.ssd import SSD
+
+        if embeddings is None:
+            raise RuntimeError("These texts need embeddings; attach(embeddings=...) first.")
+        text = getattr(self, "text", None)
+        if isinstance(texts, str):
+            raise TypeError("texts is a single string; pass a list of texts, e.g. [text].")
+        texts = list(texts)
+        if text is not None and texts:
+            given = isinstance(texts[0], (list, tuple))
+            if given != (text.pre_docs is None):
+                raise TypeError(
+                    "This result was fit on token lists; pass token lists, one list of tokens per document."
+                    if text.pre_docs is None else
+                    "This result was fit on strings; pass strings, not token lists."
+                )
+        return SSD(
+            embeddings, texts, self.lexicon, window=self.window, sif_a=self.sif_a,
+            use_full_doc=getattr(text, "use_full_doc", False),
+        )
 
     # -------- results page -------------------------------------------------
     def page_data(self, *, title=None, dataset=None, snippets_per_side=200,
@@ -887,5 +921,5 @@ class Result(ABC):  # noqa: B024 — marker base class; subclasses share infra, 
         if getattr(self, resource, None) is None:
             raise RuntimeError(
                 f"{view_name} needs {resource} but none is attached. "
-                f"Call result.attach({resource}=...) first."
+                f"Call result.attach({'texts' if resource == 'text' else resource}=...) first."
             )

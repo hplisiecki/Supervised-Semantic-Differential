@@ -2,7 +2,7 @@
 
 `ssdiff` is the reference Python implementation of the **Supervised Semantic Differential** (Plisiecki et al., 2025) — a method for finding interpretable semantic dimensions in text data that link to numeric outcomes or categorical groups.
 
-This folder holds four tiers of documentation; runnable demos are in [`../examples/`](../examples/). Start wherever fits your need.
+This folder holds three tiers of documentation; runnable examples are in [`../examples/`](../examples/). Start wherever fits your need.
 
 ---
 
@@ -12,12 +12,14 @@ This folder holds four tiers of documentation; runnable demos are in [`../exampl
 
 | Read this | When you want to… |
 |---|---|
-| [`embeddings.md`](embeddings.md) | Get embeddings. The ready English packs (`Embeddings.load()`), tags and full names, where packs are stored, and loading your own embedding file for another language. |
-| [`api_reference.md`](api_reference.md) | Fit a model. Covers `Embeddings`, `Corpus`, `SSD`, and the fit methods (`fit_regression`, `fit_pls`, `fit_groups`, `fit_multipls`) with argument tables and a full workflow example. Results are only sketched here. |
-| [`../examples/demo_pls.py`](../examples/demo_pls.py) | Runnable example for `fit_pls`. |
-| [`../examples/demo_pcaols.py`](../examples/demo_pcaols.py) | Runnable example for `fit_regression`. |
-| [`../examples/demo_groups.py`](../examples/demo_groups.py) | Runnable example for `fit_groups`. |
-| [`../examples/demo_multipls.py`](../examples/demo_multipls.py) | Runnable example for `fit_multipls`. |
+| [`embeddings.md`](embeddings.md) | Get embeddings and texts ready. The ready English packs (`Embeddings.load()`), tags and full names, where packs are stored, and loading your own embedding file with token lists for another language. |
+| [`api_reference.md`](api_reference.md) | Fit a model. Covers `Embeddings`, `SSD`, the fit methods (`fit_regression`, `fit_pls`, `fit_groups`, `fit_multipls`), formulas with the text term `ssd()`, several texts, `contrast`, and a full workflow example. Results are only sketched here. |
+| [`../examples/warriner_regression.py`](../examples/warriner_regression.py) | Runnable example for `fit_regression`, with a tour of what every result has. |
+| [`../examples/warriner_pls.py`](../examples/warriner_pls.py) | Runnable example for `fit_pls`. |
+| [`../examples/hate_lexicon_regression.py`](../examples/hate_lexicon_regression.py) | Build a lexicon with the lexicon helpers, then `fit_regression`. |
+| [`../examples/hate_multipls.py`](../examples/hate_multipls.py) | Runnable example for `fit_multipls`. |
+| [`../examples/hate_groups.py`](../examples/hate_groups.py) | Runnable example for `fit_groups`. |
+| [`../examples/custom_embedding_spacy.py`](../examples/custom_embedding_spacy.py) | Your own embedding file and token lists made with spaCy. |
 
 
 ### For power users — making results do what you want
@@ -44,23 +46,25 @@ This folder holds four tiers of documentation; runnable demos are in [`../exampl
 ## One-minute orientation
 
 ```python
-from ssdiff import Embeddings, Corpus, SSD
+from ssdiff import Embeddings, SSD
 
-emb    = Embeddings.load()                 # the default English wordpack, downloaded once
-corpus = Corpus(texts, embeddings=emb)     # the pack's tokenizer and stopwords; no spaCy
-ssd    = SSD(emb, corpus, y=scores, lexicon=["happy", "sad", "joy"])
+emb = Embeddings.load()                    # the default English wordpack, downloaded once
+ssd = SSD(emb, df["text"], lexicon=["happy", "sad", "joy"])   # one text, no outcome
 
-result = ssd.fit_regression()   # PCA regression, F-test p-value
-# result = ssd.fit_pls()        # PLS with split-half test
-# result = ssd.fit_groups()     # categorical outcome, permutation test
-# result = ssd.fit_multipls()   # several outcomes (y as a DataFrame), PLS3
+result = ssd.fit_regression("score", data=df)   # PCA regression, F-test p-value
+# result = ssd.fit_regression("score ~ age + sex*ssd()", data=df)  # covariates and interactions
+# result = ssd.fit_pls("score", data=df)        # PLS with split-half test
+# result = ssd.fit_groups("condition", data=df) # categorical outcome, permutation test
+# result = ssd.fit_multipls(["a", "b"], data=df) # several outcomes, PLS3
 
 print(result.stats)             # headline r², p, n_kept, iqr_effect
 print(result.words.pos)         # top 20 β-pos neighbors
 result.report().save("report.md")
 ```
 
-See [`../examples/demo_pls.py`](../examples/demo_pls.py) for a runnable end-to-end script, and [`../examples/demo_multipls.py`](../examples/demo_multipls.py) for `fit_multipls`.
+The outcome is the first argument of each fit: values, a column name of `data`, or a formula. Several texts in one model use `ssdiff.fit_regression("score ~ ssd(essay) + ssd(diary)", df, essay=..., diary=...)`. Two fitted gradients are compared with `ssdiff.contrast(g1, g2, emb)`.
+
+See [`../examples/warriner_pls.py`](../examples/warriner_pls.py) for a runnable end-to-end script, and [`../examples/hate_multipls.py`](../examples/hate_multipls.py) for `fit_multipls`.
 
 ---
 

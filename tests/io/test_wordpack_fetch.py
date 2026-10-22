@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 import ssdiff
-from ssdiff import Corpus, Embeddings
+from ssdiff import SSD, Embeddings
 from ssdiff.lang_config import WORDPACK_TAGS
 from ssdiff.wordpack import fetch
 
@@ -260,9 +260,9 @@ def test_a_tag_whose_pack_is_cached_loads_without_a_host(host, tmp_path, monkeyp
     assert Embeddings.load("en")._source_path == first._source_path
 
 
-def test_the_name_a_corpus_records_loads_the_same_pack(host):
+def test_the_name_a_text_records_loads_the_same_pack(host):
     emb = Embeddings.load("en")
-    recorded = Corpus(["the dog swims"], embeddings=emb).tokenizer.removeprefix("wordpack:")
+    recorded = SSD(emb, ["the dog swims"], use_full_doc=True).tokenizer.removeprefix("wordpack:")
     again = Embeddings.load(recorded)
     assert (again.name, again.version) == (emb.name, emb.version)
 

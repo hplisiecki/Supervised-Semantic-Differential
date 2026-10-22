@@ -1,7 +1,7 @@
 """Results page: a result as the JSON object the HTML results page reads, and the page file.
 
-The page itself lives in ``page_template.html``; R and the browser app carry
-verbatim copies of it and write the same JSON (``REPORT_FORMAT`` below).
+The page itself lives in ``page_template.html``; the R package (ssdiff)
+embeds the same file and writes the same JSON (``REPORT_FORMAT`` below).
 """
 
 from __future__ import annotations
@@ -14,9 +14,11 @@ from importlib import resources
 
 import numpy as np
 
+from ssdiff.results.continuous_result import PCAOLSResult, PLSResult, RegressionResult
+from ssdiff.results.contrast_result import ContrastResult
 from ssdiff.results.core import _row_to_dict
 
-REPORT_FORMAT = 1
+REPORT_FORMAT = 2
 _MARKER = "__SSD_DATA__"
 _DROP_SNIPPET_COLS = ("text_lemmas",)  # never shown; repeats each whole document in full-doc mode
 
@@ -53,7 +55,7 @@ def _view_table(view, drop=()) -> dict:
 
 
 def _maybe(compute):
-    """A view that needs embeddings or a corpus raises RuntimeError without one (when its rows
+    """A view that needs embeddings or a text raises RuntimeError without one (when its rows
     are computed, not when it is accessed); the page leaves it out."""
     try:
         return compute()
@@ -62,8 +64,8 @@ def _maybe(compute):
 
 
 def _has_text(result) -> bool:
-    corpus = getattr(result, "corpus", None)
-    return corpus is not None and getattr(corpus, "pre_docs", None) is not None
+    text = getattr(result, "text", None)
+    return text is not None and getattr(text, "pre_docs", None) is not None
 
 
 def _unit_tables(leaf, snippets_per_side: int, snippets_per_cluster: int) -> dict:
@@ -106,13 +108,15 @@ def _text_ids(ids: np.ndarray, rankings, doc_texts: int | None) -> set[int]:
 def _doc_text(leaf, doc_id: int):
     from ssdiff.results.continuous_result import _lookup_raw_text
     raw = _lookup_raw_text(leaf, doc_id)
-    return "\n\n".join(raw) if isinstance(raw, list) else raw
+    if raw is None and 0 <= doc_id < len(leaf.text.docs):
+        return " ".join(leaf.text.docs[doc_id])
+    return raw
 
 
 def _docs_table(leaf, columns, rows: list[dict], rankings, doc_texts) -> dict:
     """``rows`` are dicts with ``doc_id`` and the given columns; adds ``text``."""
     ids = np.array([r["doc_id"] for r in rows], dtype=int)
-    keep = _text_ids(ids, rankings, doc_texts) if _has_text(leaf) else set()
+    keep = _text_ids(ids, rankings, doc_texts) if getattr(leaf, "text", None) is not None else set()
     for r in rows:
         r["text"] = _doc_text(leaf, r["doc_id"]) if r["doc_id"] in keep else None
     return _table(list(columns) + ["text"], rows)
@@ -124,12 +128,12 @@ def _embeddings(result) -> dict | None:
         pack = getattr(result, "_wordpack", None)
         if pack is None:
             return None
-        return {"name": pack["name"], "version": pack["version"], "language": getattr(result, "lang", None),
+        return {"name": pack["name"], "version": pack["version"], "language": None,
                 "n": None, "dims": None, "abtt": pack["abtt"]}
     name = emb.name
     if name is None and getattr(emb, "_source_path", None) is not None:
         name = os.path.basename(emb._source_path)
-    return {"name": name, "version": emb.version, "language": emb.lang or getattr(result, "lang", None),
+    return {"name": name, "version": emb.version, "language": emb.lang,
             "n": emb.vocab_size, "dims": emb.dim, "abtt": emb.abtt}
 
 
@@ -141,31 +145,53 @@ def _cluster_settings(leaf) -> dict | None:
 
 
 def _settings(result, leaf) -> dict:
+    return {"fit": getattr(result, "fit_args", None), "clusters": _cluster_settings(leaf)}
+
+
+def _text_entry(result, kind, name=None) -> dict:
+    """The ``texts`` entry of a result's text: its embeddings, concept settings, K, sweep and snippet flag.
+
+    ``name`` is the text's name in a several-text fit (the keyword it was passed under).
+    A contrast has no text: only its embeddings are filled."""
+    if kind == "contrast":
+        return {"name": None, "embeddings": _embeddings(result), "settings": None, "k": None,
+                "sweep": None, "n_no_vector": None, "snippets": None}
+    text = result.text
+    sweep = result.sweep if kind == "pca_ols" else None
     return {
-        "lexicon": sorted(result.lexicon) if result.lexicon else None,
-        "window": result.window,
-        "sif_a": result.sif_a,
-        "use_full_doc": getattr(result, "use_full_doc", not result.lexicon),
-        "fit": getattr(result, "fit_args", None),
-        "clusters": _cluster_settings(leaf),
+        "name": name or text.name,
+        "embeddings": _embeddings(result),
+        "settings": {
+            "lexicon": sorted(text.lexicon) if text.lexicon else None,
+            "window": text.window,
+            "sif_a": text.sif_a,
+            "use_full_doc": text.use_full_doc,
+        },
+        "k": result.fit_info.n_components if kind == "pca_ols" else None,
+        "sweep": _view_table(sweep) if sweep is not None and len(sweep) else None,
+        "n_no_vector": result.n_no_vector,
+        "snippets": text.pre_docs is not None,
     }
+
+
+def _scored_docs(leaf, doc_texts):
+    """The docs table of a continuous leaf, and its rows as dicts."""
+    rows = [_row_to_dict(d) for d in leaf.docs]
+    table = _docs_table(
+        leaf, list(leaf.docs._columns), rows,
+        [[r["alignment_score"] for r in rows], [r["residual"] for r in rows]], doc_texts,
+    )
+    return table, rows
 
 
 def _continuous(result, kind, sps, spc, doc_texts):
     tables = {"stats": _view_table(result.stats), "fit_info": _view_table(result.fit_info),
               "test": _view_table(result.test)}
-    if kind == "pca_ols" and len(result.sweep):
-        tables["sweep"] = _view_table(result.sweep)
     covariates = result.covariates
     if len(covariates):
         tables["covariates"] = _view_table(covariates)
     unit = _unit_tables(result, sps, spc)
-    cols = list(result.docs._columns)
-    rows = [_row_to_dict(d) for d in result.docs]
-    unit["docs"] = _docs_table(
-        result, cols, rows,
-        [[r["alignment_score"] for r in rows], [r["residual"] for r in rows]], doc_texts,
-    )
+    unit["docs"], rows = _scored_docs(result, doc_texts)
     leaves = result.keys() if kind == "pls" else []
     units = [{"key": "main", "label": "β" if leaves else "", "pos_label": "+β", "neg_label": "−β",
               "tables": unit}]
@@ -182,6 +208,51 @@ def _continuous(result, kind, sps, spc, doc_texts):
             units.append({"key": key, "label": result._key_repr(key), "pos_label": "+", "neg_label": "−",
                           "tables": dim})
     return tables, units, result
+
+
+def _regression_leaves(result):
+    """``(text name, key, leaf)`` per term leaf, in formula order, text by text."""
+    if not result._by_text:
+        return [(None, key, result[key]) for key in result.keys()]
+    out = []
+    for name, entry in result._leaves.items():
+        if isinstance(entry, RegressionResult):
+            out += [(name, key, leaf) for _, key, leaf in _regression_leaves(entry)]
+        else:
+            out.append((name, entry._term, entry))
+    return out
+
+
+def _regression(result, sps, spc, doc_texts):
+    from ssdiff.backends.regression import label_of
+
+    leaves = _regression_leaves(result)
+    first = leaves[0][2]
+    tables = {"stats": _view_table(result.stats), "fit_info": _view_table(first.fit_info),
+              "test": _view_table(result.test)}
+    if len(result.covariates):
+        tables["covariates"] = _view_table(result.covariates)
+    names = list(dict.fromkeys(name for name, _, _ in leaves))
+    # A text's own row (label = its name) is not a term's test.
+    term_labels = [t.label for t in result.test if t.label is not None and t.label not in names]
+    units = []
+    for name, key, leaf in leaves:
+        unit = {"stats": _view_table(leaf.stats), "fit_info": _view_table(leaf.fit_info),
+                **_unit_tables(leaf, sps, spc)}
+        unit["docs"], _ = _scored_docs(leaf, doc_texts)
+        units.append({"key": key, "label": key, "pos_label": "+β", "neg_label": "−β",
+                      "text": names.index(name), "test": label_of(key, term_labels), "tables": unit})
+    return tables, units, first
+
+
+def _text_leaves(result):
+    """``(name, first leaf)`` per text of a result; ``name`` is ``None`` unless the result has several texts."""
+    if not isinstance(result, RegressionResult):
+        return [(None, result)]
+    first = {}
+    for name, _, leaf in _regression_leaves(result):
+        first.setdefault(name, leaf)
+    return list(first.items())
 
 
 def _groups(gr, kind, sps, spc, doc_texts):
@@ -220,12 +291,20 @@ def _multipls(mp, kind, sps, spc, doc_texts):
     return tables, units, mp[mp.keys()[0]]
 
 
+def _contrast(result, kind, sps, spc, doc_texts):
+    a, b = result.labels
+    tables = {"stats": _view_table(result.stats)}
+    units = [{"key": "contrast", "label": f"{a} \u2212 {b}", "pos_label": a, "neg_label": b,
+              "tables": _unit_tables(result, sps, spc)}]
+    return tables, units, result
+
+
 def _kind(result) -> str:
-    from ssdiff.results.continuous_result import PCAOLSResult, PLSResult
     from ssdiff.results.group_result import GroupResult
     from ssdiff.results.multi_pls_result import MultiPLSResult
-    for cls, name in ((PLSResult, "pls"), (PCAOLSResult, "pca_ols"),
-                      (GroupResult, "groups"), (MultiPLSResult, "multipls")):
+    for cls, name in ((PLSResult, "pls"), (PCAOLSResult, "pca_ols"), (RegressionResult, "pca_ols"),
+                      (GroupResult, "groups"), (MultiPLSResult, "multipls"),
+                      (ContrastResult, "contrast")):
         if isinstance(result, cls):
             return name
     raise TypeError(f"no results page for {type(result).__name__}")
@@ -237,19 +316,25 @@ def page_data(result, *, title=None, dataset=None, snippets_per_side=200,
     import ssdiff
 
     kind = _kind(result)
-    build = {"pls": _continuous, "pca_ols": _continuous, "groups": _groups, "multipls": _multipls}[kind]
-    tables, units, first_leaf = build(result, kind, snippets_per_side, snippets_per_cluster, doc_texts)
+    if isinstance(result, RegressionResult):
+        tables, units, first_leaf = _regression(result, snippets_per_side, snippets_per_cluster, doc_texts)
+    else:
+        build = {"pls": _continuous, "pca_ols": _continuous, "groups": _groups, "multipls": _multipls,
+                 "contrast": _contrast}[kind]
+        tables, units, first_leaf = build(result, kind, snippets_per_side, snippets_per_cluster, doc_texts)
     data = {
         "report_format": REPORT_FORMAT,
         "kind": kind,
         "title": title or "SSD results",
         "created": datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "software": {"package": "ssdiff", "language": "python", "version": ssdiff.__version__},
-        "embeddings": _clean(_embeddings(result)),
+        "texts": _clean([_text_entry(leaf, kind, name) for name, leaf in _text_leaves(result)]),
         "settings": _clean(_settings(result, first_leaf)),
         "tables": tables,
         "units": units,
     }
+    for u in units:
+        u.setdefault("text", 0)
     if dataset is not None:
         data["dataset"] = _clean(dict(dataset))
     return data

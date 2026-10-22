@@ -1,10 +1,7 @@
 """Integration tests for the SSD class.
 
-Consolidates: test_ssd.py, test_fit_multipls.py, test_diagnostics.py,
-and parts of test_results.py.
-
 Fixtures come from conftest.py — all use tiny in-memory Embeddings,
-no real embeddings, no spaCy downloads, no network access.
+no real embeddings, no network access.
 """
 
 from __future__ import annotations
@@ -14,7 +11,6 @@ import threading
 import numpy as np
 import pytest
 
-from ssdiff.corpus import Corpus
 from ssdiff.ssd import SSD
 from ssdiff.utils.diagnostics import _get_hook, progress_hook
 
@@ -31,52 +27,45 @@ def _cos_sim(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b) / (na * nb))
 
 
-def _make_ssd(embeddings, docs, y, lexicon, **kwargs):
-    corpus = Corpus(docs, pretokenized=True, lang="pl")
-    return SSD(embeddings, corpus, y, lexicon, **kwargs)
-
-
 # ---------------------------------------------------------------------------
-# 1. Construction invariant: n_kept + n_dropped == n_raw; fit_info is None
+# 1. Construction: vectors are built lazily; SSD has no fit_info
 # ---------------------------------------------------------------------------
 
 def test_construction_counts(ssd_instance):
-    """n_kept + n_dropped == n_raw; SSD has no fit_info attribute pre-fit."""
+    """n_kept <= len(ssd); SSD has no fit_info attribute pre-fit."""
     ssd = ssd_instance
-    assert ssd.n_kept + ssd.n_dropped == ssd.n_raw
-    # SSD has no fit_info attribute (it only appears on result objects)
+    assert 0 < ssd.n_kept <= len(ssd)
     assert not hasattr(ssd, "fit_info")
 
 
 def test_construction_shapes(ssd_instance):
-    """x is 2-D; y is 1-D; y length matches n_kept."""
-    ssd = ssd_instance
-    assert ssd.x.ndim == 2
-    assert ssd.y.ndim == 1
-    assert len(ssd.y) == ssd.n_kept
-    assert ssd.x.shape[0] == ssd.n_kept
+    """The vectors are 2-D with one row per document that has one."""
+    X, has_vector, _ = ssd_instance._vectors()
+    assert X.ndim == 2
+    assert has_vector.shape == (len(ssd_instance),)
+    assert X.shape[0] == ssd_instance.n_kept
 
 
 # ---------------------------------------------------------------------------
 # 2. fit_pls basic invariants
 # ---------------------------------------------------------------------------
 
-def test_fit_pls_returns_plsresult(ssd_instance):
+def test_fit_pls_returns_plsresult(ssd_instance, parity_df):
     from ssdiff.results.continuous_result import PLSResult
-    result = ssd_instance.fit_pls(k=2, n_splits=20)
+    result = ssd_instance.fit_pls(parity_df["y"], k=2, n_splits=20)
     assert isinstance(result, PLSResult)
 
 
-def test_fit_pls_r2_in_range(ssd_instance):
+def test_fit_pls_r2_in_range(ssd_instance, parity_df):
     """PLSResult.stats.r2 is in [0, 1]."""
-    result = ssd_instance.fit_pls(k=2, n_splits=20)
+    result = ssd_instance.fit_pls(parity_df["y"], k=2, n_splits=20)
     assert 0.0 <= result.stats.r2 <= 1.0
 
 
-def test_fit_pls_beta_shape(ssd_instance, tiny_kv):
+def test_fit_pls_beta_shape(ssd_instance, parity_df, parity_emb):
     """beta shape is (D,) where D == embeddings.dim."""
-    result = ssd_instance.fit_pls(k=2, n_splits=20)
-    D = tiny_kv.vectors.shape[1]
+    result = ssd_instance.fit_pls(parity_df["y"], k=2, n_splits=20)
+    D = parity_emb.vectors.shape[1]
     assert result.beta.shape == (D,)
 
 
@@ -84,10 +73,10 @@ def test_fit_pls_beta_shape(ssd_instance, tiny_kv):
 # 5. fit_regression with fixed_k
 # ---------------------------------------------------------------------------
 
-def test_fit_regression_fixed_k(ssd_instance):
+def test_fit_regression_fixed_k(ssd_instance, parity_df):
     """fit_regression(fixed_k=3) returns PCAOLSResult with pca_k == 3."""
     from ssdiff.results.continuous_result import PCAOLSResult
-    result = ssd_instance.fit_regression(fixed_k=3)
+    result = ssd_instance.fit_regression(parity_df["y"], fixed_k=3)
     assert isinstance(result, PCAOLSResult)
     assert result.pca_k == 3
 
@@ -99,9 +88,8 @@ def test_fit_regression_fixed_k(ssd_instance):
 def test_fit_regression_sweep(tiny_kv, large_docs, large_y, lexicon):
     """fit_regression(fixed_k=None) sweep produces valid PCAOLSResult."""
     from ssdiff.results.continuous_result import PCAOLSResult
-    corpus = Corpus(large_docs, pretokenized=True, lang="pl")
-    ssd = SSD(tiny_kv, corpus, large_y, lexicon)
-    result = ssd.fit_regression(fixed_k=None, k_min=2, k_max=6, k_step=1)
+    ssd = SSD(tiny_kv, large_docs, lexicon)
+    result = ssd.fit_regression(large_y, fixed_k=None, k_min=2, k_max=6, k_step=1)
     assert isinstance(result, PCAOLSResult)
     assert 0.0 <= result.stats.r2 <= 1.0
     assert result.pca_k >= 2
@@ -112,12 +100,10 @@ def test_fit_regression_sweep(tiny_kv, large_docs, large_y, lexicon):
 # ---------------------------------------------------------------------------
 
 def test_fit_pls_categorical_y_raises(tiny_kv, sample_docs, sample_groups, lexicon):
-    """SSD with categorical y raises ValueError on fit_pls()."""
-    corpus = Corpus(sample_docs, pretokenized=True, lang="pl")
-    ssd = SSD(tiny_kv, corpus, sample_groups, lexicon)
-    assert not ssd.is_numeric
+    """A categorical outcome raises ValueError on fit_pls()."""
+    ssd = SSD(tiny_kv, sample_docs, lexicon)
     with pytest.raises(ValueError, match="categorical"):
-        ssd.fit_pls()
+        ssd.fit_pls(sample_groups)
 
 
 # ---------------------------------------------------------------------------
@@ -127,10 +113,9 @@ def test_fit_pls_categorical_y_raises(tiny_kv, sample_docs, sample_groups, lexic
 def test_fit_pls_constant_y_rejected(tiny_kv, sample_docs, lexicon):
     """Constant y has zero variance — fitting PLS1 is undefined and must error."""
     constant_y = np.ones(len(sample_docs))
-    corpus = Corpus(sample_docs, pretokenized=True, lang="pl")
-    ssd = SSD(tiny_kv, corpus, constant_y, lexicon)
+    ssd = SSD(tiny_kv, sample_docs, lexicon)
     with pytest.raises(ValueError, match="nonzero variance"):
-        ssd.fit_pls(k=1, n_splits=20)
+        ssd.fit_pls(constant_y, k=1, n_splits=20)
 
 
 # ---------------------------------------------------------------------------
@@ -139,12 +124,11 @@ def test_fit_pls_constant_y_rejected(tiny_kv, sample_docs, lexicon):
 
 def test_use_full_doc_differs(tiny_kv, sample_docs, sample_y, lexicon):
     """use_full_doc=True vs False: betas are not identical."""
-    corpus = Corpus(sample_docs, pretokenized=True, lang="pl")
-    ssd_ctx = SSD(tiny_kv, corpus, sample_y, lexicon, use_full_doc=False)
-    ssd_full = SSD(tiny_kv, corpus, sample_y, None, use_full_doc=True)
+    ssd_ctx = SSD(tiny_kv, sample_docs, lexicon, use_full_doc=False)
+    ssd_full = SSD(tiny_kv, sample_docs, None, use_full_doc=True)
 
-    res_ctx = ssd_ctx.fit_pls(k=1, n_splits=20)
-    res_full = ssd_full.fit_pls(k=1, n_splits=20)
+    res_ctx = ssd_ctx.fit_pls(sample_y, k=1, n_splits=20)
+    res_full = ssd_full.fit_pls(sample_y, k=1, n_splits=20)
 
     # Results should differ — at minimum their betas are not identical
     assert not np.allclose(res_ctx.beta, res_full.beta), (
@@ -156,16 +140,11 @@ def test_use_full_doc_differs(tiny_kv, sample_docs, sample_y, lexicon):
 # 12. progress_hook: fires per step; thread-local isolation
 # ---------------------------------------------------------------------------
 
-def test_progress_hook_does_not_break_fit_pls(ssd_instance):
-    """progress_hook around fit_pls(perm) is a no-op since the migration to plskit.
-
-    Pre-migration the in-tree perm test fired this hook per permutation.
-    After the v2.0 backend swap, perm/split/calibrated tests run inside
-    plskit's Rust core (spec §8.2 — progress reporting deferred), so the
-    hook is no longer called from those code paths.  The hook remains
-    available for any future SSDLite-side instrumentation; this test
-    just confirms that wrapping ``fit_pls`` in a ``progress_hook``
-    context does not break execution.
+def test_progress_hook_does_not_break_fit_pls(ssd_instance, parity_df):
+    """progress_hook around fit_pls is a no-op for the permutation, split and
+    calibrated tests: they run inside plskit's Rust core, which reports no
+    progress. This test checks that wrapping ``fit_pls`` in a
+    ``progress_hook`` does not break it.
     """
     calls = []
 
@@ -174,14 +153,13 @@ def test_progress_hook_does_not_break_fit_pls(ssd_instance):
 
     with progress_hook(cb):
         result = ssd_instance.fit_pls(
-            k=1, n_splits=20, random_state=1
+            parity_df["y"], k=1, n_splits=20, random_state=1
         )
 
     # Hook may legitimately receive zero calls; what we care about is
     # that fit_pls produced a valid result.
     assert 0.0 <= result.stats.r2 <= 1.0
-    # If the hook *was* fired (e.g. some future SSDLite-side wrapper),
-    # each call must still have the right shape.
+    # If the hook fires, each call must still have the right shape.
     for current, total, desc in calls:
         assert isinstance(current, int)
         assert isinstance(total, int)
@@ -280,10 +258,10 @@ def test_progress_hook_nested_restores():
 # 15b. k="auto" routes through plskit.pls1_find_k_optimal
 # ---------------------------------------------------------------------------
 
-def test_fit_pls_k_auto(ssd_instance):
+def test_fit_pls_k_auto(ssd_instance, parity_df):
     """fit_pls(k='auto') resolves to k>=1 via pls1_find_k_optimal."""
     result = ssd_instance.fit_pls(
-        k="auto", k_max=3, n_splits=5, random_state=0,
+        parity_df["y"], k="auto", k_max=3, n_splits=5, random_state=0,
     )
     assert result.fit_info["n_components"] >= 1
 
@@ -293,31 +271,27 @@ def test_fit_pls_k_auto(ssd_instance):
 # ---------------------------------------------------------------------------
 
 def test_fit_regression_categorical_y_raises(tiny_kv, sample_docs, sample_groups, lexicon):
-    """SSD with categorical y raises ValueError on fit_regression()."""
-    corpus = Corpus(sample_docs, pretokenized=True, lang="pl")
-    ssd = SSD(tiny_kv, corpus, sample_groups, lexicon)
+    """A categorical outcome raises ValueError on fit_regression()."""
+    ssd = SSD(tiny_kv, sample_docs, lexicon)
     with pytest.raises(ValueError, match="categorical"):
-        ssd.fit_regression()
+        ssd.fit_regression(sample_groups)
 
 
 # ---------------------------------------------------------------------------
-# 17. SSD constructor validates lexicon requirement
+# 17. A fit needs a lexicon unless use_full_doc=True
 # ---------------------------------------------------------------------------
 
-def test_construction_no_lexicon_raises(tiny_kv, sample_docs, sample_y):
-    """SSD(use_full_doc=False) with no lexicon raises ValueError."""
-    corpus = Corpus(sample_docs, pretokenized=True, lang="pl")
+def test_fit_without_lexicon_raises(tiny_kv, sample_docs, sample_y):
+    """No lexicon and use_full_doc=False raises ValueError at fit time."""
+    ssd = SSD(tiny_kv, sample_docs, lexicon=None, use_full_doc=False)
     with pytest.raises(ValueError, match="lexicon"):
-        SSD(tiny_kv, corpus, sample_y, lexicon=None, use_full_doc=False)
+        ssd.fit_pls(sample_y)
 
 
 def test_construction_full_doc_no_lexicon_ok(tiny_kv, sample_docs, sample_y):
     """SSD(use_full_doc=True) with lexicon=None does not raise."""
-    corpus = Corpus(sample_docs, pretokenized=True, lang="pl")
-    ssd = SSD(tiny_kv, corpus, sample_y, lexicon=None, use_full_doc=True)
+    ssd = SSD(tiny_kv, sample_docs, lexicon=None, use_full_doc=True)
     assert ssd.n_kept >= 0
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -330,50 +304,46 @@ def _y2(n, q=3, seed=0):
 
 def test_y_2d_array_accepted(tiny_kv, sample_docs, lexicon):
     y = _y2(len(sample_docs))
-    ssd = _make_ssd(tiny_kv, sample_docs, y, lexicon)
-    assert ssd.y.shape == (ssd.n_kept, 3)
-    assert ssd.outcome_names == ["y1", "y2", "y3"]
+    res = SSD(tiny_kv, sample_docs, lexicon).fit_multipls(y, n_perm=20, n_splits=5)
+    assert res.y.shape == (len(sample_docs), 3)
+    assert res.outcome_names == ["y1", "y2", "y3"]
 
 
 def test_y_dataframe_names(tiny_kv, sample_docs, lexicon):
     pd = pytest.importorskip("pandas")
     df = pd.DataFrame(_y2(len(sample_docs)), columns=[10, "b", "c"])
-    ssd = _make_ssd(tiny_kv, sample_docs, df, lexicon)
-    assert ssd.outcome_names == ["10", "b", "c"]
-
-
-def test_y_1d_has_no_outcome_names(ssd_instance):
-    assert ssd_instance.outcome_names is None
+    res = SSD(tiny_kv, sample_docs, lexicon).fit_multipls(df, n_perm=20, n_splits=5)
+    assert res.outcome_names == ["10", "b", "c"]
 
 
 def test_y_2d_nan_row_and_empty_doc_stay_aligned(tiny_kv, sample_docs, lexicon):
     docs = [list(d) for d in sample_docs] + [["zzz_not_in_vocab"]]
     y = _y2(len(docs))
     y[1, 2] = np.nan
-    ssd = _make_ssd(tiny_kv, docs, y, lexicon)
+    res = SSD(tiny_kv, docs, lexicon).fit_multipls(y, n_perm=20, n_splits=5)
     expected_rows = [i for i in range(len(docs)) if i != 1 and i != len(docs) - 1]
-    np.testing.assert_array_equal(ssd.y, y[expected_rows])
-    assert ssd.x.shape[0] == ssd.y.shape[0]
+    np.testing.assert_array_equal(res.y, y[expected_rows])
+    assert res.x.shape[0] == res.y.shape[0]
 
 
 def test_y_2d_non_numeric_raises(tiny_kv, sample_docs, lexicon):
     y = np.array([["a", "b"]] * len(sample_docs), dtype=object)
     with pytest.raises(ValueError, match="numeric"):
-        _make_ssd(tiny_kv, sample_docs, y, lexicon)
+        SSD(tiny_kv, sample_docs, lexicon).fit_multipls(y)
 
 
 @pytest.mark.parametrize("method", ["fit_pls", "fit_regression", "fit_groups"])
 def test_single_outcome_fits_reject_2d_y(tiny_kv, sample_docs, lexicon, method):
-    ssd = _make_ssd(tiny_kv, sample_docs, _y2(len(sample_docs)), lexicon)
+    ssd = SSD(tiny_kv, sample_docs, lexicon)
     with pytest.raises(ValueError, match="fit_multipls"):
-        getattr(ssd, method)()
+        getattr(ssd, method)(_y2(len(sample_docs)))
 
 
 @pytest.mark.parametrize("method", ["fit_pls", "fit_regression", "fit_groups"])
 def test_single_column_2d_y_asks_for_1d(tiny_kv, sample_docs, lexicon, method):
-    ssd = _make_ssd(tiny_kv, sample_docs, _y2(len(sample_docs), q=1), lexicon)
-    with pytest.raises(ValueError, match="1-D y"):
-        getattr(ssd, method)()
+    ssd = SSD(tiny_kv, sample_docs, lexicon)
+    with pytest.raises(ValueError, match="1-D outcome"):
+        getattr(ssd, method)(_y2(len(sample_docs), q=1))
 
 
 # ---------------------------------------------------------------------------
@@ -381,17 +351,17 @@ def test_single_column_2d_y_asks_for_1d(tiny_kv, sample_docs, lexicon, method):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("fit", [
-    lambda s: s.fit_pls(k=2, n_splits=20, random_state=42),
-    lambda s: s.fit_regression(fixed_k=3),
+    lambda s, y: s.fit_pls(y, k=2, n_splits=20, random_state=42),
+    lambda s, y: s.fit_regression(y, fixed_k=3),
 ], ids=["pls", "ols"])
-def test_predict_training_corpus_reproduces_fit(ssd_instance, fit):
-    """predict() on the training corpus gives docs.y_hat, and its R² is stats.r2."""
-    res = fit(ssd_instance)
-    pred = res.predict(ssd_instance.corpus)
-    assert pred.shape == (len(ssd_instance.corpus.docs),)
+def test_predict_training_text_reproduces_fit(ssd_instance, parity_df, fit):
+    """predict() on the training text gives docs.y_hat, and its R² is stats.r2."""
+    res = fit(ssd_instance, parity_df["y"])
+    pred = res.predict(parity_df["text"])
+    assert pred.shape == (len(ssd_instance),)
 
     y_hat = np.array([d.y_hat for d in res.docs])
-    np.testing.assert_allclose(pred[ssd_instance._keep_mask], y_hat, rtol=1e-10)
+    np.testing.assert_allclose(pred[res._keep_mask], y_hat, rtol=1e-10)
     # Fitted values of a centered least-squares-type fit average to mean(y).
     assert y_hat.mean() == pytest.approx(res.y.mean())
 
@@ -400,39 +370,36 @@ def test_predict_training_corpus_reproduces_fit(ssd_instance, fit):
     assert 1.0 - sse / sst == pytest.approx(res.stats.r2)
 
 
-def test_predict_nan_for_documents_without_vector(pls_result):
+def test_predict_nan_for_documents_without_vector(tiny_kv, sample_docs, sample_y, lexicon):
     """No known word, or no seed in seed-context mode, gives NaN."""
-    corpus = Corpus(
-        [["kraj", "piekny", "dom"], ["zzz_not_in_vocab"], ["piekny", "dom"], []],
-        pretokenized=True, lang="pl",
+    res = SSD(tiny_kv, sample_docs, lexicon).fit_pls(sample_y, k=1, n_splits=20)
+    pred = res.predict(
+        [["kraj", "piekny", "dom"], ["zzz_not_in_vocab"], ["piekny", "dom"], []]
     )
-    pred = pls_result.predict(corpus)
     assert np.isfinite(pred[0])
     assert np.isnan(pred[1:]).all()
 
 
 def test_predict_full_doc_mode(tiny_kv, sample_docs, sample_y):
     """Full-document fits predict on documents without any seed word."""
-    corpus = Corpus(sample_docs, pretokenized=True, lang="pl")
-    res = SSD(tiny_kv, corpus, sample_y, use_full_doc=True).fit_pls(k=1, n_splits=20)
-    pred = res.predict(Corpus([["piekny", "dom"]], pretokenized=True, lang="pl"))
+    res = SSD(tiny_kv, sample_docs, use_full_doc=True).fit_pls(sample_y, k=1, n_splits=20)
+    pred = res.predict([["piekny", "dom"]])
     assert np.isfinite(pred).all()
 
 
 def test_predict_without_sif(tiny_kv, sample_docs, sample_y, lexicon):
-    """sif_a=None: predict() on the training corpus rebuilds the fit's vectors."""
-    corpus = Corpus(sample_docs, pretokenized=True, lang="pl")
-    res = SSD(tiny_kv, corpus, sample_y, lexicon, sif_a=None).fit_pls(k=1, n_splits=20)
-    pred = res.predict(corpus)
+    """sif_a=None: predict() on the training text rebuilds the fit's vectors."""
+    res = SSD(tiny_kv, sample_docs, lexicon, sif_a=None).fit_pls(sample_y, k=1, n_splits=20)
+    pred = res.predict(sample_docs)
     np.testing.assert_allclose(pred, [d.y_hat for d in res.docs], rtol=1e-10)
 
 
 @pytest.mark.parametrize("k", [2, "auto"])
-def test_fit_pls_test_false_skips_test(ssd_instance, k):
+def test_fit_pls_test_false_skips_test(ssd_instance, parity_df, k):
     """test=False: NaN p-value, test left not run, same beta as test=True."""
     kw = dict(k=k, k_max=3, n_splits=5, random_state=0)
-    tested = ssd_instance.fit_pls(**kw)
-    untested = ssd_instance.fit_pls(test=False, **kw)
+    tested = ssd_instance.fit_pls(parity_df["y"], **kw)
+    untested = ssd_instance.fit_pls(parity_df["y"], test=False, **kw)
 
     np.testing.assert_array_equal(untested.beta, tested.beta)
     assert np.isnan(untested.stats.pvalue)

@@ -1,6 +1,6 @@
 # ssdiff — Embeddings
 
-How to get word embeddings into `ssdiff`: a ready English pack, or your own file.
+How to get word embeddings and texts into `ssdiff`: a ready English pack with strings, or your own file with token lists.
 
 For the argument tables of `Embeddings` see [`api_reference.md`](api_reference.md#embeddings).
 
@@ -9,15 +9,15 @@ For the argument tables of `Embeddings` see [`api_reference.md`](api_reference.m
 ## Load the English default
 
 ```python
-from ssdiff import Embeddings, Corpus
+from ssdiff import Embeddings, SSD
 
-emb = Embeddings.load()                  # the same pack as Embeddings.load("en")
-corpus = Corpus(texts, embeddings=emb)   # the pack's own tokenizer and stopwords; no spaCy
+emb = Embeddings.load()                    # the same pack as Embeddings.load("en")
+ssd = SSD(emb, df["text"], lexicon)        # strings: the pack's own tokenizer and stopwords
 ```
 
 The first call downloads the pack (380 MB) into a cache directory. Later calls load it from there.
 
-What you get is a **wordpack**: one file with the word vectors, the tokenizer and the stopword list. It is ready to use: rows are L2-normalized and ABTT (m = 1) is already applied, so you do not call `normalize()`.
+What you get is a **wordpack**: one file with the word vectors, the tokenizer and the stopword list. It is ready to use: rows are L2-normalized and ABTT (m = 1) is already applied, so you do not call `normalize()`. `SSD` tokenizes strings with the pack, so you pass plain text.
 
 ---
 
@@ -50,7 +50,7 @@ Use the full name in scripts whose results must be reproducible. A fit records i
 
 ```python
 emb.name, emb.version    # ("en-glove2024-dolma", "1")
-corpus.tokenizer         # "wordpack:en-glove2024-dolma-1"
+ssd.tokenizer            # "wordpack:en-glove2024-dolma-1"
 result.report()          # the "embeddings" row reads en-glove2024-dolma-1
 ```
 
@@ -77,12 +77,14 @@ Set the environment variable `WORDPACK_CACHE` to use another directory. Nothing 
 
 ## Use your own embedding file
 
-For another language, or your own model, load a file:
+For another language, or your own model, load a file and pass token lists:
 
 ```python
 emb = Embeddings.load("path/to/model.bin", verbose=True)
 emb.normalize(l2=True, abtt=1)        # L2 + ABTT (remove the top principal component)
-corpus = Corpus(texts, lang="pl")     # spaCy tokenization; needs pip install ssdiff[spacy]
+
+tokens = [["happy", "day", "sunshine"], ["sad", "rain", "cold"], ...]   # one token list per document
+ssd = SSD(emb, tokens, lexicon)
 ```
 
 | Format | Extension | Notes |
@@ -93,11 +95,22 @@ corpus = Corpus(texts, lang="pl")     # spaCy tokenization; needs pip install ss
 | Text | `.txt`, `.vec` | One word per line + floats |
 | Compressed | `.txt.gz`, `.vec.gz`, `.bin.gz` | Gzip-compressed versions of the above |
 
-`normalize()` with no arguments applies both L2 and ABTT (m = 1). It tracks what was applied, so calling it again skips the steps already done.
+`SSD` needs L2-normalized rows. `normalize()` with no arguments applies both L2 and ABTT (m = 1). It tracks what was applied, so calling it again skips the steps already done. Loading a file that is not a wordpack gives a warning that reminds you to pass token lists.
 
 Look for pre-trained static word embeddings in your language with good vocabulary coverage for your domain. GloVe and word2vec trained on large general corpora are a reliable starting point. For Polish, `nkjp+wiki-lemmas-all-300-cbow-hs.txt.gz` (no. 25) from the [Polish Word2Vec model list](https://dsmodels.nlp.ipipan.waw.pl) was found to work well.
 
-With spaCy the corpus holds lemmas, so the lexicon lists lemmas.
+---
+
+## Texts for your own embedding
+
+Only a wordpack tokenizes strings, and wordpacks exist for English. For any other embedding, each document is a list of tokens.
+
+- The tokens are used as given. Each is matched to the embedding's keys exactly, and a token that is not a key is skipped.
+- Make the tokens in the form the embedding is keyed by: lowercase tokens for a lowercase embedding, lemmas for a lemmatized one. The Polish model above is lemmatized, so lemmatize the Polish texts first.
+- The lexicon lists tokens in that same form.
+- A text of token lists has no raw text, so a result from it has no snippets and `result.docs.id(i)` shows no original text. Predicting for new documents (`result.predict(...)`) and `result.attach(texts=...)` take token lists too.
+
+Any tool can make the tokens. `examples/custom_embedding_spacy.py` lemmatizes with spaCy; spaCy is optional and ssdiff does not depend on it.
 
 ---
 
@@ -105,7 +118,7 @@ With spaCy the corpus holds lemmas, so the lexicon lists lemmas.
 
 | Message | What it means |
 |---|---|
-| `No file or wordpack named 'glove'. Short tags: en, en-wiki.` | There is no file at that path and no pack with that tag. Check the path. |
+| `No wordpack tag or file named 'glove'. Tags: default, en, en-dolma, en-wiki.` | There is no file at that path and no pack with that tag. Check the path. |
 | `No wordpack named 'en-glove2024-dolma-2'. Versions of en-glove2024-dolma: 1.` | The pack exists, but not in that version. |
-| `No file named 'en', and it cannot be looked up as a wordpack: no host answered …` | There is no file at that path, and the pack list cannot be read: no internet connection, or the host is down. A full name that is already in the cache still loads. |
+| `Wordpack 'en-glove2024-dolma-1' is not in the cache (<dir>) and cannot be downloaded: no host answered for index.json …` | The pack is not in the local cache, and the pack list cannot be read: no internet connection, or the host is down. A full name that is already in the cache still loads. |
 | `… Upgrade ssdiff.` | The pack is newer than this `ssdiff` can read. |

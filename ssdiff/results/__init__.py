@@ -14,11 +14,13 @@ from ssdiff.results.continuous_result import (
     ContinuousResult,
     PCAOLSResult,
     PLSResult,
+    RegressionResult,
     SnippetsView,
     SnippetsViewSided,
     WordsView,
     WordsViewSided,
 )
+from ssdiff.results.contrast_result import ContrastResult, contrast
 from ssdiff.results.core import Result
 from ssdiff.results.display import set_repr_hints
 from ssdiff.results.group_result import GroupResult, PairResult
@@ -36,6 +38,7 @@ __all__ = [
     "ClustersView",
     "ClustersViewSided",
     "ContinuousResult",
+    "ContrastResult",
     "GroupResult",
     "LexiconResult",
     "MultiPLSResult",
@@ -43,10 +46,12 @@ __all__ = [
     "PLSComponentResult",
     "PCAOLSResult",
     "PLSResult",
+    "RegressionResult",
     "Result",
     "SnippetsView",
     "SnippetsViewSided",
     "WordsView",
     "WordsViewSided",
+    "contrast",
     "set_repr_hints",
 ]

@@ -6,14 +6,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from ssdiff.corpus import Corpus
 from ssdiff.results.format import fmt_p, fmt_r
 from ssdiff.ssd import SSD
 from ssdiff.utils.math import f_sf, pca_fit_transform, standardize
 
 
-def _ssd(kv, docs, y, lexicon, **kw):
-    return SSD(kv, Corpus(docs, pretokenized=True, lang="pl"), y, lexicon, **kw)
+def _ssd(kv, docs, lexicon, **kw):
+    return SSD(kv, docs, lexicon, **kw)
 
 
 @pytest.fixture
@@ -29,10 +28,10 @@ def frame(large_y):
     })
 
 
-def _reference_ols(ssd, k):
+def _reference_ols(x, y, k):
     """PCA + OLS on standardized y, computed directly: beta, r2, r2_adj, F-test p."""
-    ys = standardize(ssd.y.reshape(-1, 1))[0].ravel()
-    Xs, _, X_scale = standardize(ssd.x)
+    ys = standardize(y.reshape(-1, 1))[0].ravel()
+    Xs, _, X_scale = standardize(x)
     z, comps, _ = pca_fit_transform(Xs, k)
     w = np.linalg.solve(z.T @ z, z.T @ ys)
     resid = ys - z @ w
@@ -44,9 +43,9 @@ def _reference_ols(ssd, k):
 
 
 def test_no_formula_matches_pca_ols(tiny_kv, large_docs, large_y, lexicon):
-    ssd = _ssd(tiny_kv, large_docs, large_y, lexicon)
-    res = ssd.fit_regression(fixed_k=4)
-    beta, r2, r2_adj, p = _reference_ols(ssd, 4)
+    ssd = _ssd(tiny_kv, large_docs, lexicon)
+    res = ssd.fit_regression(large_y, fixed_k=4)
+    beta, r2, r2_adj, p = _reference_ols(ssd._vectors()[0], large_y, 4)
     np.testing.assert_allclose(res.beta, beta, rtol=1e-8, atol=1e-12)
     assert res.stats.r2 == pytest.approx(r2, rel=1e-8)
     assert res.stats.r2_adj == pytest.approx(r2_adj, rel=1e-8)
@@ -57,107 +56,103 @@ def test_no_formula_matches_pca_ols(tiny_kv, large_docs, large_y, lexicon):
 
 
 def test_sweep_k_used(tiny_kv, large_docs, large_y, lexicon):
-    ssd = _ssd(tiny_kv, large_docs, large_y, lexicon)
-    res = ssd.fit_regression(k_min=2, k_max=6, k_step=1)
+    ssd = _ssd(tiny_kv, large_docs, lexicon)
+    res = ssd.fit_regression(large_y, k_min=2, k_max=6, k_step=1)
     assert res.pca_k == res.sweep_result.best_k
-    assert res.stats.r2 == pytest.approx(_reference_ols(ssd, res.pca_k)[1], rel=1e-8)
+    assert res.stats.r2 == pytest.approx(
+        _reference_ols(ssd._vectors()[0], large_y, res.pca_k)[1], rel=1e-8
+    )
 
 
 def test_fit_ols_warns_and_matches(tiny_kv, large_docs, large_y, lexicon):
-    ssd = _ssd(tiny_kv, large_docs, large_y, lexicon)
+    ssd = _ssd(tiny_kv, large_docs, lexicon)
     with pytest.warns(FutureWarning, match="fit_regression"):
-        old = ssd.fit_ols(fixed_k=4)
-    new = ssd.fit_regression(fixed_k=4)
+        old = ssd.fit_ols(large_y, fixed_k=4)
+    new = ssd.fit_regression(large_y, fixed_k=4)
     np.testing.assert_allclose(old.beta, new.beta)
     assert old.stats.pvalue == new.stats.pvalue
 
 
-# --- y and data ------------------------------------------------------------
+# --- outcome and data ------------------------------------------------------------
 
-def test_y_column_name(tiny_kv, large_docs, large_y, lexicon, frame):
-    ssd = _ssd(tiny_kv, large_docs, "rating", lexicon, data=frame)
-    np.testing.assert_allclose(ssd.y, large_y)
-    assert len(ssd.data) == ssd.n_kept
-
-
-def test_y_column_list(tiny_kv, large_docs, lexicon, frame):
-    ssd = _ssd(tiny_kv, large_docs, ["rating", "arousal"], lexicon, data=frame)
-    assert ssd.y.shape == (len(frame), 2)
-    assert ssd.outcome_names == ["rating", "arousal"]
+def test_outcome_column_name(tiny_kv, large_docs, large_y, lexicon, frame):
+    res = _ssd(tiny_kv, large_docs, lexicon).fit_regression("rating", data=frame, fixed_k=3)
+    np.testing.assert_allclose(res.y, large_y)
 
 
-def test_y_column_list_from_dict(tiny_kv, large_docs, lexicon, frame):
+def test_outcome_column_list(tiny_kv, large_docs, lexicon, frame):
+    res = _ssd(tiny_kv, large_docs, lexicon).fit_multipls(
+        ["rating", "arousal"], data=frame, n_perm=19, n_splits=5
+    )
+    assert res.y.shape == (len(frame), 2)
+    assert res.outcome_names == ["rating", "arousal"]
+
+
+def test_outcome_column_list_from_dict(tiny_kv, large_docs, lexicon, frame):
     data = {c: frame[c].to_numpy() for c in ("rating", "arousal")}
-    ssd = _ssd(tiny_kv, large_docs, ["rating", "arousal"], lexicon, data=data)
-    assert ssd.y.shape == (len(frame), 2)
-    assert ssd.outcome_names == ["rating", "arousal"]
+    res = _ssd(tiny_kv, large_docs, lexicon).fit_multipls(
+        ["rating", "arousal"], data=data, n_perm=19, n_splits=5
+    )
+    assert res.y.shape == (len(frame), 2)
+    assert res.outcome_names == ["rating", "arousal"]
 
 
-def test_y_name_without_data_raises(tiny_kv, large_docs, lexicon):
+def test_outcome_name_without_data_raises(tiny_kv, large_docs, lexicon):
     with pytest.raises(ValueError, match="data"):
-        _ssd(tiny_kv, large_docs, "rating", lexicon)
+        _ssd(tiny_kv, large_docs, lexicon).fit_regression("rating", fixed_k=3)
 
 
 def test_data_length_mismatch_raises(tiny_kv, large_docs, large_y, lexicon, frame):
     with pytest.raises(ValueError, match="len"):
-        _ssd(tiny_kv, large_docs, large_y, lexicon, data=frame.iloc[:-1])
+        _ssd(tiny_kv, large_docs, lexicon).fit_regression(
+            large_y, data=frame.iloc[:-1], fixed_k=3
+        )
 
 
 def test_data_follows_dropped_documents(tiny_kv, large_docs, large_y, lexicon, frame):
+    """Covariate rows are dropped with their documents, for a DataFrame and a dict."""
     y = large_y.copy()
     y[[0, 7]] = np.nan
-    data = {c: frame[c].to_numpy() for c in frame.columns}
-    ssd = _ssd(tiny_kv, large_docs, y, lexicon, data=data)
-    np.testing.assert_allclose(ssd.data["age"], np.delete(frame["age"].to_numpy(), [0, 7]))
-    df_ssd = _ssd(tiny_kv, large_docs, y, lexicon, data=frame)
-    assert df_ssd.data["ID"].dtype == frame["ID"].dtype
-    assert list(df_ssd.data.index) == list(range(ssd.n_kept))
+    ssd = _ssd(tiny_kv, large_docs, lexicon)
+    age = np.delete(frame["age"].to_numpy(), [0, 7])
+    z_pca = pca_fit_transform(standardize(np.delete(ssd._vectors()[0], [0, 7], axis=0))[0], 3)[0]
+    coef = _ols(np.column_stack([np.ones(len(age)), age, z_pca]), np.delete(large_y, [0, 7]))[0]
+    for data in (frame.assign(rating=y), {c: frame[c].to_numpy() for c in frame.columns} | {"rating": y}):
+        res = ssd.fit_regression("rating ~ age", data=data, fixed_k=3)
+        assert res.model.nobs == len(age)
+        assert res.covariates[1].estimate == pytest.approx(coef[1], rel=1e-6)
 
 
 # --- formulas --------------------------------------------------------------
 
-@pytest.mark.parametrize("formula", ["~ age", "y ~ age", "rating ~ age", "age"])
-def test_formula_lhs_allowed(tiny_kv, large_docs, lexicon, frame, formula):
-    ssd = _ssd(tiny_kv, large_docs, "rating", lexicon, data=frame)
-    res = ssd.fit_regression(formula, fixed_k=3)
-    assert "age" in res.model.names
-
-
 def test_fixed_covariates_give_f_test(tiny_kv, large_docs, lexicon, frame):
-    ssd = _ssd(tiny_kv, large_docs, "rating", lexicon, data=frame)
-    res = ssd.fit_regression("~ age", fixed_k=3)
+    res = _ssd(tiny_kv, large_docs, lexicon).fit_regression("rating ~ age", data=frame, fixed_k=3)
     assert res.test.name == "f_test"
     assert res.stats.backend == "PCA+GLMM"
 
 
 @pytest.mark.parametrize("y", ["nope", ["rating", "nope"]])
-def test_y_column_missing_raises(tiny_kv, large_docs, lexicon, frame, y):
+def test_outcome_column_missing_raises(tiny_kv, large_docs, lexicon, frame, y):
     with pytest.raises(ValueError, match="nope"):
-        _ssd(tiny_kv, large_docs, y, lexicon, data=frame)
+        _ssd(tiny_kv, large_docs, lexicon).fit_multipls(y, data=frame)
 
 
-def test_formula_other_lhs_raises(tiny_kv, large_docs, lexicon, frame):
-    ssd = _ssd(tiny_kv, large_docs, "rating", lexicon, data=frame)
-    with pytest.raises(ValueError, match="arousal"):
-        ssd.fit_regression("arousal ~ age", fixed_k=3)
-
-
-def test_formula_without_data_raises(tiny_kv, large_docs, large_y, lexicon):
-    ssd = _ssd(tiny_kv, large_docs, large_y, lexicon)
+def test_formula_without_data_raises(tiny_kv, large_docs, lexicon):
     with pytest.raises(ValueError, match="data"):
-        ssd.fit_regression("~ age", fixed_k=3)
+        _ssd(tiny_kv, large_docs, lexicon).fit_regression("rating ~ age", fixed_k=3)
 
 
 def test_mixed_model(tiny_kv, large_docs, lexicon, frame):
-    ssd = _ssd(tiny_kv, large_docs, "rating", lexicon, data=frame)
-    res = ssd.fit_regression("~ age + (1 | ID)", fixed_k=3)
+    res = _ssd(tiny_kv, large_docs, lexicon).fit_regression(
+        "rating ~ age + (1 | ID)", data=frame, fixed_k=3
+    )
     assert res.test.name == "lrt"
     assert res.stats.backend == "PCA+GLMM"
-    assert res.model.formula == "_ssd_y ~ age + (1 | ID) + _ssd_pca_1 + _ssd_pca_2 + _ssd_pca_3"
+    assert res.model.formula == "_ssd_y ~ age + (1 | ID) + (_ssd_pca_1 + _ssd_pca_2 + _ssd_pca_3)"
     assert res.model.re_groups
     assert 0 < res.stats.pvalue < 1
     assert np.isnan(res.stats.r2)
-    assert res.fit_info.formula == "~ age + (1 | ID)"
+    assert res.fit_info.formula == "rating ~ age + (1 | ID)"
     assert res.fit_info.family == "gaussian"
     assert res.test().name == "lrt"
     assert [r.term for r in res.covariates] == ["(Intercept)", "age"]
@@ -172,21 +167,21 @@ def test_mixed_model(tiny_kv, large_docs, lexicon, frame):
 def test_missing_covariate_raises(tiny_kv, large_docs, lexicon, frame):
     data = frame.copy()
     data.loc[3, "age"] = np.nan
-    ssd = _ssd(tiny_kv, large_docs, "rating", lexicon, data=data)
     with pytest.raises(ValueError, match="missing"):
-        ssd.fit_regression("~ age", fixed_k=3)
+        _ssd(tiny_kv, large_docs, lexicon).fit_regression("rating ~ age", data=data, fixed_k=3)
 
 
 def test_reserved_column_raises(tiny_kv, large_docs, lexicon, frame):
-    ssd = _ssd(tiny_kv, large_docs, "rating", lexicon, data=frame.assign(_ssd_x=1.0))
     with pytest.raises(ValueError, match="_ssd_"):
-        ssd.fit_regression("~ age", fixed_k=3)
+        _ssd(tiny_kv, large_docs, lexicon).fit_regression(
+            "rating ~ age", data=frame.assign(_ssd_x=1.0), fixed_k=3
+        )
 
 
 def test_binomial(tiny_kv, large_docs, large_y, lexicon):
     y01 = (large_y > np.median(large_y)).astype(float)
-    ssd = _ssd(tiny_kv, large_docs, y01, lexicon)
-    res = ssd.fit_regression(family="binomial", fixed_k=3)
+    ssd = _ssd(tiny_kv, large_docs, lexicon)
+    res = ssd.fit_regression(y01, family="binomial", fixed_k=3)
     assert res.model.family == "binomial"
     assert res.test.name == "lrt"
     assert res.stats.backend == "PCA+GLMM"
@@ -196,28 +191,27 @@ def test_binomial(tiny_kv, large_docs, large_y, lexicon):
 
 
 @pytest.mark.parametrize("fit", [
-    lambda ssd: ssd.fit_regression("~ age", fixed_k=3),
-    lambda ssd: ssd.fit_pls(formula="~ age", k=1, test=False),
+    lambda ssd, frame: ssd.fit_regression("rating ~ age", data=frame, fixed_k=3),
+    lambda ssd, frame: ssd.fit_pls("rating ~ age", data=frame, k=1, test=False),
 ])
 def test_predict_refused_after_formula(tiny_kv, large_docs, lexicon, frame, fit):
-    ssd = _ssd(tiny_kv, large_docs, "rating", lexicon, data=frame)
-    res = fit(ssd)
+    res = fit(_ssd(tiny_kv, large_docs, lexicon), frame)
     with pytest.raises(NotImplementedError):
-        res.predict(ssd.corpus)
+        res.predict(large_docs)
 
 
 # --- fit_pls with a formula ------------------------------------------------
 
 def test_pls_formula_matches_residualized_pls(tiny_kv, large_docs, lexicon, frame):
-    """PLS1 and its split_exact test on y and X with age and arousal regressed out."""
+    """PLS1 and its test on y and X with age and arousal regressed out."""
     import plskit
 
-    ssd = _ssd(tiny_kv, large_docs, "rating", lexicon, data=frame)
-    res = ssd.fit_pls(formula="~ age + arousal", k=1, n_splits=20)
+    ssd = _ssd(tiny_kv, large_docs, lexicon)
+    res = ssd.fit_pls("rating ~ age + arousal", data=frame, k=1, n_splits=20)
 
     z = np.column_stack([np.ones(ssd.n_kept), frame["age"], frame["arousal"]])
     resid = lambda a: a - z @ np.linalg.lstsq(z, a, rcond=None)[0]  # noqa: E731
-    x_res, y_res = resid(ssd.x), resid(ssd.y)
+    x_res, y_res = resid(ssd._vectors()[0]), resid(frame["rating"].to_numpy())
     Xs, _, X_scale = standardize(x_res)
     ys = standardize(y_res.reshape(-1, 1))[0].ravel()
     m = plskit.pls1_fit(Xs, ys, k=1, pre_standardized=True, seed=2137)
@@ -225,42 +219,42 @@ def test_pls_formula_matches_residualized_pls(tiny_kv, large_docs, lexicon, fram
     if np.corrcoef(ys, x_res @ beta)[0, 1] < 0:
         beta = -beta
     p = plskit.pls1_confirmatory_test(
-        Xs, ys, 1, test_method="split_exact", args={"n_splits": 20},
+        Xs, ys, 1, test_method="auto", args={"n_splits": 20},
         pre_standardized=True, seed=2137,
     ).pvalue
 
     np.testing.assert_allclose(res.beta, beta, rtol=1e-6, atol=1e-10)
     assert res.stats.pvalue == pytest.approx(p)
-    assert res.fit_info.formula == "~ age + arousal"
+    assert res.fit_info.formula == "rating ~ age + arousal"
     # A rerun tests the residualized data too, not the raw y and X.
     assert res.test(n_splits=20, seed=2137).pvalue == pytest.approx(p)
 
 
 @pytest.mark.parametrize("fit", [
-    lambda ssd: ssd.fit_regression("~ age + arousal", fixed_k=3),
-    lambda ssd: ssd.fit_pls(formula="~ age + arousal", k=1, test=False),
+    lambda ssd, frame: ssd.fit_regression("rating ~ age + arousal", data=frame, fixed_k=3),
+    lambda ssd, frame: ssd.fit_pls("rating ~ age + arousal", data=frame, k=1, test=False),
 ])
 def test_formula_stats_and_residuals_describe_y(tiny_kv, large_docs, lexicon, frame, fit):
     """stats.y_std is y's own SD; docs.residual has the covariates taken out (OLS residuals are orthogonal to them)."""
-    ssd = _ssd(tiny_kv, large_docs, "rating", lexicon, data=frame)
-    res = fit(ssd)
-    assert res.stats.y_mean == pytest.approx(np.mean(ssd.y))
-    assert res.stats.y_std == pytest.approx(np.std(ssd.y))
+    res = fit(_ssd(tiny_kv, large_docs, lexicon), frame)
+    y = frame["rating"].to_numpy()
+    assert res.stats.y_mean == pytest.approx(np.mean(y))
+    assert res.stats.y_std == pytest.approx(np.std(y))
     resid = res.docs.to_df(cols="all")["residual"].to_numpy()
     for c in ("age", "arousal"):
         assert abs(np.corrcoef(resid, frame[c])[0, 1]) < 1e-8
 
 
 def test_pls_formula_random_effects_raise(tiny_kv, large_docs, lexicon, frame):
-    ssd = _ssd(tiny_kv, large_docs, "rating", lexicon, data=frame)
     with pytest.raises(ValueError, match="random effects"):
-        ssd.fit_pls(formula="~ age + (1 | ID)", k=1)
+        _ssd(tiny_kv, large_docs, lexicon).fit_pls("rating ~ age + (1 | ID)", data=frame, k=1)
 
 
 def test_pls_formula_covariate_explains_y_raises(tiny_kv, large_docs, lexicon, frame):
-    ssd = _ssd(tiny_kv, large_docs, "rating", lexicon, data=frame.assign(copy=frame["rating"]))
     with pytest.raises(ValueError, match="explain"):
-        ssd.fit_pls(formula="~ copy", k=1)
+        _ssd(tiny_kv, large_docs, lexicon).fit_pls(
+            "rating ~ copy", data=frame.assign(copy=frame["rating"]), k=1
+        )
 
 
 # --- covariate effects -----------------------------------------------------
@@ -273,10 +267,12 @@ def _ols(z, y):
 
 
 def test_regression_covariates_hold_components_fixed(tiny_kv, large_docs, lexicon, frame):
-    ssd = _ssd(tiny_kv, large_docs, "rating", lexicon, data=frame)
-    res = ssd.fit_regression("~ age", fixed_k=3)
-    z_pca = pca_fit_transform(standardize(ssd.x)[0], 3)[0]
-    coef, se = _ols(np.column_stack([np.ones(ssd.n_kept), frame["age"], z_pca]), ssd.y)
+    ssd = _ssd(tiny_kv, large_docs, lexicon)
+    res = ssd.fit_regression("rating ~ age", data=frame, fixed_k=3)
+    z_pca = pca_fit_transform(standardize(ssd._vectors()[0])[0], 3)[0]
+    coef, se = _ols(
+        np.column_stack([np.ones(ssd.n_kept), frame["age"], z_pca]), frame["rating"].to_numpy()
+    )
     cov = res.covariates
     assert [r.term for r in cov] == ["(Intercept)", "age"]
     np.testing.assert_allclose([r.estimate for r in cov], coef[:2], rtol=1e-6)
@@ -284,13 +280,12 @@ def test_regression_covariates_hold_components_fixed(tiny_kv, large_docs, lexico
 
 
 @pytest.mark.parametrize("fit", [
-    lambda ssd: ssd.fit_regression(fixed_k=3),
-    lambda ssd: ssd.fit_pls(k=1, test=False),
-    lambda ssd: ssd.fit_pls("~ age", k=1, test=False),
+    lambda ssd, frame: ssd.fit_regression("rating", data=frame, fixed_k=3),
+    lambda ssd, frame: ssd.fit_pls("rating", data=frame, k=1, test=False),
+    lambda ssd, frame: ssd.fit_pls("rating ~ age", data=frame, k=1, test=False),
 ])
 def test_no_covariates_without_model(tiny_kv, large_docs, lexicon, frame, fit):
-    ssd = _ssd(tiny_kv, large_docs, "rating", lexicon, data=frame)
-    assert len(fit(ssd).covariates) == 0
+    assert len(fit(_ssd(tiny_kv, large_docs, lexicon), frame).covariates) == 0
 
 
 # --- compact summary -------------------------------------------------------
@@ -304,11 +299,10 @@ def _block(text, title):
 
 
 def test_summary_drops_text_terms(tiny_kv, large_docs, lexicon, frame):
-    ssd = _ssd(tiny_kv, large_docs, "rating", lexicon, data=frame)
-    res = ssd.fit_regression("~ age", fixed_k=3)
+    res = _ssd(tiny_kv, large_docs, lexicon).fit_regression("rating ~ age", data=frame, fixed_k=3)
     text = res.summary()
     assert "_ssd_" not in text
-    assert "Formula: rating ~ age + text" in text
+    assert "Formula: rating ~ age + ssd()" in text
     rows = [line.split() for line in _block(text, "Fixed effects:")[1:]]
     assert [r[0] for r in rows] == ["(Intercept)", "age"]
     np.testing.assert_allclose([float(r[1]) for r in rows],
@@ -324,23 +318,26 @@ def test_summary_drops_text_terms(tiny_kv, large_docs, lexicon, frame):
 
 
 def test_summary_names_text_by_series_name(tiny_kv, large_docs, lexicon, frame):
-    corpus = Corpus(pd.Series(large_docs, name="essay"), pretokenized=True, lang="pl")
-    text = SSD(tiny_kv, corpus, "rating", lexicon, data=frame).fit_regression("~ age", fixed_k=3).summary()
-    assert "Formula: rating ~ age + essay" in text
+    ssd = _ssd(tiny_kv, pd.Series(large_docs, name="essay"), lexicon)
+    text = ssd.fit_regression("rating ~ age", data=frame, fixed_k=3).summary()
+    assert "Formula: rating ~ age + ssd(essay)" in text
     assert _block(text, "SSD effects:")[1].split()[0] == "essay"
+    written = ssd.fit_regression("rating ~ age + ssd()", data=frame, fixed_k=3).summary()
+    assert "Formula: rating ~ age + ssd(essay)" in written
 
 
 def test_regression_summary_f_test(tiny_kv, large_docs, lexicon, frame):
     """F statistic and ΔR² from the RSS of y ~ age with and without the components."""
-    ssd = _ssd(tiny_kv, large_docs, "rating", lexicon, data=frame)
-    res = ssd.fit_regression("~ age", fixed_k=3)
+    ssd = _ssd(tiny_kv, large_docs, lexicon)
+    res = ssd.fit_regression("rating ~ age", data=frame, fixed_k=3)
+    y = frame["rating"].to_numpy()
     n, k = ssd.n_kept, 3
     z0 = np.column_stack([np.ones(n), frame["age"]])
-    z1 = np.column_stack([z0, pca_fit_transform(standardize(ssd.x)[0], k)[0]])
-    rss0, rss1 = (np.linalg.lstsq(z, ssd.y, rcond=None)[1][0] for z in (z0, z1))
+    z1 = np.column_stack([z0, pca_fit_transform(standardize(ssd._vectors()[0])[0], k)[0]])
+    rss0, rss1 = (np.linalg.lstsq(z, y, rcond=None)[1][0] for z in (z0, z1))
     df_resid = n - z1.shape[1]
     f = (rss0 - rss1) / k / (rss1 / df_resid)
-    tss = np.sum((ssd.y - ssd.y.mean()) ** 2)
+    tss = np.sum((y - y.mean()) ** 2)
     res.test()
     params = res.test.params
     assert params["df"] == k and params["df_resid"] == df_resid
@@ -352,7 +349,7 @@ def test_regression_summary_f_test(tiny_kv, large_docs, lexicon, frame):
 
 
 def test_pls_summary_without_formula(tiny_kv, large_docs, large_y, lexicon):
-    res = _ssd(tiny_kv, large_docs, large_y, lexicon).fit_pls(k=1)
+    res = _ssd(tiny_kv, large_docs, lexicon).fit_pls(large_y, k=1)
     text = res.summary()
     assert "Fixed effects" not in text
     assert "Text:  PLS, k = 1\n" in text
@@ -361,7 +358,7 @@ def test_pls_summary_without_formula(tiny_kv, large_docs, large_y, lexicon):
 
 def test_binomial_y_hat_is_fitted_probability(tiny_kv, large_docs, large_y, lexicon):
     y01 = (large_y > np.median(large_y)).astype(float)
-    res = _ssd(tiny_kv, large_docs, y01, lexicon).fit_regression(family="binomial", fixed_k=3)
+    res = _ssd(tiny_kv, large_docs, lexicon).fit_regression(y01, family="binomial", fixed_k=3)
     y_hat = np.array([d.y_hat for d in res.docs])
     assert y_hat.min() >= 0 and y_hat.max() <= 1
     np.testing.assert_allclose(y_hat, res.model.fitted)
@@ -369,5 +366,5 @@ def test_binomial_y_hat_is_fitted_probability(tiny_kv, large_docs, large_y, lexi
 
 def test_integer_y_labels_groups_without_decimal(tiny_kv, large_docs, lexicon):
     y = np.array([3] * 25 + [4] * 25)
-    res = _ssd(tiny_kv, large_docs, y, lexicon).fit_groups(n_perm=20, random_state=0)
+    res = _ssd(tiny_kv, large_docs, lexicon).fit_groups(y, n_perm=20, random_state=0)
     assert sorted(res.group_labels.values()) == ["3", "4"]

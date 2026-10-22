@@ -54,14 +54,14 @@ Row-cap knobs are **per view**, not global. Each size-bearing view is callable:
 | `result.clusters.pos` / `.neg` | `topn=100` neighbors → auto-K clusters | `clusters.pos(topn=50, k=5, k_min=2, k_max=10, min_cluster_size=2, random_state=2137)` |
 | `result.snippets` | `top_per_side=30` | `snippets(top_per_side=200, min_cosine=0.4, n_jobs=-1)` |
 | Everything else (slicing) | `view[:k]` | returns a `_no_trunc=True` sub-view |
-| Terminal display only | `DEFAULT_MAX_ROWS = 20` | `view.to_text(max_rows=50)` |
+| Terminal display only | `DEFAULT_MAX_ROWS = 20` (10 for snippet views, 50 for `DocsView`) | `view.to_text(max_rows=50)` |
 | On save only | — | `view.save("x.csv", k=50)` caps without recomputing |
 
 Cluster and snippet reruns with different parameters are cached separately — the original call's view remains available until you call `result.clear_cache("clusters")` / `.clear_cache("snippets")`.
 
 ---
 
-## Continuous results — `PLSResult` / `PCAOLSResult`
+## Continuous results — `PLSResult` / `PCAOLSResult` / `RegressionResult`
 
 ### `stats` — `StatsView` (ScalarView, PLS) / `OLSStatsView` (PCA+OLS)
 
@@ -107,11 +107,11 @@ Cluster and snippet reruns with different parameters are cached separately — t
 | `cos_beta` | ✓ | cosine similarity to the semantic gradient |
 | `contrast` |  | group-only; `None` for continuous |
 
-### `words.pos` / `.neg` — `SidedWordsView`
+### `words.pos` / `.neg` — `WordsViewSided`
 
 Same columns + same defaults as `WordsView`. Row cap default = 20 (per side). Use `words.pos(50)` or `words.pos(None)` to resize.
 
-### `clusters.pos` / `.neg` — `SidedClustersView`
+### `clusters.pos` / `.neg` — `ClustersViewSided`
 
 | column | default | note |
 |---|:---:|---|
@@ -124,20 +124,20 @@ Same columns + same defaults as `WordsView`. Row cap default = 20 (per side). Us
 | `top_words` | ✓ | comma-joined top-5 cluster words by `cos_centroid` desc (eager, cheap) |
 | `top_snippet` |  | text of the highest-cosine snippet in this cluster; **opt-in** via `cols="all"` or explicit cols list (filling triggers full snippet extraction on first request); clipped to 40 chars in repr, full text in exports |
 
-**Zoom:** `clusters.pos(cluster_id)` filters to one cluster. The repr appends a "Top 5 cluster snippets" sub-table (columns `seed`, `cosine`, `doc_id`, `text_window`) — independent of the `top_snippet` column on the main row. Pass `clusters.pos(cluster_id, top_snippets=N)` to resize the sub-table. Without an attached corpus, the sub-table is replaced by `(attach corpus to populate)`. `save()` on a zoomed view writes only the 1-row summary (`cols="all"` to include `top_snippet`); the snippet table is reached via `clusters.pos(cluster_id).snippets.save(...)`.
+**Zoom:** `clusters.pos(cluster_id)` filters to one cluster. The repr appends a "Top 5 cluster snippets" sub-table (columns `seed`, `cosine`, `doc_id`, `text_window`) — independent of the `top_snippet` column on the main row. Pass `clusters.pos(cluster_id, top_snippets=N)` to resize the sub-table. Without an attached text, the sub-table is replaced by `(attach texts to populate)`. `save()` on a zoomed view writes only the 1-row summary (`cols="all"` to include `top_snippet`); the snippet table is reached via `clusters.pos(cluster_id).snippets.save(...)`.
 
 ### `clusters.pos(cid).words` — `ClusterWordsView`
 
 | column | default | note |
 |---|:---:|---|
 | `cluster_id` | ✓ | kept so rows stand alone when saved |
-| `side` |  | implied by parent `SidedClustersView` |
+| `side` |  | implied by parent `ClustersViewSided` |
 | `word` | ✓ | |
 | `cos_centroid` | ✓ | |
 | `cos_beta` | ✓ | |
 | `contrast` |  | group-only |
 
-### `snippets` — `SnippetsView` (+ `SidedSnippetsView`)
+### `snippets` — `SnippetsView` (+ `SnippetsViewSided`)
 
 | column | default | note |
 |---|:---:|---|
@@ -150,16 +150,15 @@ Same columns + same defaults as `WordsView`. Row cap default = 20 (per side). Us
 | `start_sent_idx` / `end_sent_idx` |  | reconstruction detail |
 | `text_window` | ✓ | "what does this mean" column; truncated to 40 chars in terminal |
 | `text_surface` |  | full enclosing sentence(s) |
-| `text_lemmas` |  | lemmatized variant |
+| `text_lemmas` |  | the enclosing sentence(s) as the tokens used in the fit |
 | `cluster_id` |  | set when clusters were computed |
-| `post_id` |  | multi-post docs (forums) |
 | `contrast` |  | group-only |
 
 ### `docs` — `DocsView`
 
 | column | default | note |
 |---|:---:|---|
-| `doc_id` | ✓ | aligns with corpus row index |
+| `doc_id` | ✓ | position of the document in the text given to `SSD` |
 | `y_true` | ✓ | |
 | `y_hat` | ✓ | the text's score on the y scale; for a non-Gaussian `fit_regression`, the model's fitted mean on the response scale |
 | `residual` | ✓ | `y_true` minus `model`'s fitted value (`fit_regression`), or the PLS fit's residual on the residualized y (`fit_pls` with a formula), so the covariates are taken out of it while `y_hat` is the text's part only; otherwise `y_true − y_hat` |
@@ -171,7 +170,7 @@ Default = full. Nothing to prune.
 
 | column | default | note |
 |---|:---:|---|
-| `name` | ✓ | `"split_exact"` |
+| `name` | ✓ | `"split_exact"` or `"split_nb"`, whichever plskit ran |
 | `pvalue` | ✓ | |
 | `split_r2` | ✓ | held-out split statistic |
 | `n_splits` |  | config — reachable via `.params` |
@@ -190,7 +189,23 @@ Default = full. Nothing to prune.
 
 Rerun is a no-op; the test is analytic.
 
-### `covariates` — `CovariatesView` (PCAOLSResult)
+### `test` — `RegressionTestView` (RegressionResult)
+
+One row per test. No registered default subset, so the default is every column.
+
+| column | default | note |
+|---|:---:|---|
+| `label` | ✓ | empty for the all-text test; a text's name for a per-text test (several texts); a term such as `sex:ssd(essay)` for a per-term test |
+| `name` | ✓ | `"f_test"` or `"lrt"` for the tests that compare two fits; `"wald_f"` or `"wald_chisq"` for a term |
+| `pvalue` | ✓ | |
+| `statistic` | ✓ | F or χ² |
+| `df` | ✓ | tested coefficients |
+| `df_resid` | ✓ | residual df of an F test; `None` for χ² tests |
+| `r2_delta` | ✓ | R² the tested terms add; NaN unless the model is OLS; `None` on Wald rows |
+
+Rows iterate as `TermTest` dataclasses.
+
+### `covariates` — `CovariatesView` (PCAOLSResult, RegressionResult)
 
 | column | default | note |
 |---|:---:|---|
@@ -201,11 +216,34 @@ Rerun is a no-op; the test is analytic.
 | `p_value` | ✓ | |
 | `ci_low`, `ci_high` | ✓ | 95% bounds from `model.confint()` |
 
-One row per coefficient of the formula, with the text held fixed (the PLS score or the K components; their own rows are left out). Empty without a formula.
+One row per coefficient of the formula, with the text held fixed (the K components, also inside an interaction; their own rows are left out). Empty without a formula.
 
 ### `sweep` — `SweepView` (PCAOLSResult only)
 
-Columns: `k`, `r2`, `r2_adj`, `pvalue`. One row per K tested. Default = full.
+One row per K tested.
+
+| column | default | note |
+|---|:---:|---|
+| `k` | ✓ | |
+| `var_explained` | ✓ | |
+| `mean_coherence` |   | |
+| `mean_abs_cosb` |   | |
+| `aggregate` |   | |
+| `n_clusters` |   | |
+| `total_size` |   | |
+| `beta_delta_1_minus_cos` |   | |
+| `interp_hat` |   | |
+| `interp_resid` |   | |
+| `interp_resid_z` |   | |
+| `interp_auck` | ✓ | |
+| `stab_good_raw` |   | |
+| `stab_z_raw` |   | |
+| `stab_auck_raw` | ✓ | |
+| `joint_score` | ✓ | |
+
+### Term leaves — `res['sexM:ssd(essay)']` (RegressionResult)
+
+A leaf is a `PCAOLSResult`. Its `words`, `clusters`, `snippets` and `docs` have the columns above. Its `pvalue` and `test` are the fit's all-text test. On the container, `res.stats` leaves `beta_norm`, `delta` and `iqr_effect` empty, because each leaf has its own. `res.fit_info` and `res.sweep` are those of the first leaf; with several texts they are dicts keyed by text name.
 
 ### Gradient leaves — `res['dim-1']` (PLSResult, `ssd_gradients > 1`)
 
@@ -342,6 +380,19 @@ With `outcome_groups`, one extra row per group follows the per-outcome rows.
 |---|:---:|---|
 | `cov_share` | ✓ | this dimension's share of the squared cross-covariance of all dimensions (with y, for PLS1); sums to 1 over the dimensions |
 | `score_corr` | ✓ | in-sample correlation of the word-side and outcome-side scores; for PLS1, of the dimension's score with y |
+
+---
+
+## `ContrastResult`
+
+### `stats` — `ContrastStatsView` (ScalarView)
+
+| column | default | note |
+|---|:---:|---|
+| `cos_g1_g2` | ✓ | cosine of the two gradients |
+| `diff_norm` | ✓ | length of `unit(g1) − unit(g2)` before it is normalized |
+
+`words` and `clusters` have the continuous columns, with `contrast` empty.
 
 ---
 

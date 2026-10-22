@@ -75,11 +75,10 @@ class PairResult(_SingleResult):
         g1: str,
         g2: str,
         embeddings=None,
-        corpus=None,
+        text=None,
         lexicon=None,
         window: int = 3,
         sif_a: float | None = 1e-3,
-        lang: str | None = None,
     ):
         self._container = container
         self.g1 = str(g1)
@@ -104,8 +103,8 @@ class PairResult(_SingleResult):
         super().__init__(
             x=None,
             beta=beta,
-            embeddings=embeddings, corpus=corpus,
-            lexicon=lexicon, window=window, sif_a=sif_a, lang=lang,
+            embeddings=embeddings, text=text,
+            lexicon=lexicon, window=window, sif_a=sif_a,
         )
         # After super().__init__ sets self._x = None, reset both sentinels.
         self._x = None
@@ -374,17 +373,16 @@ class GroupResult(_MultiContainer):
         omnibus_p: float,
         pairs: list,  # list[Pair]
         embeddings=None,
-        corpus=None,
+        text=None,
         x=None,
         groups=None,
-        lang: str | None = None,
         lexicon=None,
         window: int = 3,
         sif_a: float | None = 1e-3,
     ):
         super().__init__()  # Result.__init__ sets self._cache
         self.embeddings = embeddings
-        self.corpus = corpus
+        self.text = text
         self.G = G
         self.n_kept = n_kept
         self.n_perm = n_perm
@@ -399,7 +397,6 @@ class GroupResult(_MultiContainer):
             self._groups, self.group_labels, pairs = self._canonicalize(groups, pairs)
             self._x = x
 
-        self.lang = lang if lang is not None else getattr(corpus, "lang", None)
         self.lexicon = set(lexicon) if lexicon is not None else set()
         self.window = int(window)
         self.sif_a = None if sif_a is None else float(sif_a)
@@ -438,9 +435,9 @@ class GroupResult(_MultiContainer):
         for p in self.pairs:
             leaves[(p.g1, p.g2)] = PairResult(
                 container=self, g1=p.g1, g2=p.g2,
-                embeddings=self.embeddings, corpus=self.corpus,
+                embeddings=self.embeddings, text=self.text,
                 lexicon=self.lexicon, window=self.window,
-                sif_a=self.sif_a, lang=self.lang,
+                sif_a=self.sif_a,
             )
         return leaves
 
@@ -652,7 +649,7 @@ class GroupResult(_MultiContainer):
                     cl_view = getattr(clusters_view, side)
 
                     def _snippet_provider(_leaf=leaf, _side=side):
-                        if getattr(_leaf, "corpus", None) is None:
+                        if getattr(_leaf, "text", None) is None:
                             return None
                         try:
                             return _leaf._cluster_snippets_for(_side)

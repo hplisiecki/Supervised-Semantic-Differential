@@ -60,7 +60,7 @@ def _build_cluster_section(
     ``clusters_view`` is a ``ClustersViewSided`` exposing ``_words_rows``.
     ``snippet_provider`` is a no-arg callable returning a side-scoped snippets
     view (must expose ``_all_side_rows``) or ``None`` when snippets are
-    unavailable (no corpus, or extraction failed). When ``n_snippets <= 0`` or
+    unavailable (no text, or extraction failed). When ``n_snippets <= 0`` or
     the provider returns ``None``, the "Representative Excerpt" column is
     omitted entirely.
     """

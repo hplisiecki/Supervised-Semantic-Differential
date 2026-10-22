@@ -1,7 +1,7 @@
 """Tests for top_words / top_snippet on cluster views.
 
 All tests stay within the in-memory fixtures from conftest.py — no real
-embeddings, no spaCy downloads. Run with `-m "not slow"`.
+embeddings, no spaCy downloads.
 """
 from __future__ import annotations
 
@@ -72,25 +72,25 @@ def test_clusters_view_default_cols(pls_result):
     assert "top_snippet" not in flat_rows[0]
 
 
-def test_top_snippet_empty_without_corpus(pls_result):
-    """With parent.corpus = None, top_snippet stays '' even when explicitly requested."""
-    saved = pls_result.corpus
-    pls_result.corpus = None
+def test_top_snippet_empty_without_text(pls_result):
+    """With parent.text = None, top_snippet stays '' even when explicitly requested."""
+    saved = pls_result.text
+    pls_result.text = None
     try:
         pls_result.clear_cache("clusters")
-        # Opt in to top_snippet — fill should still no-op (no corpus)
+        # Opt in to top_snippet — fill should still no-op (no text)
         rows = pls_result.clusters.pos.to_dict(cols="all")
         for r in rows:
             assert r["top_snippet"] == ""
             # top_words is still populated — comes from embeddings only
             assert r["top_words"] != ""
     finally:
-        pls_result.corpus = saved
+        pls_result.text = saved
         pls_result.clear_cache("clusters")
 
 
 def test_top_snippet_filled_lazy(pls_result):
-    """With corpus attached and cols='all', top_snippet matches max-cosine text_window per cluster."""
+    """With the text attached and cols='all', top_snippet matches max-cosine text_window per cluster."""
     pls_result.clear_cache("clusters")
     pls_result.clear_cache("cluster_snippets")
     try:
@@ -157,10 +157,10 @@ def test_zoom_renders_top10_snippets(pls_result):
         assert "seed" in text and "cosine" in text and "doc_id" in text and "text_window" in text
 
 
-def test_zoom_no_corpus_fallback(pls_result):
-    """Zoom repr without a corpus prints '(attach corpus to populate)' rather than raising."""
-    saved = pls_result.corpus
-    pls_result.corpus = None
+def test_zoom_no_text_fallback(pls_result):
+    """Zoom repr without a text prints '(attach texts to populate)' rather than raising."""
+    saved = pls_result.text
+    pls_result.text = None
     try:
         pls_result.clear_cache("clusters")
         cids = [c.cluster_id for c in pls_result.clusters.pos]
@@ -168,9 +168,9 @@ def test_zoom_no_corpus_fallback(pls_result):
             pytest.skip("no clusters on this fixture")
         zoomed = pls_result.clusters.pos(cids[0])
         text = repr(zoomed)
-        assert "(attach corpus to populate)" in text
+        assert "(attach texts to populate)" in text
     finally:
-        pls_result.corpus = saved
+        pls_result.text = saved
         pls_result.clear_cache("clusters")
 
 
@@ -279,9 +279,9 @@ def test_zoom_subtable_sees_beyond_default_k(pls_result):
     the first ``k=30`` rows visible through the default-sized iterator.
 
     The cached ``_cluster_snippets_for`` returns a ``SnippetsViewSided`` whose
-    public iterator respects its display ``k`` (default 30). Earlier code
-    iterated that directly, silently dropping snippets that didn't land in
-    the first 30. Here we hand-craft a view where the target cluster's only
+    public iterator respects its display ``k`` (default 30). Iterating
+    that directly would silently drop snippets past the first 30, because
+    the iterator respects the display ``k``. Here we hand-craft a view where the target cluster's only
     rows live past index 30, and verify the subtable still finds them.
     """
     from ssdiff.results.continuous_result import SnippetsViewSided
@@ -301,7 +301,7 @@ def test_zoom_subtable_sees_beyond_default_k(pls_result):
             start_sent_idx=0, end_sent_idx=1,
             text_window=f"window_{sid}_cid_{cid}",
             text_surface=f"surface_{sid}", text_lemmas=f"lemmas_{sid}",
-            cluster_id=cid, contrast=None, post_id=None,
+            cluster_id=cid, contrast=None,
         )
 
     crowd_cid = cids[0]

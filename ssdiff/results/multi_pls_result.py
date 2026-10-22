@@ -9,7 +9,7 @@ shared ``.test`` on the container, one ``.beta`` / ``.words`` /
 Access patterns (canonical):
 - ``res["dim-1"]`` → ``_PLSComponentResult`` for one (rotated) dimension
 - ``res["dim-1"].outcomes`` → outcome loadings on that dimension
-- ``res.test(...)`` → rerun the split_exact LV1 test at the container level
+- ``res.test(...)`` → rerun the LV1 test at the container level
 - ``res.pls_info`` → ``{ssd_gradients, rotate, order, signs, rotation diagnostics}``
 
 Power-user shortcuts (same data, different angle):
@@ -159,11 +159,10 @@ class _PLSComponentResult(_SingleResult):
             x=None,
             beta=beta,
             embeddings=container.embeddings,
-            corpus=container.corpus,
+            text=container.text,
             lexicon=container.lexicon,
             window=container.window,
             sif_a=container.sif_a,
-            lang=container.lang,
         )
         # _x is served lazily through the .x property from the container.
         self._x = None
@@ -263,7 +262,7 @@ class MultiPLSStatsView(ScalarView):
 # ---------- MultiPLSTestView ----------
 
 class MultiPLSTestView(TestView):
-    """`.test` for MultiPLSResult — split_exact PLS3 test at LV1.
+    """`.test` for MultiPLSResult — plskit's ``test_method="auto"`` PLS3 test at LV1.
 
     Statistic is the held-out LV1 correlation (``tanh`` of the mean
     Fisher-z over splits); the p-value is rotation-independent. Leaves
@@ -271,26 +270,25 @@ class MultiPLSTestView(TestView):
     """
 
     _columns = ("name", "pvalue", "statistic", "n_splits", "n_perm", "random_state")
-    _default_name = "split_exact"
+    _default_name = "auto"
 
-    _DEFAULTS = {
-        "split_exact": dict(n_splits=50, n_perm=1000, seed=None, verbose=False),
-    }
+    _DEFAULTS = dict(n_splits=50, n_perm=1000, seed=None, verbose=False)
 
     def _run(self, name, params):
         import plskit
 
-        if name is not None and name != "split_exact":
+        # Same rule as PLSTestView._run: the stored name is what "auto" picked.
+        if name not in ("auto", self._test_name):
             raise TypeError(
-                f"MultiPLSTestView only supports method='split_exact' "
+                f"MultiPLSTestView only runs plskit's test_method='auto' "
                 f"(got {name!r}). Pass kwargs only: "
                 f".test(n_splits=..., n_perm=..., seed=...)."
             )
-        merged = {**self._DEFAULTS["split_exact"], **params}
+        merged = {**self._DEFAULTS, **params}
         parent = self._parent
         r = plskit.pls3_confirmatory_test(
             parent._x, parent._y_raw, 1,
-            test_method="split_exact",
+            test_method="auto",
             args={"n_perm": int(merged["n_perm"]),
                   "n_splits": int(merged["n_splits"])},
             pre_standardized_X=False,
@@ -305,7 +303,7 @@ class MultiPLSTestView(TestView):
             "n_perm": r.n_perm,
             "random_state": r.seed,
         }
-        return "split_exact", info
+        return r.test_method, info
 
     def _on_rerun(self):
         self._parent._refresh_pvalue(self.pvalue)
@@ -364,8 +362,8 @@ class MultiPLSResult(_MultiContainer):
         test_name: str | None,
         test_info: dict | None,
         # The following echo SSD state for reconstruction & re-running tests.
-        embeddings=None, corpus=None, lexicon=None,
-        window: int = 3, sif_a: float | None = 1e-3, lang: str | None = None,
+        embeddings=None, text=None, lexicon=None,
+        window: int = 3, sif_a: float | None = 1e-3,
         random_state: int | None = None,
     ):
         super().__init__()
@@ -392,11 +390,10 @@ class MultiPLSResult(_MultiContainer):
         self.random_state = random_state
 
         self.embeddings = embeddings
-        self.corpus = corpus
+        self.text = text
         self.lexicon = set(lexicon) if lexicon else set()
         self.window = int(window)
         self.sif_a = None if sif_a is None else float(sif_a)
-        self.lang = lang if lang is not None else getattr(corpus, "lang", None)
 
         pvalue = (test_info or {}).get("pvalue", float("nan"))
         self.stats = MultiPLSStatsView(

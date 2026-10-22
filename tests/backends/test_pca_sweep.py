@@ -252,7 +252,7 @@ class TestOverallInterpretability:
 
 
 # ---------------------------------------------------------------------------
-# PCAKSelectionResult dataclass (basic sanity — schema tests live elsewhere)
+# PCAKSelectionResult dataclass: frozen fields
 # ---------------------------------------------------------------------------
 
 class TestPCAKSelectionResult:

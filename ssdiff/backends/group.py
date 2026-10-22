@@ -16,6 +16,7 @@ from itertools import combinations
 import numpy as np
 
 from ssdiff.utils.math import unit_vector
+from ssdiff.utils.rng import Rng
 
 # ---------------------------------------------------------------------------
 # Median split
@@ -48,9 +49,8 @@ def median_split(y: np.ndarray, random_state: int = 2137) -> np.ndarray:
         n_below = int((y < med).sum())
         target = len(y) // 2
         n_low_needs = max(0, target - n_below)
-        rng = np.random.default_rng(random_state)
-        tied_indices = np.where(tied)[0]
-        rng.shuffle(tied_indices)
+        rng = Rng(random_state)
+        tied_indices = np.where(tied)[0][rng.permutation(n_tied)]
         labels[tied_indices[:n_low_needs]] = "low"
         labels[tied_indices[n_low_needs:]] = "high"
 
@@ -223,14 +223,15 @@ def unified_permutation_test(
     # --- Permutation loop (single pass) ---
     from ssdiff.utils import _progress
 
-    rng = np.random.default_rng(random_state)
+    rng = Rng(random_state)
     null_omnibus = np.empty(n_perm, dtype=np.float64)
     null_pairwise = np.empty((n_perm, n_pairs), dtype=np.float64)
 
-    perm_group_idx = group_idx.copy()
     for p in _progress(range(n_perm), verbose=verbose, total=n_perm,
                        desc="Group permutation test"):
-        rng.shuffle(perm_group_idx)
+        # Each permutation is drawn fresh from the original labels (not by
+        # re-shuffling the previous one) so the R package (ssdiff) draws the same permutation sequence.
+        perm_group_idx = group_idx[rng.permutation(len(group_idx))]
         centroids_perm = _compute_centroids_matrix(x, perm_group_idx, G)
         for k, (ia, ib) in enumerate(pair_int):
             dot = float(np.clip(
