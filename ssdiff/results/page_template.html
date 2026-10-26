@@ -607,13 +607,18 @@ function download(file) {
 const C = (key, label, fmt, extra) => ({ key, label, fmt, ...extra });
 const KIND_LABEL = { pls: "PLS", pca_ols: "PCA+OLS", groups: "Groups", multipls: "MultiPLS", contrast: "Contrast" };
 
+// One of the extra gradients of ssd_gradients=N (fit_pls or fit_regression): every unit but "main"
+// of a continuous fit that has a pls_info table.
+const isGradient = (data, unit) =>
+  (data.kind === "pls" || data.kind === "pca_ols") && !!data.tables.pls_info && unit.key !== "main";
+
 function buildSpecs(data, unit, ui) {
   const T = unit.tables, kind = data.kind, specs = {}, text = data.texts[unit.text];
   const docCol = text.snippets === false ? "Tokens" : "Document Text";
   const add = (tab, s) => { if (s.rows) specs[s.id] = { tab, srcCols: s.srcCols, ...s }; };
   const sideName = side => side === "pos" ? unit.pos_label : unit.neg_label;
-  // dim: a MultiPLS dimension, or one of the extra gradients of a PLS fit (every PLS unit but "main")
-  const dim = kind === "multipls" || (kind === "pls" && unit.key !== "main");
+  // dim: a MultiPLS dimension, or one of the extra gradients of a PLS or regression fit
+  const dim = kind === "multipls" || isGradient(data, unit);
   const moderated = kind === "pca_ols" && unit.key.includes(":");  // a text term with a moderator
   const continuous = (kind === "pls" || kind === "pca_ols") && !dim;
   // groups: each side is named by its group; dimensions and moderated terms: by their sign
@@ -726,8 +731,8 @@ function tabsFor(data, specs, text) {
 // ---------------------------------------------------------------- summary cards
 function cardsFor(data, unit) {
   const s = one(data.tables.stats), k = data.kind;
-  if (k === "pls" && unit.key !== "main") {
-    const u = one(unit.tables.stats);  // a gradient of fit_pls(ssd_gradients=N): the last two follow it
+  if (isGradient(data, unit)) {
+    const u = one(unit.tables.stats);  // a gradient of ssd_gradients=N: the last two follow it
     return [["R\u00B2", fmtNum(s.r2)], ["p", fmtP(s.pvalue)], ["Docs", fmtInt(s.n_kept)],
             ["Gradients", fmtInt(one(data.tables.pls_info).ssd_gradients)], ["Cov. share", fmtNum(u.cov_share)],
             ["Score corr.", fmtNum(u.score_corr)]];
@@ -740,10 +745,11 @@ function cardsFor(data, unit) {
     const u = unit.tables.stats ? one(unit.tables.stats) : s;  // a regression unit: its own term's stats
     const tests = objs(data.tables.test) || [];
     const pOf = label => { const t = label == null ? null : tests.find(r => r.label === label); return t ? fmtP(t.pvalue) : DASH; };
+    const terms = data.tables.pls_info ? 1 : data.units.length;  // gradient units are not terms
     return [
       ["R\u00B2", fmtNum(u.r2)], ["Adj. R\u00B2", fmtNum(u.r2_adj)],
-      [data.units.length > 1 ? "p (all text terms)" : "p", fmtP(u.pvalue)],
-      ...(data.units.length > 1 ? [["p (term)", pOf(unit.test)]] : []),
+      [terms > 1 ? "p (all text terms)" : "p", fmtP(u.pvalue)],
+      ...(terms > 1 ? [["p (term)", pOf(unit.test)]] : []),
       ...(data.texts.length > 1 ? [["p (text)", pOf(data.texts[unit.text].name)]] : []),
       ["\u2016\u03b2\u2016", fmtNum(u.beta_norm)], ["Docs", fmtInt(u.n_kept)],
       ["Selected K", fmtInt(data.texts[unit.text].k)], ["Corr(y, \u0177)", fmtNum(u.y_corr_pred)]];
@@ -954,7 +960,8 @@ function KV({ title, obj, skipNull }) {
 }
 
 function DetailsTab({ data, unit, specs, text }) {
-  const st = one(data.kind === "pca_ols" && unit.tables.stats ? unit.tables.stats : data.tables.stats), S = text.settings || {}, E = text.embeddings || {};
+  // A regression term has its own stats; a gradient's stats hold only cov_share and score_corr.
+  const st = one(data.kind === "pca_ols" && unit.tables.stats && !isGradient(data, unit) ? unit.tables.stats : data.tables.stats), S = text.settings || {}, E = text.embeddings || {};
   const boxTitle = t => text.name && data.texts.length > 1 ? `${t} \u2014 ${text.name}` : t;
   const pick = keys => Object.fromEntries(keys.filter(k => k in st).map(k => [k, st[k]]));
   const continuous = data.kind === "pls" || data.kind === "pca_ols";
@@ -1024,7 +1031,7 @@ function App({ data }) {
       <span>${data.software.package} <b>${data.software.version}</b></span>
       <span>${new Date(data.created).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" })}</span>
     </div>
-    ${data.units.length > 1 ? html`<div class="unitbar"><label for="unit">${data.kind === "groups" ? "Pair" : data.kind === "pca_ols" ? "Term" : "Dimension"}</label>
+    ${data.units.length > 1 ? html`<div class="unitbar"><label for="unit">${data.kind === "groups" ? "Pair" : data.kind === "pca_ols" && !data.tables.pls_info ? "Term" : "Dimension"}</label>
       <select id="unit" value=${unitIdx} onChange=${e => { setUnitIdx(+e.target.value); setUi({ cluster: null, snipSide: "pos" }); }}>
         ${data.texts.length > 1 ? data.texts.map((t, ti) => html`<optgroup label=${t.name || "Text " + (ti + 1)}>${data.units.map((u, i) => u.text === ti ? html`<option value=${i}>${u.label}</option>` : null)}</optgroup>`)
           : data.units.map((u, i) => html`<option value=${i}>${u.label}</option>`)}</select></div>` : null}

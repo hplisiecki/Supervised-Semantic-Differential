@@ -30,9 +30,9 @@ OUT = Path(__file__).parent
 def main() -> None:
     texts = json.loads((PARITY / "texts.json").read_text(encoding="utf-8"))
     df = pd.DataFrame({k: v for k, v in texts.items() if k != "lexicon"})
-    ssd = SSD(Embeddings.load(str(PARITY / "parity.wordpack")), df["text"], texts["lexicon"])
+    ssd = SSD(df["text"], embeddings=Embeddings.load(str(PARITY / "parity.wordpack")), lexicon=texts["lexicon"])
 
-    diary = SSD(ssd.embeddings, ssd.docs[::-1], texts["lexicon"])  # token lists: no snippets
+    diary = SSD(ssd.docs[::-1], embeddings=ssd.embeddings, lexicon=texts["lexicon"])  # token lists: no snippets
     fits = {
         "pls": ssd.fit_pls(df["y"], k=2, n_splits=20, random_state=42),
         "pca_ols": ssd.fit_regression(df["y"], fixed_k=None, k_min=2, k_max=6, k_step=1),

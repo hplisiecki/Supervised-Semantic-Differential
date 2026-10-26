@@ -7,6 +7,7 @@ import os
 import pytest
 
 import ssdiff
+from ssdiff.embeddings import Embeddings
 from ssdiff.results import PCAOLSResult
 from ssdiff.ssd import SSD
 from tests.conftest import PARITY_DIR
@@ -31,6 +32,34 @@ def test_unused_or_missing_text_raises(two, parity_df):
         ssdiff.fit_regression("y ~ ssd(essay) + ssd(diary)", parity_df, essay=essay)
 
 
+@pytest.fixture
+def default_pack(monkeypatch, parity_emb):
+    """Embeddings.load() returns the parity pack offline; the list records each call's arguments."""
+    calls = []
+    monkeypatch.setattr(Embeddings, "load", classmethod(lambda cls, *a, **k: calls.append(a) or parity_emb))
+    return calls
+
+
+def test_texts_built_from_columns_share_one_load(default_pack, parity_df):
+    df = parity_df.assign(diary=parity_df["text"].to_numpy()[::-1])
+    res = ssdiff.fit_regression("y ~ ssd(text) + ssd(diary)", df, fixed_k=3)
+    assert default_pack == [()]
+    assert res.keys() == ["text", "diary"]
+    built = res["text"].text
+    assert built.name == "text" and built.lexicon == set() and built.use_full_doc
+
+
+def test_a_keyword_wins_over_a_column(default_pack, two, parity_df):
+    res = ssdiff.fit_regression("y ~ ssd(text)", parity_df, text=two[0], fixed_k=3)
+    assert res.text is two[0] and default_pack == []
+
+
+def test_a_text_neither_passed_nor_a_column_raises(default_pack, parity_df):
+    with pytest.raises(ValueError, match=r"neither columns of data nor passed.*essay=SSD"):
+        ssdiff.fit_regression("y ~ ssd(essay)", parity_df)
+    assert default_pack == []
+
+
 def test_no_text_term_raises(two, parity_df):
     with pytest.raises(ValueError, match="ssd"):
         ssdiff.fit_regression("y ~ cov", parity_df, essay=two[0], diary=two[1])
@@ -43,7 +72,7 @@ def test_text_named_like_a_column(two, parity_df):
 
 def test_rows_need_a_vector_in_every_text(parity_emb, parity_df, parity_lexicon, two):
     essay = two[0]
-    short = SSD(parity_emb, [[] if i < 7 else d for i, d in enumerate(essay.docs)], parity_lexicon)
+    short = SSD([[] if i < 7 else d for i, d in enumerate(essay.docs)], embeddings=parity_emb, lexicon=parity_lexicon)
     res = ssdiff.fit_regression("y ~ ssd(essay) + ssd(short)", parity_df, essay=essay, short=short, fixed_k=3)
     has_e, has_s = essay._vectors()[1], short._vectors()[1]
     assert res["short"].n_no_vector == int((~has_s).sum()) >= 7
@@ -86,7 +115,7 @@ def test_summary_labels_all_texts(two, parity_df):
     essay, diary = two
     res = ssdiff.fit_regression("y ~ ssd(essay) + ssd(diary)", parity_df,
                                 essay=essay, diary=diary, fixed_k=3)
-    block = res.summary().split("SSD effects:")[1].split("---")[0].strip().split("\n")[1:]
+    block = res.summary().split("Joint tests:")[1].split("---")[0].strip().split("\n")[1:]
     assert [ln.split()[0] for ln in block] == ["all", "essay", "diary"]
 
 
@@ -118,7 +147,7 @@ def test_page_keeps_the_moderated_term_key_of_a_one_term_text(two, parity_df):
 
 
 def test_attach_leaves_the_callers_ssd_alone(parity_emb, parity_df, parity_lexicon):
-    essay = SSD(parity_emb, parity_df["text"], parity_lexicon)
+    essay = SSD(parity_df["text"], embeddings=parity_emb, lexicon=parity_lexicon)
     before = essay.embeddings
     res = essay.fit_regression(parity_df["y"], fixed_k=3)
     res.attach(embeddings=ssdiff.Embeddings.load(os.path.join(PARITY_DIR, "parity.wordpack")))

@@ -722,7 +722,7 @@
     "sweep",
     null,
     "gaussian",
-    null,
+    1,
     null
    ]
   ]

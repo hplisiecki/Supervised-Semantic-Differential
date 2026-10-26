@@ -200,7 +200,7 @@ def test_validate_var_type_invalid():
 # ---------------------------------------------------------------------------
 
 def test_suggest_lexicon_top_k_respected(tiny_kv, sample_docs, sample_y):
-    text = SSD(tiny_kv, sample_docs)
+    text = SSD(sample_docs, embeddings=tiny_kv)
     result = text.suggest_lexicon(sample_y, top_k=3, min_docs=1)
     assert len(result.tokens) == 3
 
@@ -209,7 +209,7 @@ def test_suggest_lexicon_without_seeds_returns_the_rank_table(tiny_kv):
     # y = 1..4 falls in two bins. "a" is in every document: corr 0, balanced
     # coverage 1. "c" is in one document of each bin: corr 0, balanced
     # coverage 0.5. "b" is in documents 0 and 2: corr -0.447, past corr_cap.
-    text = SSD(tiny_kv, [["a", "b", "c"], ["a"], ["a", "b"], ["a", "c"]])
+    text = SSD([["a", "b", "c"], ["a"], ["a", "b"], ["a", "c"]], embeddings=tiny_kv)
     lex = text.suggest_lexicon([1.0, 2.0, 3.0, 4.0], min_docs=1, n_bins=2)
     assert lex.suggestions.columns == (
         "token", "freq", "cov_all", "cov_bal", "corr", "pvalue", "direction", "rank",
@@ -252,7 +252,7 @@ def _angle_embeddings() -> Embeddings:
 
 
 def _suggest_with_seeds(seeds, *, top_k, min_docs=2):
-    text = SSD(_angle_embeddings(), SEED_DOCS)
+    text = SSD(SEED_DOCS, embeddings=_angle_embeddings())
     return text.suggest_lexicon(SEED_Y, seeds=seeds, top_k=top_k, min_docs=min_docs)
 
 
@@ -302,7 +302,7 @@ def test_seed_endings_are_listed_in_cosine_order(seed, expected):
     emb = _unit_embeddings(
         list(angles), np.stack([np.cos(rad), np.sin(rad)], axis=1).astype(np.float32)
     )
-    text = SSD(emb, [list(angles)] * 2)
+    text = SSD([list(angles)] * 2, embeddings=emb)
     lex = text.suggest_lexicon([1.0, 2.0], seeds=[seed], top_k=0, min_docs=2)
     assert [r.token for r in lex.suggestions] == expected
 
@@ -320,7 +320,7 @@ def test_token_listed_for_two_seeds_has_one_row_with_the_higher_cosine():
 
 def test_seeds_with_the_same_vector_each_have_their_own_row():
     emb = _unit_embeddings(["colour", "color"], np.array([[1.0, 0.0], [1.0, 0.0]], dtype=np.float32))
-    text = SSD(emb, [["colour", "color"]] * 2)
+    text = SSD([["colour", "color"]] * 2, embeddings=emb)
     lex = text.suggest_lexicon([1.0, 2.0], seeds=["colour", "color"], top_k=5, min_docs=2)
     assert lex.suggestions.to_records(cols=["seed", "token"]) == [
         ("colour", "colour"), ("color", "color"),
@@ -342,14 +342,14 @@ def test_a_repeated_seed_gives_the_table_of_the_seed_given_once():
     ({"seeds": ["cat"], "top_k": -1}, ValueError, "top_k"),
 ])
 def test_suggest_lexicon_seed_argument_errors(kwargs, error, match):
-    text = SSD(_angle_embeddings(), SEED_DOCS)
+    text = SSD(SEED_DOCS, embeddings=_angle_embeddings())
     with pytest.raises(error, match=match):
         text.suggest_lexicon(SEED_Y, **kwargs)
 
 
 def test_suggest_lexicon_seeds_without_y_list_the_same_neighbours():
     with_y = _suggest_with_seeds(["cat", "dog"], top_k=10)
-    lex = SSD(_angle_embeddings(), SEED_DOCS).suggest_lexicon(
+    lex = SSD(SEED_DOCS, embeddings=_angle_embeddings()).suggest_lexicon(
         None, seeds=["cat", "dog"], top_k=10, min_docs=2,
     )
     free = ["seed", "token", "cos", "freq", "cov_all"]
@@ -360,7 +360,7 @@ def test_suggest_lexicon_seeds_without_y_list_the_same_neighbours():
 
 def test_suggest_lexicon_without_y_or_seeds_raises():
     with pytest.raises(ValueError, match="needs an outcome"):
-        SSD(_angle_embeddings(), SEED_DOCS).suggest_lexicon(None)
+        SSD(SEED_DOCS, embeddings=_angle_embeddings()).suggest_lexicon(None)
 
 
 # ---------------------------------------------------------------------------
@@ -369,7 +369,7 @@ def test_suggest_lexicon_without_y_or_seeds_raises():
 
 def test_token_stats_freq_correct(tiny_kv, sample_docs, sample_y):
     # From conftest: "kraj" appears in docs 0, 3, 6 → freq=3
-    text = SSD(tiny_kv, sample_docs)
+    text = SSD(sample_docs, embeddings=tiny_kv)
     rows = text.token_stats(sample_y, ["kraj"])
     kraj_row = next(r for r in rows if r["token"] == "kraj")
     assert kraj_row["freq"] == 3
@@ -382,7 +382,7 @@ def test_token_stats_freq_correct(tiny_kv, sample_docs, sample_y):
 
 def test_token_stats_without_y_gives_the_counts_sorted_by_freq(tiny_kv, sample_docs, sample_y):
     # "kraj" and "narod" are in 3 documents, "panstwo" in 2.
-    text = SSD(tiny_kv, sample_docs)
+    text = SSD(sample_docs, embeddings=tiny_kv)
     lex = ["panstwo", "kraj", "narod"]
     rows = text.token_stats(None, lex)
     assert [r["token"] for r in rows] == ["kraj", "narod", "panstwo"]
@@ -398,7 +398,7 @@ def test_token_stats_without_y_gives_the_counts_sorted_by_freq(tiny_kv, sample_d
 
 def test_coverage_summary_kraj_fraction(tiny_kv, sample_docs, sample_y):
     # "kraj" appears in docs 0, 3, 6 → 3/8 docs = 0.375
-    text = SSD(tiny_kv, sample_docs)
+    text = SSD(sample_docs, embeddings=tiny_kv)
     summary = text.coverage_summary(sample_y, {"kraj"})
     assert summary["docs_any"] == 3
     assert abs(summary["cov_all"] - 3 / 8) < 1e-10
@@ -410,14 +410,14 @@ def test_coverage_summary_kraj_fraction(tiny_kv, sample_docs, sample_y):
 
 def test_coverage_summary_full_lexicon_all_docs(tiny_kv, sample_docs, sample_y):
     # All docs contain at least one of kraj/narod/panstwo → docs_any=8
-    text = SSD(tiny_kv, sample_docs)
+    text = SSD(sample_docs, embeddings=tiny_kv)
     summary = text.coverage_summary(sample_y, {"kraj", "narod", "panstwo"})
     assert summary["docs_any"] == 8
     assert abs(summary["cov_all"] - 1.0) < 1e-10
 
 
 def test_coverage_summary_without_y_gives_the_counts_only(tiny_kv, sample_docs, sample_y):
-    text = SSD(tiny_kv, sample_docs)
+    text = SSD(sample_docs, embeddings=tiny_kv)
     lex = {"kraj", "narod"}
     # var_type is ignored without y, so there is no group_cov.
     summary = text.coverage_summary(None, lex, var_type="categorical")
@@ -434,7 +434,7 @@ def test_coverage_summary_without_y_gives_the_counts_only(tiny_kv, sample_docs, 
 
 def test_evaluate_lexicon_empty_lexicon_graceful(tiny_kv, sample_docs, sample_y):
     # Empty lexicon should not raise — zero-token case
-    text = SSD(tiny_kv, sample_docs)
+    text = SSD(sample_docs, embeddings=tiny_kv)
     result = text.evaluate_lexicon(sample_y, [])
     assert len(result.tokens) == 0
     assert result.summary is not None
@@ -444,13 +444,13 @@ def test_evaluate_lexicon_empty_lexicon_graceful(tiny_kv, sample_docs, sample_y)
 
 
 def test_evaluate_lexicon_counts_a_repeated_token_once(tiny_kv, sample_docs, sample_y):
-    text = SSD(tiny_kv, sample_docs)
+    text = SSD(sample_docs, embeddings=tiny_kv)
     result = text.evaluate_lexicon(sample_y, ["kraj", "kraj", "narod"])
     assert result.stats.n_tokens == len(result.tokens) == len(result.suggestions) == 2
 
 
 def test_evaluate_lexicon_summary_matches_coverage_summary(tiny_kv, sample_docs, sample_y):
-    text = SSD(tiny_kv, sample_docs)
+    text = SSD(sample_docs, embeddings=tiny_kv)
     lex = ["panstwo", "piekny", "wielki"]
     result = text.evaluate_lexicon(sample_y, lex)
     direct = text.coverage_summary(sample_y, lex)
@@ -464,7 +464,7 @@ def test_evaluate_lexicon_summary_matches_coverage_summary(tiny_kv, sample_docs,
 
 def test_evaluate_lexicon_without_y_keeps_every_document(tiny_kv, sample_docs, sample_y_with_nan):
     # The NaN in sample_y_with_nan drops document 3, which holds "kraj".
-    text = SSD(tiny_kv, sample_docs)
+    text = SSD(sample_docs, embeddings=tiny_kv)
     with_nan = text.evaluate_lexicon(sample_y_with_nan, ["kraj", "narod"])
     lex = text.evaluate_lexicon(None, ["kraj", "narod"])
     assert (with_nan.stats.n_docs, with_nan.summary.docs_any) == (7, 5)
@@ -474,10 +474,10 @@ def test_evaluate_lexicon_without_y_keeps_every_document(tiny_kv, sample_docs, s
 
 
 def test_lexicon_results_without_y_render(tiny_kv, sample_docs, tmp_path):
-    evaluated = SSD(tiny_kv, sample_docs).evaluate_lexicon(
+    evaluated = SSD(sample_docs, embeddings=tiny_kv).evaluate_lexicon(
         None, ["kraj", "narod"],
     )
-    seeded = SSD(_angle_embeddings(), SEED_DOCS).suggest_lexicon(
+    seeded = SSD(SEED_DOCS, embeddings=_angle_embeddings()).suggest_lexicon(
         None, seeds=["cat"], min_docs=2,
     )
     for lex in (evaluated, seeded):
@@ -494,13 +494,13 @@ def test_lexicon_results_without_y_render(tiny_kv, sample_docs, tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_lexicon_helpers_take_a_column(tiny_kv, large_docs, large_y):
-    t, df = SSD(tiny_kv, large_docs), pd.DataFrame({"score": large_y})
+    t, df = SSD(large_docs, embeddings=tiny_kv), pd.DataFrame({"score": large_y})
     a = t.token_stats(large_y, ["kraj", "dom"])
     assert a == t.token_stats("score", ["kraj", "dom"], data=df)
 
 
 def test_integer_group_labels_keep_their_values(tiny_kv, sample_docs):
-    t = SSD(tiny_kv, sample_docs)
+    t = SSD(sample_docs, embeddings=tiny_kv)
     summary = t.coverage_summary([1, 2] * 4, {"kraj"}, var_type="categorical")
     assert set(summary["group_cov"]) == {1, 2}
     assert all(isinstance(k, (int, np.integer)) for k in summary["group_cov"])

@@ -6,7 +6,7 @@
  "software": {
   "package": "ssdiff",
   "language": "python",
-  "version": "3.3.0"
+  "version": "4.0.0"
  },
  "texts": [
   {
@@ -157,6 +157,7 @@
    "k_min": 2,
    "k_max": 6,
    "k_step": 1,
+   "ssd_gradients": 1,
    "pca_sweep_args": null
   },
   "clusters": {
@@ -232,7 +233,7 @@
      "sweep",
      null,
      "gaussian",
-     null,
+     1,
      null
     ]
    ]

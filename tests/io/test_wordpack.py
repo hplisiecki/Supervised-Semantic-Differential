@@ -160,7 +160,7 @@ def test_ssd_and_views_leave_the_pack_reusable_across_texts(wordpack_path, monke
     full = Embeddings.load(wordpack_path)
     monkeypatch.setattr(em, "_RAM_TOP_N", 18)
     small = Embeddings.load(wordpack_path)
-    ssd = SSD(small, ["dog swim", "they"], use_full_doc=True)
+    ssd = SSD(["dog swim", "they"], embeddings=small, use_full_doc=True)
     assert ssd.embeddings is not small
     assert small._extras is None and small._local_row == {i: i for i in range(18)}
     view_a = small.with_corpus(_tokens([["swim"]]))
@@ -179,11 +179,11 @@ def test_new_text_rows_load_once_not_on_every_lookup(wordpack_path, monkeypatch,
     full = Embeddings.load(wordpack_path)
     texts, y = _texts(40, seed=1)
     new_texts = texts[:38] + ["dog they", "happens they"]
-    res = SSD(full, texts, use_full_doc=True).fit_regression(y, fixed_k=2)
+    res = SSD(texts, embeddings=full, use_full_doc=True).fit_regression(y, fixed_k=2)
     monkeypatch.setattr(em, "_RAM_TOP_N", 18)
     first = Embeddings.load(wordpack_path).with_corpus(_tokens([["swim"]]))
     if entry == "ssd":
-        emb = SSD(first, new_texts, use_full_doc=True).embeddings
+        emb = SSD(new_texts, embeddings=first, use_full_doc=True).embeddings
     else:
         r = copy.copy(res)
         r.embeddings = None
@@ -285,7 +285,7 @@ def test_wordpack_load_does_not_warn(wordpack_path):
 def test_wordpack_text_fills_preprocessed_doc_consistently(wordpack_path):
     emb = Embeddings.load(wordpack_path)
     text = "I don't like the dog. Another cafe\u0301 with dogs!"  # decomposed é
-    ssd = SSD(emb, [text], use_full_doc=True)
+    ssd = SSD([text], embeddings=emb, use_full_doc=True)
     d = ssd.pre_docs[0]
     t = emb._pack.tokenize(text)
 
@@ -306,7 +306,7 @@ def test_wordpack_text_fills_preprocessed_doc_consistently(wordpack_path):
 
 def test_wordpack_text_empty_none_and_nan_inputs(wordpack_path):
     emb = Embeddings.load(wordpack_path)
-    flat = SSD(emb, ["", None, float("nan"), "   "], use_full_doc=True)
+    flat = SSD(["", None, float("nan"), "   "], embeddings=emb, use_full_doc=True)
     assert flat.docs == [[], [], [], []]
     assert flat.pre_docs[0].sents_surface == []
 
@@ -330,12 +330,12 @@ def _texts(n: int, seed: int) -> tuple[list[str], np.ndarray]:
 def test_prefix_plus_on_request_matches_a_full_load(wordpack_path, monkeypatch):
     texts, y = _texts(40, seed=0)
     full = Embeddings.load(wordpack_path)
-    full_res = SSD(full, texts, use_full_doc=True).fit_regression(y, fixed_k=2)
+    full_res = SSD(texts, embeddings=full, use_full_doc=True).fit_regression(y, fixed_k=2)
 
     monkeypatch.setattr(em, "_RAM_TOP_N", 18)
     small = Embeddings.load(wordpack_path)
     assert small._partial
-    small_res = SSD(small, texts, use_full_doc=True).fit_regression(y, fixed_k=2)
+    small_res = SSD(texts, embeddings=small, use_full_doc=True).fit_regression(y, fixed_k=2)
 
     np.testing.assert_allclose(small_res.beta, full_res.beta, rtol=1e-5, atol=1e-6)
     full_pred = full_res.predict(NEW_TEXTS)
@@ -346,7 +346,7 @@ def test_prefix_plus_on_request_matches_a_full_load(wordpack_path, monkeypatch):
 def test_normalize_after_a_fit_leaves_the_fit_unchanged(wordpack_path):
     texts, y = _texts(40, seed=1)
     emb = Embeddings.load(wordpack_path)
-    res = SSD(emb, texts, use_full_doc=True).fit_regression(y, fixed_k=2)
+    res = SSD(texts, embeddings=emb, use_full_doc=True).fit_regression(y, fixed_k=2)
     before = res.predict(NEW_TEXTS)
     emb.normalize(abtt=3)
     np.testing.assert_array_equal(res.predict(NEW_TEXTS), before)
@@ -355,15 +355,15 @@ def test_normalize_after_a_fit_leaves_the_fit_unchanged(wordpack_path):
 def test_a_single_string_is_refused_not_split_into_characters(wordpack_path):
     texts, y = _texts(40, seed=1)
     emb = Embeddings.load(wordpack_path)
-    res = SSD(emb, texts, use_full_doc=True).fit_regression(y, fixed_k=2)
+    res = SSD(texts, embeddings=emb, use_full_doc=True).fit_regression(y, fixed_k=2)
     with pytest.raises(TypeError, match="single string"):
-        SSD(emb, "dog swim")
+        SSD("dog swim", embeddings=emb)
     with pytest.raises(TypeError, match="single string"):
         res.predict("dog swim")
 
 
 def test_predict_strings_on_a_token_list_fit_asks_for_token_lists(tiny_kv, sample_docs, sample_y, lexicon):
-    res = SSD(tiny_kv, sample_docs, lexicon).fit_pls(sample_y, k=1, n_splits=5)
+    res = SSD(sample_docs, embeddings=tiny_kv, lexicon=lexicon).fit_pls(sample_y, k=1, n_splits=5)
     with pytest.raises(TypeError, match="token lists"):
         res.predict(["piekny dom"])
 
@@ -371,14 +371,14 @@ def test_predict_strings_on_a_token_list_fit_asks_for_token_lists(tiny_kv, sampl
 def test_predict_token_lists_on_a_wordpack_fit_asks_for_strings(wordpack_path):
     texts, y = _texts(40, seed=2)
     emb = Embeddings.load(wordpack_path)
-    res = SSD(emb, texts, use_full_doc=True).fit_regression(y, fixed_k=2)
+    res = SSD(texts, embeddings=emb, use_full_doc=True).fit_regression(y, fixed_k=2)
     with pytest.raises(TypeError, match="strings"):
         res.predict([["dog", "swim"]])
 
 
 def test_attach_refuses_a_wordpack_other_than_the_one_tokenized_for(wordpack_path, parity_emb):
     texts, y = _texts(40, seed=2)
-    res = SSD(Embeddings.load(wordpack_path), texts, use_full_doc=True).fit_regression(y, fixed_k=2)
+    res = SSD(texts, embeddings=Embeddings.load(wordpack_path), use_full_doc=True).fit_regression(y, fixed_k=2)
     assert parity_emb.abtt == res.embeddings.abtt == 1
     with pytest.raises(ValueError, match=r"wordpack:en-fixture-1"):
         res.attach(embeddings=parity_emb)
@@ -386,7 +386,7 @@ def test_attach_refuses_a_wordpack_other_than_the_one_tokenized_for(wordpack_pat
 
 def test_attach_refuses_embeddings_that_are_not_a_wordpack(wordpack_path):
     texts, y = _texts(40, seed=2)
-    res = SSD(Embeddings.load(wordpack_path), texts, use_full_doc=True).fit_regression(y, fixed_k=2)
+    res = SSD(texts, embeddings=Embeddings.load(wordpack_path), use_full_doc=True).fit_regression(y, fixed_k=2)
     other = make_kv(WORDS + ["they"], dim=16)
     other.abtt = 1
     with pytest.raises(ValueError, match="not a wordpack"):
@@ -396,8 +396,8 @@ def test_attach_refuses_embeddings_that_are_not_a_wordpack(wordpack_path):
 def test_a_token_list_text_is_not_checked(wordpack_path):
     emb = Embeddings.load(wordpack_path)
     texts, y = _texts(40, seed=3)
-    docs = SSD(emb, texts, use_full_doc=True).docs
-    res = SSD(emb, docs, use_full_doc=True).fit_regression(y, fixed_k=2)
+    docs = SSD(texts, embeddings=emb, use_full_doc=True).docs
+    res = SSD(docs, embeddings=emb, use_full_doc=True).fit_regression(y, fixed_k=2)
     assert np.isfinite(res.predict([["dog", "swim"]])).all()
 
 
@@ -405,7 +405,7 @@ def test_snippets_run_on_a_wordpack_text(wordpack_path, monkeypatch):
     monkeypatch.setattr(em, "_RAM_TOP_N", 18)
     emb = Embeddings.load(wordpack_path)
     texts, y = _texts(40, seed=4)
-    ssd = SSD(emb, texts, use_full_doc=True)
+    ssd = SSD(texts, embeddings=emb, use_full_doc=True)
     res = ssd.fit_regression(y, fixed_k=2)
     rows = list(res.snippets)
     assert rows
@@ -420,14 +420,14 @@ def _plain_report(res) -> str:
 def test_report_names_the_wordpack(wordpack_path):
     emb = Embeddings.load(wordpack_path)
     texts, y = _texts(40, seed=5)
-    res = SSD(emb, texts, use_full_doc=True).fit_regression(y, fixed_k=2)
+    res = SSD(texts, embeddings=emb, use_full_doc=True).fit_regression(y, fixed_k=2)
     assert "en-fixture-1" in _plain_report(res)
 
 
 def test_deepcopy_of_a_wordpack_result_keeps_its_embeddings(wordpack_path):
     texts, y = _texts(40, seed=1)
     emb = Embeddings.load(wordpack_path)
-    res = SSD(emb, texts, use_full_doc=True).fit_regression(y, fixed_k=2)
+    res = SSD(texts, embeddings=emb, use_full_doc=True).fit_regression(y, fixed_k=2)
     dup = copy.deepcopy(res)
     np.testing.assert_array_equal(dup.predict(NEW_TEXTS), res.predict(NEW_TEXTS))
 
@@ -435,7 +435,7 @@ def test_deepcopy_of_a_wordpack_result_keeps_its_embeddings(wordpack_path):
 def test_pickled_wordpack_result_takes_the_pack_back_by_path(wordpack_path):
     texts, y = _texts(40, seed=1)
     emb = Embeddings.load(wordpack_path).normalize(abtt=3)
-    res = SSD(emb, texts, use_full_doc=True).fit_regression(y, fixed_k=2)
+    res = SSD(texts, embeddings=emb, use_full_doc=True).fit_regression(y, fixed_k=2)
     back = pickle.loads(pickle.dumps(res))
     assert back.embeddings is None and back.text.embeddings is None
     with pytest.raises(ValueError, match="abtt=3"):
@@ -449,7 +449,7 @@ def test_attach_on_a_pickled_group_result_reaches_every_pair(wordpack_path):
     emb = Embeddings.load(wordpack_path)
     texts, y = _texts(40, seed=6)
     groups = np.where(y > np.median(y), "high", "low")
-    gr = SSD(emb, texts, use_full_doc=True).fit_groups(groups, n_perm=49)
+    gr = SSD(texts, embeddings=emb, use_full_doc=True).fit_groups(groups, n_perm=49)
     back = pickle.loads(pickle.dumps(gr)).attach(embeddings=wordpack_path)
     for pair in gr.keys():
         assert list(back[pair].words) == list(gr[pair].words)
@@ -458,14 +458,14 @@ def test_attach_on_a_pickled_group_result_reaches_every_pair(wordpack_path):
 def test_report_names_the_file_for_other_formats(tmp_path, tiny_kv, sample_docs, sample_y, lexicon):
     tiny_kv.save(str(tmp_path / "tiny"))
     emb = Embeddings.load(str(tmp_path / "tiny.bin"))
-    res = SSD(emb, sample_docs, lexicon).fit_regression(sample_y, fixed_k=2)
+    res = SSD(sample_docs, embeddings=emb, lexicon=lexicon).fit_regression(sample_y, fixed_k=2)
     assert "tiny.bin" in _plain_report(res)
 
 
 def test_group_and_multipls_reports_name_the_wordpack(wordpack_path):
     emb = Embeddings.load(wordpack_path)
     texts, y = _texts(40, seed=6)
-    ssd = SSD(emb, texts, use_full_doc=True)
+    ssd = SSD(texts, embeddings=emb, use_full_doc=True)
     groups = np.where(y > np.median(y), "high", "low")
     gr = ssd.fit_groups(groups, n_perm=49)
     assert "en-fixture-1" in gr.report(clusters=False, top_words=False).to_text()

@@ -17,7 +17,7 @@ DOCS = _make_large_docs(150, np.random.default_rng(0))
 
 @pytest.fixture(scope="module")
 def ssd(tiny_kv_large, lexicon):
-    return SSD(tiny_kv_large, DOCS, lexicon)
+    return SSD(DOCS, embeddings=tiny_kv_large, lexicon=lexicon)
 
 
 @pytest.fixture(scope="module")

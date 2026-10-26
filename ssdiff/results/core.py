@@ -132,12 +132,14 @@ SUPPORTED_EXTS = TABULAR_EXTS  # alias of TABULAR_EXTS
 
 def _get_ext(path: str) -> str:
     """Extract and lowercase the file extension from ``path``, or raise ValueError."""
-    if "." not in path:
+    # The suffix of the last path part, so a dot in a folder name is not taken.
+    suffix = Path(path).suffix
+    if not suffix:
         raise ValueError(
             f"save() requires a path with an extension; got {path!r}. "
             f"Supported: {TABULAR_EXTS}"
         )
-    return path.rsplit(".", 1)[-1].lower()
+    return suffix[1:].lower()
 
 
 def _check_ext(ext: str) -> None:
@@ -892,8 +894,8 @@ class Result(ABC):  # noqa: B024 — marker base class; subclasses share infra, 
                     "This result was fit on strings; pass strings, not token lists."
                 )
         return SSD(
-            embeddings, texts, self.lexicon, window=self.window, sif_a=self.sif_a,
-            use_full_doc=getattr(text, "use_full_doc", False),
+            texts, embeddings=embeddings, lexicon=self.lexicon, window=self.window,
+            sif_a=self.sif_a, use_full_doc=getattr(text, "use_full_doc", False),
         )
 
     # -------- results page -------------------------------------------------

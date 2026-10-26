@@ -120,6 +120,14 @@ def _compute_centroids_matrix(
 _VALID_CORRECTIONS = ("holm", "bonferroni", "fdr_bh", "none")
 
 
+def _check_correction(method: str) -> None:
+    if method not in _VALID_CORRECTIONS:
+        raise ValueError(
+            f"Unknown correction {method!r}. "
+            f"Choose from {_VALID_CORRECTIONS}"
+        )
+
+
 def correct_pvalues(
     p_raw: np.ndarray, method: str = "holm",
 ) -> np.ndarray:
@@ -134,11 +142,7 @@ def correct_pvalues(
     -------
     1-D array of corrected p-values (capped at 1.0)
     """
-    if method not in _VALID_CORRECTIONS:
-        raise ValueError(
-            f"Unknown correction {method!r}. "
-            f"Choose from {_VALID_CORRECTIONS}"
-        )
+    _check_correction(method)
     p = np.asarray(p_raw, dtype=np.float64)
     m = len(p)
     if method == "none":
@@ -195,6 +199,8 @@ def unified_permutation_test(
         },
         G
     """
+    # Checked before the permutation loop, not first in correct_pvalues after it.
+    _check_correction(correction)
     G = len(group_labels)
     pairs = list(combinations(group_labels, 2))
     n_pairs = len(pairs)

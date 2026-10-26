@@ -1,9 +1,9 @@
 """Regression: which direction in the meaning of the text predicts an outcome?
 
 The model is ``outcome ~ ssd()``. ``ssd()`` stands for the text. ssdiff turns
-each document into one vector (the mean of its word vectors), reduces the
-vectors to K principal components, and regresses the outcome on those
-components. K is chosen by a sweep. The fitted coefficients are mapped back to
+each document into one vector (a weighted mean of its word vectors, where
+frequent words weigh less), reduces the vectors to K principal components, and
+regresses the outcome on those components. K is chosen by a sweep. The fitted coefficients are mapped back to
 one direction in the embedding space, the gradient. Words close to the
 gradient's positive end go with a higher outcome, words close to its negative
 end with a lower one. Covariates go into the formula like in any regression.
@@ -36,7 +36,7 @@ emb = Embeddings.load("en")
 # use_full_doc=True builds each document's vector from all its words (the
 # alternative is a lexicon, see lexicon_analysis.py). A word the tokenizer
 # drops has no vector, and its row drops out of every fit.
-ssd = SSD(emb, df["word"], use_full_doc=True)
+ssd = SSD(df["word"], embeddings=emb, use_full_doc=True)
 print(ssd)
 print("documents with a vector:", ssd.n_kept)
 
@@ -61,6 +61,18 @@ res_cov.summary()
 # The covariates' own coefficients.
 print(res_cov.covariates)
 print(res_cov.words)
+
+# ---- Several gradients ----
+# The gradient above is one direction. ssd_gradients=3 splits the K components
+# into three consecutive blocks (block 1 holds the highest-variance ones), takes
+# each block's part of the model's beta as one gradient, and rotates the three
+# by words so that each reads as its own group of words. They are
+# result["dim-1"] ... result["dim-3"] and have no p-value; the headline fit and
+# its p-value are the same as with one gradient.
+res3 = ssd.fit_regression("valence ~ ssd()", data=df, ssd_gradients=3)
+for key in res3.keys():
+    print(key)
+    print(res3[key].words)
 
 # ---- Saving the results ----
 # save_page writes every view into one HTML file that opens from disk.

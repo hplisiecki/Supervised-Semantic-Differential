@@ -8,13 +8,14 @@ import pytest
 
 from ssdiff import RegressionResult
 from ssdiff.results import PCAOLSResult
+from ssdiff.results.format import fmt_r
 from ssdiff.ssd import SSD
 from ssdiff.utils.math import pca_fit_transform, standardize
 
 
 @pytest.fixture(scope="module")
 def essay(parity_emb, parity_df, parity_lexicon):
-    return SSD(parity_emb, parity_df["text"].rename("essay"), parity_lexicon)
+    return SSD(parity_df["text"].rename("essay"), embeddings=parity_emb, lexicon=parity_lexicon)
 
 
 def test_default_formula_is_unchanged(essay, parity_df):
@@ -89,11 +90,14 @@ def test_random_intercept(essay, parity_df):
     assert all(np.isfinite(r.pvalue) for r in rows)
 
 
-def test_summary_has_one_effects_row_per_test_row(essay, parity_df):
+def test_summary_has_one_row_per_text_term_then_the_joint_tests(essay, parity_df):
     res = essay.fit_regression("y ~ cov + group*ssd()", data=parity_df, fixed_k=4)
     text = res.summary()
-    block = text.split("SSD effects:")[1].split("---")[0].strip().split("\n")[1:]
-    assert [ln.split()[0] for ln in block] == ["essay", "ssd(essay)", "group:ssd(essay)"]
+    terms = text.split("Text terms:")[1].split("\n\n")[0].strip().split("\n")[1:]
+    assert [ln.split()[0] for ln in terms] == res.keys()
+    joint = text.split("Joint tests:")[1].split("---")[0].strip().split("\n")
+    assert joint[0].split()[:3] == ["ΔR²", "F", "value"]
+    assert joint[1].split()[:4] == ["all", "text", "terms", fmt_r(res.test[0].r2_delta, digits=3)]
 
 
 def test_poisson_gives_wald_chisq_rows(essay, parity_df):

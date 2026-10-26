@@ -6,7 +6,7 @@ from dataclasses import dataclass, replace
 
 import numpy as np
 
-from ssdiff.results.core import ScalarView, TestView, View
+from ssdiff.results.core import ScalarView, TestView, View, _import_pandas
 from ssdiff.results.display import _save_hint_enabled
 from ssdiff.results.format import (
     fmt_count,
@@ -1168,35 +1168,38 @@ class RegressionTestView(View[TermTest]):
         return self._rows[i]
 
 
-def _summary_text(s, effects) -> str:
-    """The compact summary: glmm's summary *s* plus an SSD effects table.
+def _summary_text(s, blocks) -> str:
+    """The compact summary: glmm's summary *s* with the SSD blocks below its fixed effects.
 
-    *effects* has one ``(label, r2_label, r2, p)`` per row; ``p`` is ``None``
-    for a test that was not run.
+    *blocks* has one ``(title, header, rows)`` per block; each row is
+    ``(label, cells, p)``, the cells filling the columns before ``p``. ``p``
+    is NaN when glmm could not compute it (printed ``NA`` with no stars, as
+    glmm prints its own rows).
     """
     from glmm.summary import stars
 
     lines = s.text().rstrip("\n").split("\n")
     # Column widths and the closing "---" mirror the fixed-effects
     # table of glmm's Summary.text() (glmm 0.6.0) - change together.
-    # The label column also fits the SSD effects labels.
-    name_w = max(12, max(len(e[0]) for e in effects),
-                 max((len(n) for n in s.coef_names), default=4))
+    # The label column also fits the SSD labels.
+    labels = [row[0] for _, _, rows in blocks for row in rows]
+    name_w = max([12, *map(len, labels), *map(len, s.coef_names)])
     widths = [12, 12] + ([10] if s.coef_df is not None else []) + [10, 10]
-    blank = [""] * (len(widths) - 2)
-    header = [next((e[1] for e in effects if e[1]), ""), *blank, "p"]
+
+    def line(label, cells, p):
+        cells = [*cells, *[""] * (len(widths) - 1 - len(cells)), p]
+        return f"{label:<{name_w}} " + " ".join(f"{c:>{w}}" for c, w in zip(cells, widths))
+
+    added = []
+    for title, header, rows in blocks:
+        added += ["", f"{title}:", line("", header, "p")]
+        added += [
+            line(label, cells, fmt_p(p) if np.isfinite(p) else "NA")
+            + (f" {stars(p)}" if np.isfinite(p) else "")
+            for label, cells, p in rows
+        ]
     end = lines.index("---")
-    lines[end:end] = [
-        "",
-        "SSD effects:",
-        f"{'':<{name_w}} " + " ".join(f"{h:>{w}}" for h, w in zip(header, widths)),
-        *(
-            f"{label:<{name_w}} "
-            + " ".join(f"{c:>{w}}" for c, w in zip([r2, *blank, "not run" if p is None else fmt_p(p)], widths))
-            + ("" if p is None else f" {stars(p)}")
-            for label, _r2_label, r2, p in effects
-        ),
-    ]
+    lines[end:end] = added
     return "\n".join(lines)
 
 
@@ -1281,6 +1284,221 @@ def _is_text_coef(name: str) -> bool:
     return any(part.startswith("_ssd_") for part in name.split(":"))
 
 
+def _stat_cell(x: float) -> str:
+    return f"{x:.4g}" if np.isfinite(x) else "NA"
+
+
+class _RegressionModelView:
+    """statsmodels names on a ``fit_regression`` result.
+
+    One glmm fit (``model``) backs the whole regression, so a leaf, a
+    container keyed by term and one keyed by text show the same values. A
+    text term has K component coefficients and no single estimate: it
+    appears only in ``pvalues``, as the Wald test of its coefficients.
+    ``params``, ``bse``, ``tvalues``, ``conf_int()`` and ``cov_params()``
+    hold the covariates (``model``'s coefficients without the ``_ssd_*``
+    ones). These need pandas (``pip install ssdiff[results]``).
+
+    Attributes
+    ----------
+    params, bse, tvalues : pandas.Series
+        Covariate estimates, standard errors and ``params / bse`` (a t
+        value; a z value for a non-Gaussian model).
+    pvalues : pandas.Series
+        The covariates' p-values, then one row per text term (``ssd(essay)``,
+        ``sexM:ssd(essay)``, …, the result keys): the Wald test of that
+        term's coefficients (F for OLS, χ² otherwise).
+    fvalue, f_pvalue : float
+        F-test of the whole model against ``outcome ~ 1``; OLS only (Gaussian,
+        identity link, no random effects), else NaN.
+    llr, llr_pvalue : float
+        Likelihood-ratio test of the whole model against ``outcome ~ 1``
+        with the same random effects and offsets; every model that is not
+        OLS, else NaN. Both ML fits.
+    df_model : int
+        Fixed coefficients without the intercept: the covariates' plus K
+        per text term (aliased coefficients not counted).
+    df_resid : int
+        ``nobs`` minus the fixed coefficients, for every model; for a mixed
+        model this is not a Satterthwaite df.
+    nobs : int
+    rsquared, rsquared_adj : float
+        The whole model's R²; NaN for GLMs and mixed models.
+    aic, bic, llf : float
+        From ``model``.
+    resid, fittedvalues : pandas.Series
+        Response residuals (y − fitted) and fitted means, indexed by the kept
+        rows of ``data`` (its index for a DataFrame, row positions
+        otherwise).
+    random_effects : dict of str to pandas.DataFrame
+        One table per grouping factor: a row per level, a column per
+        random-effect term. Empty without random effects.
+
+    A formula without an intercept (``y ~ 0 + …``) has no nested
+    intercept-only model: ``fvalue``, ``f_pvalue``, ``llr`` and
+    ``llr_pvalue`` are NaN.
+    """
+
+    # Set by fit_regression on every leaf; containers copy their first leaf's.
+    _term_tests: tuple = ()
+    _joint_tests: tuple = ()
+    _whole_test: dict | None = None
+    _obs_index = None
+
+    def _first_leaf(self):
+        return self
+
+    def _covariate_idx(self) -> list[int]:
+        return [i for i, n in enumerate(self.model.names) if not _is_text_coef(n)]
+
+    def _covariate_series(self, values):
+        pd = _import_pandas()
+        idx = self._covariate_idx()
+        return pd.Series(np.asarray(values, dtype=float)[idx],
+                         index=[self.model.names[i] for i in idx])
+
+    @property
+    def params(self):
+        return self._covariate_series(self.model.beta)
+
+    @property
+    def bse(self):
+        return self._covariate_series(self.model.se)
+
+    @property
+    def tvalues(self):
+        m = self.model
+        return self._covariate_series(np.asarray(m.beta, dtype=float) / np.asarray(m.se, dtype=float))
+
+    @property
+    def pvalues(self):
+        pd = _import_pandas()
+        cov = self._covariate_series(self.model.summary_object().p_value)
+        terms = pd.Series([t.pvalue for t in self._term_tests],
+                          index=[t.label for t in self._term_tests], dtype=float)
+        return pd.concat([cov, terms])
+
+    def conf_int(self, alpha: float = 0.05):
+        """Covariate confidence intervals at level ``1 - alpha``, columns ``[0, 1]``."""
+        pd = _import_pandas()
+        idx = self._covariate_idx()
+        ci = np.asarray(self.model.confint(level=1 - alpha), dtype=float)[idx]
+        return pd.DataFrame(ci, index=[self.model.names[i] for i in idx], columns=[0, 1])
+
+    def cov_params(self):
+        """Covariance matrix of the covariate estimates."""
+        pd = _import_pandas()
+        idx = self._covariate_idx()
+        names = [self.model.names[i] for i in idx]
+        return pd.DataFrame(np.asarray(self.model.vcov, dtype=float)[np.ix_(idx, idx)],
+                            index=names, columns=names)
+
+    @property
+    def fvalue(self) -> float:
+        return self._whole_test["fvalue"]
+
+    @property
+    def f_pvalue(self) -> float:
+        return self._whole_test["f_pvalue"]
+
+    @property
+    def llr(self) -> float:
+        return self._whole_test["llr"]
+
+    @property
+    def llr_pvalue(self) -> float:
+        return self._whole_test["llr_pvalue"]
+
+    def _n_fixed(self) -> int:
+        return int((~np.asarray(self.model.aliased, dtype=bool)).sum())
+
+    @property
+    def df_model(self) -> int:
+        return self._n_fixed() - ("(Intercept)" in self.model.names)
+
+    @property
+    def df_resid(self) -> int:
+        return int(self.model.nobs) - self._n_fixed()
+
+    @property
+    def nobs(self) -> int:
+        return int(self.model.nobs)
+
+    @property
+    def rsquared(self) -> float:
+        return float(self.model.r_squared)
+
+    @property
+    def rsquared_adj(self) -> float:
+        return float(self.model.adj_r_squared)
+
+    @property
+    def aic(self) -> float:
+        return float(self.model.aic)
+
+    @property
+    def bic(self) -> float:
+        return float(self.model.bic)
+
+    @property
+    def llf(self) -> float:
+        return float(self.model.loglik)
+
+    @property
+    def resid(self):
+        pd = _import_pandas()
+        return pd.Series(np.asarray(self.model.residuals(), dtype=float), index=self._obs_index)
+
+    @property
+    def fittedvalues(self):
+        pd = _import_pandas()
+        return pd.Series(np.asarray(self.model.fitted, dtype=float), index=self._obs_index)
+
+    @property
+    def random_effects(self) -> dict:
+        pd = _import_pandas()
+        out = {}
+        for block in self.model.ranef_blocks:
+            table = pd.DataFrame(np.asarray(block["values"], dtype=float),
+                                 index=block["levels"], columns=block["terms"])
+            # (x || g) gives one block per term of the same group.
+            g = block["group"]
+            out[g] = pd.concat([out[g], table], axis=1) if g in out else table
+        return out
+
+    def summary(self) -> str:
+        """Print the compact model summary and return it as text.
+
+        glmm's summary of ``model`` without the text's own rows (``_ssd_*``,
+        also inside an interaction) in the fixed effects and their
+        correlations. Below the fixed effects, a text-term table: one row per
+        text term with the df, statistic and p of its Wald test, the text rows
+        of ``pvalues``. With several text terms, the joint tests of ``test``
+        (all text terms; each text) follow, with the R² they add (OLS only).
+        The other blocks (fit criteria, residuals, random effects, R²)
+        describe the full model, text included. ``model.summary()`` prints
+        the full glmm summary.
+        """
+        terms = self._term_tests
+        blocks = [("Text terms", ["df", "F value" if terms[0].name == "wald_f" else "Chisq"],
+                   [(t.label, [f"{t.df:g}", _stat_cell(t.statistic)], t.pvalue) for t in terms])]
+        if len(terms) > 1:
+            joint = self._joint_tests
+            has_r2 = any(t.r2_delta is not None and np.isfinite(t.r2_delta) for t in joint)
+            blocks.append((
+                "Joint tests",
+                ["ΔR²" if has_r2 else "", "F value" if joint[0].name == "f_test" else "Chisq"],
+                [(
+                    t.label or "all text terms",
+                    [fmt_r(t.r2_delta, digits=3) if has_r2 else "", _stat_cell(t.statistic)],
+                    t.pvalue,
+                ) for t in joint],
+            ))
+        text = _summary_text(self._first_leaf()._model_summary_without_text(), blocks)
+        print(text)
+        return text
+
+
 # ---------- ContinuousResult ----------
 class ContinuousResult(_SingleResult):
     """Shared base for continuous-outcome results (PLS / PCA+OLS).
@@ -1305,6 +1523,11 @@ class ContinuousResult(_SingleResult):
         Per-document **SSD alignment score** (s_i = d_i · gradient); cosine
         similarity between each **personal concept vector (PCV)** and the
         semantic gradient. Cached on first access.
+    pls_info : PLSInfoView | None
+        Rotation diagnostics of the gradients of ``fit_pls(ssd_gradients=N)``
+        or ``fit_regression(ssd_gradients=N)`` with N > 1; ``None`` for one
+        gradient. The gradients themselves are the leaves ``result["dim-1"]``
+        … ``result["dim-N"]``.
     """
 
     _stats_view_cls: type[StatsView] = StatsView
@@ -1329,6 +1552,7 @@ class ContinuousResult(_SingleResult):
         model=None,
         residuals: np.ndarray | None = None,
         y_hat: np.ndarray | None = None,
+        dims: dict | None = None,
     ):
         """Construct a continuous result from backend outputs.
 
@@ -1396,6 +1620,12 @@ class ContinuousResult(_SingleResult):
             ``docs.y_hat``, in y's units, when ``beta`` is only one term of
             the model's fit; ``stats.y_corr_pred`` is then ``|corr(y, y_hat)|``.
             ``None`` predicts from ``beta``.
+        dims : dict or None
+            The rotated gradients of ``ssd_gradients=N``, N > 1, from
+            ``fit_pls`` or ``fit_regression``: ``"beta"`` (D, N) in raw
+            doc-vector space, ``"score_corr"`` and ``"cov_share"`` (N,), and
+            ``"rotate"``, ``"order"``, ``"signs"``, ``"rotation_meta"`` as in
+            ``PLSInfoView``. ``None`` for one gradient.
         """
         super().__init__(
             x=x, beta=beta,
@@ -1466,6 +1696,64 @@ class ContinuousResult(_SingleResult):
         # Subclasses set self.test in their own __init__.
         self.test: TestView | None = None
 
+        from ssdiff.results.multi_pls_result import (
+            PLSComponentStatsView,
+            PLSInfoView,
+            _PLSComponentResult,
+        )
+
+        self.pls_info = None
+        self._leaves = {}
+        if dims is not None:
+            n_dims = dims["beta"].shape[1]
+            self.pls_info = PLSInfoView(
+                ssd_gradients=n_dims, rotate=dims["rotate"], order=dims["order"],
+                signs=dims["signs"], rotation_meta=dims["rotation_meta"],
+                random_state=self.fit_info.random_state,
+            )
+            for i in range(n_dims):
+                key = f"dim-{i + 1}"
+                self._leaves[key] = _PLSComponentResult(
+                    container=self, key=key, beta=dims["beta"][:, i],
+                    stats=PLSComponentStatsView(
+                        cov_share=dims["cov_share"][i], score_corr=dims["score_corr"][i],
+                    ),
+                )
+            self._access = (*self._access[:2], "pls_info", *self._access[2:], "keys()")
+
+    # ------ gradient leaves (ssd_gradients=N, N > 1) ----------------------
+    def __getitem__(self, key):
+        return self._leaves[key]
+
+    def keys(self) -> list:
+        return list(self._leaves.keys())
+
+    def attach(self, texts=None, embeddings=None):
+        """``Result.attach``, then the same text and embeddings on every gradient leaf."""
+        super().attach(texts=texts, embeddings=embeddings)
+        for leaf in self._leaves.values():
+            leaf.text = self.text
+            leaf.embeddings = self.embeddings
+        return self
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        # A pickle of an older result has neither attribute.
+        self.__dict__.setdefault("_leaves", {})
+        self.__dict__.setdefault("pls_info", None)
+        for leaf in self._leaves.values():
+            leaf._container = self
+
+    def _key_repr(self, key: str) -> str:
+        from ssdiff.results.multi_pls_result import _dim_label
+        return _dim_label(key)
+
+    def _access_hint(self) -> str:
+        hint = super()._access_hint()
+        if not self._leaves:
+            return hint
+        return hint + "\n  dims:    " + "  ".join(f"[{k!r}]" for k in self._leaves)
+
     def _refresh_stats_pvalue(self, new_pvalue: float | None) -> None:
         """Rebuild self.stats with an updated pvalue.
 
@@ -1485,41 +1773,27 @@ class ContinuousResult(_SingleResult):
         One row per coefficient (a factor gives one per level after the
         first), on y's scale, or on the link scale for a non-Gaussian
         ``fit_regression`` model. The text's own rows (``_ssd_*``, also
-        inside an interaction) are left out: ``test`` tests the text. Empty without a formula.
+        inside an interaction) are left out: ``test`` tests the text. Empty
+        without a formula, and when the intercept is the only row.
         """
         if self.model is None or self.fit_info.formula is None:
             return CovariatesView([])
         s = self.model.summary_object()
         ci = self.model.confint()
-        return CovariatesView([
+        rows = [
             CovariateRow(
                 term=term, estimate=float(s.estimate[i]), se=float(s.std_error[i]),
                 statistic=float(s.statistic[i]), p_value=float(s.p_value[i]),
                 ci_low=float(ci[i, 0]), ci_high=float(ci[i, 1]),
             )
             for i, term in enumerate(s.coef_names) if not _is_text_coef(term)
-        ])
+        ]
+        return CovariatesView([] if [r.term for r in rows] == ["(Intercept)"] else rows)
 
     def summary(self) -> str:
-        """Print the compact model summary and return it as text.
-
-        glmm's summary of ``model`` without the text's own rows (``_ssd_*``,
-        also inside an interaction) in the fixed effects and their correlations, with an SSD effects
-        row for the text's test below the fixed-effects rows. The other
-        blocks (fit criteria, residuals, random effects, R²) describe the
-        full model, text included. ``model.summary()`` prints the full glmm
-        summary. Without a model (``fit_pls``), a header and the Text block
-        only.
-        """
-        if self.model is None:
-            text = (f"{self.stats.backend} fit [ssdiff]\nNumber of obs: {self.stats.n_kept}"
-                    "\n\n" + self._text_block())
-        else:
-            r2_label, r2, p = self._effect_cells()
-            text = _summary_text(
-                self._model_summary_without_text(),
-                [(self.text.name or "text", r2_label, r2, p)],
-            )
+        """Print the compact summary, a header and the Text block, and return it as text."""
+        text = (f"{self.stats.backend} fit [ssdiff]\nNumber of obs: {self.stats.n_kept}"
+                "\n\n" + self._text_block())
         print(text)
         return text
 
@@ -1667,6 +1941,10 @@ class ContinuousResult(_SingleResult):
         - ``top_words`` — ``{"n": 5}`` words per pole.
         - ``extreme_docs`` — ``{"n": 5}`` pos + ``n`` neg.
         - ``misdiagnosed`` — ``{"n": 5}`` over + ``n`` under.
+
+        With gradient leaves (``ssd_gradients > 1``), their rotation, one row
+        per gradient and each gradient's words follow; ``top_words`` also sets
+        the words listed per gradient.
 
         Returns
         -------
@@ -1820,6 +2098,10 @@ class ContinuousResult(_SingleResult):
                     self.docs.misdiagnosed(n_md, direction=direction),
                 ))
 
+        if self._leaves:
+            from ssdiff.results.multi_pls_result import _dimension_sections
+            sections += _dimension_sections(self, tw["n"] if tw else None)
+
         return Report(
             title=f"{type(self).__name__} — r² = {fmt_r(s.r2)}",
             subtitle=f"(n = {fmt_count(s.n_kept)})",
@@ -1847,10 +2129,6 @@ class PLSResult(ContinuousResult):
     cv_scores : dict | None
         Flat ``{k: cv_score}`` dict — convenience copy of
         ``find_k_result.cv_scores`` (None when ``k`` was an int).
-    pls_info : PLSInfoView | None
-        Rotation diagnostics of the gradients of ``fit_pls(ssd_gradients=N)``
-        with N > 1; ``None`` for one gradient. The gradients themselves are
-        the leaves ``result["dim-1"]`` … ``result["dim-N"]``.
     """
 
     _arrays = (
@@ -1859,7 +2137,7 @@ class PLSResult(ContinuousResult):
     )
 
     def __init__(self, *, test_name: str | None = None,
-                 test_info: dict | None = None, dims: dict | None = None, **kw):
+                 test_info: dict | None = None, **kw):
         """Construct a PLS result, pulling extra PLS diagnostics from ``raw_diagnostics``.
 
         Parameters
@@ -1868,43 +2146,14 @@ class PLSResult(ContinuousResult):
             Name of the initial test (if one was run at fit time).
         test_info : dict or None
             Info dict from the initial test run (must contain ``"pvalue"``).
-        dims : dict or None
-            The rotated gradients of ``fit_pls(ssd_gradients=N)``, N > 1:
-            ``"beta"`` (D, N) in raw doc-vector space, ``"score_corr"`` and
-            ``"cov_share"`` (N,), and ``"rotate"``, ``"order"``, ``"signs"``,
-            ``"rotation_meta"`` as in ``PLSInfoView``. ``None`` for one gradient.
         **kw
             All remaining arguments forwarded to ``ContinuousResult.__init__``.
         """
-        from ssdiff.results.multi_pls_result import (
-            PLSComponentStatsView,
-            PLSInfoView,
-            _PLSComponentResult,
-        )
-
         kw.setdefault("backend", "PLS")
         super().__init__(**kw)
         self.test = PLSTestView(
             parent=self, name=test_name, info=test_info,
         )
-        self.pls_info = None
-        self._leaves = {}
-        if dims is not None:
-            n_dims = dims["beta"].shape[1]
-            self.pls_info = PLSInfoView(
-                ssd_gradients=n_dims, rotate=dims["rotate"], order=dims["order"],
-                signs=dims["signs"], rotation_meta=dims["rotation_meta"],
-                random_state=self.fit_info.random_state,
-            )
-            for i in range(n_dims):
-                key = f"dim-{i + 1}"
-                self._leaves[key] = _PLSComponentResult(
-                    container=self, key=key, beta=dims["beta"][:, i],
-                    stats=PLSComponentStatsView(
-                        cov_share=dims["cov_share"][i], score_corr=dims["score_corr"][i],
-                    ),
-                )
-            self._access = (*self._access[:2], "pls_info", *self._access[2:], "keys()")
         raw = self._raw_diagnostics
         self.find_k_result = raw.get("find_k_result")
         self.cv_scores = (
@@ -1917,54 +2166,6 @@ class PLSResult(ContinuousResult):
         self.component_scores = raw.get("component_scores")
         self.component_weights = raw.get("component_weights")
 
-    # ------ gradient leaves (fit_pls(ssd_gradients=N), N > 1) ------------
-    def __getitem__(self, key):
-        return self._leaves[key]
-
-    def keys(self) -> list:
-        return list(self._leaves.keys())
-
-    def attach(self, texts=None, embeddings=None):
-        """``Result.attach``, then the same text and embeddings on every gradient leaf."""
-        super().attach(texts=texts, embeddings=embeddings)
-        for leaf in self._leaves.values():
-            leaf.text = self.text
-            leaf.embeddings = self.embeddings
-        return self
-
-    def __setstate__(self, state):
-        self.__dict__.update(state)
-        # A pickle of an older PLSResult has neither attribute.
-        self.__dict__.setdefault("_leaves", {})
-        self.__dict__.setdefault("pls_info", None)
-        for leaf in self._leaves.values():
-            leaf._container = self
-
-    def _key_repr(self, key: str) -> str:
-        from ssdiff.results.multi_pls_result import _dim_label
-        return _dim_label(key)
-
-    def _access_hint(self) -> str:
-        hint = super()._access_hint()
-        if not self._leaves:
-            return hint
-        return hint + "\n  dims:    " + "  ".join(f"[{k!r}]" for k in self._leaves)
-
-    def report(self, *, clusters=True, top_words=True, extreme_docs=True,
-               misdiagnosed=True) -> Report:
-        """``ContinuousResult.report``; with gradient leaves, their rotation, stats and words follow.
-
-        ``top_words`` also sets the words listed per dimension.
-        """
-        from ssdiff.results.multi_pls_result import _dimension_sections
-
-        rep = super().report(clusters=clusters, top_words=top_words,
-                             extreme_docs=extreme_docs, misdiagnosed=misdiagnosed)
-        if self._leaves:
-            tw = _resolve_section(top_words, {"n": 5}, name="top_words")
-            rep.sections += _dimension_sections(self, tw["n"] if tw else None)
-        return rep
-
     def _text_block(self) -> str:
         fi, t = self.fit_info, self.test
         formula = fi.formula is not None
@@ -1973,18 +2174,17 @@ class PLSResult(ContinuousResult):
             test = "test not run"
         else:
             at_k = f", k = {fi.p_at_k}" if fi.p_at_k not in (None, fi.n_components) else ""
-            test = f"split-half permutation test ({t.name}{at_k}): p = {fmt_p(t.pvalue)}"
+            test = f"split-half test ({t.name}{at_k}): p = {fmt_p(t.pvalue)}"
         r2 = f"{'partial R²' if formula else 'R²'} = {fmt_r(self.stats.r2, digits=3)}"
         return f"Text:  {head}\n       {test}\n       {r2}"
 
-    def _effect_cells(self) -> tuple[str, str, float | None]:
-        """R² label, R² and p of the text for the SSD effects row of ``summary()``."""
-        return "partial R²", fmt_r(self.stats.r2, digits=3), self.test.pvalue
-
 
 # ---------- PCAOLSResult ----------
-class PCAOLSResult(ContinuousResult):
+class PCAOLSResult(_RegressionModelView, ContinuousResult):
     """PCA regression result (``SSD.fit_regression``).
+
+    Also has the statsmodels names of ``_RegressionModelView`` (``params``,
+    ``pvalues``, ``conf_int()``, ``fvalue``, …) and its ``summary()``.
 
     Attributes
     ----------
@@ -2009,7 +2209,8 @@ class PCAOLSResult(ContinuousResult):
     _stats_view_cls = OLSStatsView
     _access = (
         "stats", "fit_info", "words", "clusters", "snippets", "docs", "sweep",
-        "test", "covariates", "model", "summary()", "report()", "save_page(...)", "test(...)", "predict(...)", "attach(...)",
+        "test", "covariates", "params", "pvalues", "model", "summary()", "conf_int(...)",
+        "report()", "save_page(...)", "test(...)", "predict(...)", "attach(...)",
     )
     _arrays = (
         "x", "y", "beta", "gradient", "alignment_scores",
@@ -2071,13 +2272,6 @@ class PCAOLSResult(ContinuousResult):
         test = "test not run" if t.pvalue is None else f"{t.name}: p = {fmt_p(t.pvalue)}"
         return (f"Text:  PCA+OLS, K = {self.fit_info.n_components}\n       {test}\n"
                 f"       R² = {fmt_r(self.stats.r2, digits=3)}")
-
-    def _effect_cells(self) -> tuple[str, str, float | None]:
-        """R² label, R² and p of the text for the SSD effects row of ``summary()``."""
-        r2_delta = self.test.params.get("r2_delta")
-        if r2_delta is None or not np.isfinite(r2_delta):
-            return "", "", self.test.pvalue
-        return "ΔR²", fmt_r(r2_delta, digits=3), self.test.pvalue
 
     def _save_hint(self) -> str:
         return (
@@ -2145,7 +2339,7 @@ class PCAOLSResult(ContinuousResult):
 
 
 # ---------- RegressionResult ----------
-class RegressionResult(_MultiContainer):
+class RegressionResult(_RegressionModelView, _MultiContainer):
     """One ``PCAOLSResult`` leaf per text term of a ``fit_regression`` formula.
 
     Typical use::
@@ -2157,7 +2351,8 @@ class RegressionResult(_MultiContainer):
     A leaf's ``beta`` is the gradient of its term alone: the gradient of a
     group is the sum of ``res["ssd(essay)"].beta`` and that group's leaf.
     ``model``, ``fit_info``, ``sweep`` and ``covariates`` are the same for
-    every leaf.
+    every leaf, and so are the statsmodels names of ``_RegressionModelView``
+    (``params``, ``pvalues``, ``conf_int()``, ``fvalue``, …) and ``summary()``.
 
     From ``ssdiff.fit_regression`` with several texts the result is keyed by
     text name; each entry is a ``RegressionResult`` keyed by term, or a
@@ -2166,9 +2361,9 @@ class RegressionResult(_MultiContainer):
     """
 
     _access = (
-        "stats", "fit_info", "sweep", "covariates", "test", "model",
+        "stats", "fit_info", "sweep", "covariates", "params", "pvalues", "test", "model",
         "words", "clusters", "snippets",
-        "beta", "gradient", "beta_norm", "alignment_scores", "attach(...)",
+        "beta", "gradient", "beta_norm", "alignment_scores", "conf_int(...)", "attach(...)",
     )
 
     def __init__(
@@ -2185,6 +2380,8 @@ class RegressionResult(_MultiContainer):
         self.model = first.model
         self.fit_args = first.fit_args
         self._formula_shown = first._formula_shown
+        self._term_tests, self._joint_tests = first._term_tests, first._joint_tests
+        self._whole_test, self._obs_index = first._whole_test, first._obs_index
         self.stats = first._stats_view_cls(
             replace(first.stats._stats, beta_norm=None, delta=None, iqr_effect=None)
         )
@@ -2229,25 +2426,6 @@ class RegressionResult(_MultiContainer):
     def covariates(self) -> CovariatesView:
         """The formula's coefficients with the text terms held fixed; see ``PCAOLSResult.covariates``."""
         return self._first_leaf().covariates
-
-    def summary(self) -> str:
-        """Print the compact model summary and return it as text.
-
-        As ``PCAOLSResult.summary()``, with one SSD effects row per ``test``
-        row; the all-text row is labelled with the text's name.
-        """
-        effects = []
-        for t in self.test:
-            has_r2 = t.r2_delta is not None and np.isfinite(t.r2_delta)
-            effects.append((
-                t.label or ("all texts" if self._by_text else self.text.name or "text"),
-                "ΔR²" if has_r2 else "",
-                fmt_r(t.r2_delta, digits=3) if has_r2 else "",
-                t.pvalue,
-            ))
-        text = _summary_text(self._first_leaf()._model_summary_without_text(), effects)
-        print(text)
-        return text
 
     def _summary(self) -> str:
         return (f"RegressionResult  {self._formula_shown}\n"

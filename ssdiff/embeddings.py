@@ -211,7 +211,7 @@ class Embeddings:
         fmt = os.path.splitext(low.removesuffix(".gz"))[1] or "non-wordpack"
         warnings.warn(
             f"Loading a {fmt} embedding: build the text from token lists "
-            "(`SSD(emb, tokens)`). "
+            "(`SSD(tokens, embeddings=emb)`). "
             "A .wordpack embedding tokenizes strings itself.",
             UserWarning,
             stacklevel=2,

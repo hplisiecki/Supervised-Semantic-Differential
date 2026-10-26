@@ -291,7 +291,7 @@ class Stats:
     ------
     backend : str
         ``"PLS"``, ``"PCA+OLS"``, or ``"PCA+GLMM"`` (``fit_regression`` with
-        a formula or a model other than Gaussian identity-link).
+        random effects or a model other than Gaussian identity-link).
     r2 : float
         In-sample R² (variance explained by β).
     pvalue : float
@@ -358,8 +358,8 @@ class FitInfo:
     pca_k_source: str | None = None  # "sweep" | "fixed" | None (PLS)
     formula: str | None = None       # fit_regression / fit_pls formula as given
     family: str | None = None        # glmm family of fit_regression
-    ssd_gradients: int | None = None  # fit_pls: number of gradients returned
-    rotate: str | None = None        # fit_pls rotation of those gradients; None for one
+    ssd_gradients: int | None = None  # fit_pls, fit_regression: number of gradients returned
+    rotate: str | None = None        # their rotation (fit_regression: "words"); None for one
 
     __setstate__ = _setstate_filling_defaults
 

@@ -219,7 +219,7 @@ def main() -> None:
     data = make_texts(emb)
     _write(TEXTS, data)
     df = pd.DataFrame({k: v for k, v in data.items() if k != "lexicon"})
-    ssd = SSD(emb, df["text"], LEXICON)
+    ssd = SSD(df["text"], embeddings=emb, lexicon=LEXICON)
 
     OUT.mkdir(exist_ok=True)
     for name, y, call, args, kwargs in CASES:

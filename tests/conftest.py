@@ -221,15 +221,15 @@ def sample_preprocessed_docs() -> list[PreprocessedDoc]:
 def ssd_instance(parity_emb, parity_df, parity_lexicon):
     """SSD text on the parity wordpack: strings, so ``pre_docs`` (snippets) exist."""
     from ssdiff.ssd import SSD
-    return SSD(parity_emb, parity_df["text"], parity_lexicon)
+    return SSD(parity_df["text"], embeddings=parity_emb, lexicon=parity_lexicon)
 
 
 @pytest.fixture
 def two(parity_emb, parity_df, parity_lexicon):
     """Two texts over the parity rows: ``essay`` from strings, ``diary`` from token lists."""
     from ssdiff.ssd import SSD
-    essay = SSD(parity_emb, parity_df["text"], parity_lexicon)
-    diary = SSD(parity_emb, essay.docs[::-1], parity_lexicon)
+    essay = SSD(parity_df["text"], embeddings=parity_emb, lexicon=parity_lexicon)
+    diary = SSD(essay.docs[::-1], embeddings=parity_emb, lexicon=parity_lexicon)
     return essay, diary
 
 
@@ -249,7 +249,7 @@ def pcaols_result(ssd_instance, parity_df):
 def pcaols_result_sweep(tiny_kv, large_docs, large_y, lexicon):
     """Fitted PCAOLSResult with sweep (fixed_k=None)."""
     from ssdiff.ssd import SSD
-    ssd = SSD(tiny_kv, large_docs, lexicon)
+    ssd = SSD(large_docs, embeddings=tiny_kv, lexicon=lexicon)
     return ssd.fit_regression(large_y, fixed_k=None, k_min=2, k_max=6, k_step=1)
 
 
@@ -257,7 +257,7 @@ def pcaols_result_sweep(tiny_kv, large_docs, large_y, lexicon):
 def group_result_2g(tiny_kv, large_docs, large_groups_2, lexicon):
     """Fitted GroupResult with 2 groups."""
     from ssdiff.ssd import SSD
-    ssd = SSD(tiny_kv, large_docs, lexicon)
+    ssd = SSD(large_docs, embeddings=tiny_kv, lexicon=lexicon)
     return ssd.fit_groups(large_groups_2, n_perm=50, random_state=42)
 
 
@@ -265,7 +265,7 @@ def group_result_2g(tiny_kv, large_docs, large_groups_2, lexicon):
 def group_result_3g(tiny_kv, large_docs_3x20, large_groups_3x20, lexicon):
     """Fitted GroupResult with 3 groups."""
     from ssdiff.ssd import SSD
-    ssd = SSD(tiny_kv, large_docs_3x20, lexicon)
+    ssd = SSD(large_docs_3x20, embeddings=tiny_kv, lexicon=lexicon)
     return ssd.fit_groups(large_groups_3x20, n_perm=50, random_state=42)
 
 

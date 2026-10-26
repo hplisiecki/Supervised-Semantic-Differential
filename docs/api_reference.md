@@ -19,7 +19,7 @@ For internals see [`architecture.md`](architecture.md).
 from ssdiff import Embeddings, SSD
 
 emb = Embeddings.load()                    # the default English wordpack, downloaded once
-ssd = SSD(emb, df["text"], lexicon=["happy", "sad", "joy", "anger"])   # one text, no outcome
+ssd = SSD(df["text"], embeddings=emb, lexicon=["happy", "sad", "joy", "anger"])   # one text, no outcome
 
 result = ssd.fit_regression("score", data=df)   # PCA regression
 # result = ssd.fit_pls("score", data=df)        # PLS
@@ -102,24 +102,25 @@ Holds one text, tokenized once, and builds personal concept vectors (PCVs) from 
 ### Constructor
 
 ```python
-ssd = SSD(embeddings, texts, lexicon=None, *,
-          window=3, sif_a=1e-3, use_full_doc=False)
+ssd = SSD(texts, *, embeddings=None, lexicon=None,
+          window=3, sif_a=1e-3, use_full_doc=None)
 ```
 
 | Argument | Type | Default | Description |
 |---|---|---|---|
-| `embeddings` | `Embeddings` | — | L2-normalized word embeddings. Strings need a wordpack. |
 | `texts` | sequence of `str`, or sequence of token lists | — | One entry per document. Strings are tokenized with the wordpack's tokenizer and stopwords; an empty, `None` or NaN entry is an empty document. Token lists are used as given and are the way to use any embedding that is not a wordpack. A pandas Series gives the text its name. |
-| `lexicon` | `Sequence[str] \| set[str] \| None` | `None` | Seed words for context-window extraction. Needed for document vectors unless `use_full_doc=True`. The lexicon helpers do not need it. |
+| `embeddings` | `Embeddings` or `None` | `None` | L2-normalized word embeddings. Strings need a wordpack. `None` loads `Embeddings.load()`, the `"default"` wordpack tag, which prints its tag message to stderr. |
+| `lexicon` | `Sequence[str] \| set[str] \| None` | `None` | Seed words for context-window extraction. The lexicon helpers do not need it. |
 | `window` | `int` | `3` | Context window size (tokens) around each seed. |
 | `sif_a` | `float` or `None` | `1e-3` | SIF smoothing. Must be > 0; `None` turns SIF off (plain mean of word vectors). |
-| `use_full_doc` | `bool` | `False` | Use full-document vectors instead of seed-windowed contexts. |
+| `use_full_doc` | `bool` or `None` | `None` | `True`: full-document vectors. `False`: seed-windowed contexts, which need a lexicon. `None` means `True` without a lexicon and `False` with one. |
 
 A single string as `texts` raises `TypeError`, and so do strings with embeddings that are not a wordpack. Embeddings that are not L2-normalized raise `RuntimeError`; call `emb.normalize()`.
 
 ```python
-ssd = SSD(emb, df["essay"], lexicon)                 # strings, wordpack embeddings
-ssd = SSD(emb, token_lists, lexicon)                 # token lists, any embeddings
+ssd = SSD(df["essay"])                               # default wordpack, full documents
+ssd = SSD(df["essay"], embeddings=emb, lexicon=lexicon)   # strings, wordpack embeddings
+ssd = SSD(token_lists, embeddings=emb, lexicon=lexicon)   # token lists, any embeddings
 ssd2 = ssd.with_lexicon(other_lexicon)               # same tokens, another lexicon
 ```
 
@@ -155,6 +156,7 @@ result = ssd.fit_regression(outcome, *, data=None,
     family="gaussian", link=None,
     fixed_k=None,
     k_min=2, k_max=120, k_step=2,
+    ssd_gradients=1,
     verbose=False,
     pca_sweep_args=None,
 )
@@ -168,6 +170,7 @@ result = ssd.fit_regression(outcome, *, data=None,
 | `link` | `str \| None` | `None` | Link function; `None` takes glmm's default for the family. |
 | `fixed_k` | `int \| None` | `None` | Fixed number of PCA components. `None` selects K via the interpretability + stability sweep. |
 | `k_min`, `k_max`, `k_step` | `int` | `2`, `120`, `2` | Sweep range (ignored when `fixed_k` is set). |
+| `ssd_gradients` | `int` | `1` | Number of gradients returned, in `[1, K]`. At 1 the result is the standard fit alone. At N > 1 the K components are split into N consecutive blocks (`np.array_split`: K=10, N=3 gives 4/3/3), each block's part of the model's beta is one gradient, and the N gradients are rotated by words as in `fit_pls`; leaves `result["dim-1"]` … `result["dim-N"]` with `stats` (`score_corr`, `cov_share`), `words`, `clusters`, `snippets` and no p-value. `score_corr` and `cov_share` keep the covariates in, so with covariates, another family or random effects they are descriptive. The standard fit does not depend on it. N > 1 needs one plain `ssd()` term: `group*ssd()` or `age:ssd()` raises `ValueError`, and so do N > K and a zero or aliased block. |
 | `verbose` | `bool` | `False` | Print progress. |
 | `pca_sweep_args` | `dict \| None` | `None` | Extra keyword arguments for the PCA-K sweep (e.g. `cluster_topn`, `auck_radius`, `save_tables`, `out_dir`). Ignored when `fixed_k` is set. A key that `fit_regression` sets itself (`Xs`, `X_scale`, `x`, `ys`, `embeddings`, `pca_k_values`, `verbose`) raises `ValueError`. |
 
@@ -179,9 +182,14 @@ For a Gaussian identity-link fit, `beta` is on the standardized-outcome scale; f
 result = ssd.fit_regression("rating ~ age + gender + (1 | ID)", data=df)
 result.stats.pvalue       # test of the text terms together
 result.covariates         # covariate coefficients, with the text held fixed
-result.summary()          # compact: glmm summary without the _ssd_* rows, plus the text's test
+result.params             # statsmodels names: params, bse, tvalues, conf_int(), cov_params()
+result.pvalues            # covariates, then one Wald p-value per text term
+result.llr_pvalue         # whole model vs. outcome ~ 1 (fvalue / f_pvalue for OLS)
+result.summary()          # compact: glmm summary without the _ssd_* rows, a row per text term
 result.model.summary()    # full glmm summary, component rows included
 ```
+
+The result has statsmodels names, with statsmodels meanings, read from `result.model`: `params`, `bse`, `tvalues`, `conf_int(alpha=0.05)`, `cov_params()` (covariates only), `pvalues` (covariates, then one Wald row per text term), `fvalue` / `f_pvalue` (OLS only) or `llr` / `llr_pvalue` (every other model) for the whole model against `outcome ~ 1`, `df_model`, `df_resid`, `nobs`, `rsquared`, `rsquared_adj`, `aic`, `bic`, `llf`, `resid`, `fittedvalues` and `random_effects`. They need pandas. See [results.md](results.md#pcaolsresult).
 
 Returns a `PCAOLSResult` when the formula has one text term.
 
@@ -203,7 +211,7 @@ res.summary()
 - `res.model`, `res.covariates`, `res.fit_info`, `res.sweep`, `res.summary()`, `res.save_page(...)` and `res.attach(...)` belong to the whole fit. `res.report()` and `res.predict()` are on a leaf, not on the container.
 - Two texts cannot interact in one term.
 
-#### `ssdiff.fit_regression()` — several texts
+#### `ssdiff.fit_regression()` — texts by name
 
 ```python
 res = ssdiff.fit_regression(formula, data, *, family="gaussian", link=None,
@@ -213,6 +221,8 @@ res = ssdiff.fit_regression(formula, data, *, family="gaussian", link=None,
 
 ```python
 import ssdiff
+
+res = ssdiff.fit_regression("score ~ age + ssd(essay)", df)   # the text from the column "essay"
 
 both = ssdiff.fit_regression(
     "score ~ age + ssd(essay) + sex*ssd(diary)", df,
@@ -224,7 +234,7 @@ both["diary"].keys()      # ['ssd(diary)', 'sexM:ssd(diary)']
 both.test                 # all texts, then one row per text, then one Wald row per term
 ```
 
-Each keyword is a text, named in the formula as `ssd(name)`. The formula needs an outcome on the left and `data`; a bare `ssd()` is not allowed, and the formula must name each text that is passed. The texts and `data` must have the same number of rows, in the same order. A row stays when it has an outcome and a vector in every text. Each text gets its own standardization, PCA and K. `fixed_k`, `k_min`, `k_max`, `k_step` and `pca_sweep_args` apply to every text. The per-text test row compares the full formula with the formula without that text's terms. With one text the result has no text level, as from `SSD.fit_regression`.
+Each `ssd(name)` in the formula is a text: the keyword `name=` when one is passed, else the column `name` of `data`, built as `SSD(data[name])` with every default. All texts built from columns in one call share one `Embeddings.load()`. A text that needs other settings is built with `SSD` and passed by keyword; a keyword wins over a column of the same name. The formula needs an outcome on the left and `data`; a bare `ssd()` is not allowed, a name that is neither a keyword nor a column raises, and the formula must name each text that is passed. The texts and `data` must have the same number of rows, in the same order. A row stays when it has an outcome and a vector in every text. Each text gets its own standardization, PCA and K. `fixed_k`, `k_min`, `k_max`, `k_step` and `pca_sweep_args` apply to every text. The per-text test row compares the full formula with the formula without that text's terms. With one text the result has no text level, as from `SSD.fit_regression`.
 
 `fit_ols(...)` is a deprecated alias of `fit_regression`: same arguments, warns with `FutureWarning`.
 
@@ -245,7 +255,7 @@ result = ssd.fit_pls(
 
 | Argument | Type | Default | Description |
 |---|---|---|---|
-| `outcome` | `array-like \| str` | — | The numeric outcome, one value per document: values, a column name of `data`, or a formula such as `"score ~ age + gender"`. A formula's left side is a column of `data` and its right side holds fixed covariates. The outcome and every column of the document vectors are regressed on them by OLS, and PLS and its test run on the residuals; the test permutes residuals against residuals (Kennedy, 1995) and can run slightly liberal when the covariates use many degrees of freedom relative to n. Random effects and an `ssd()` term raise `ValueError` (use `fit_regression`). With a formula, `r2` is the R² of the residualized outcome, `docs.residual` has the covariates taken out, and `predict()` is not available. The covariates' own coefficients are not reported; use `fit_regression` for them. Missing values drop the document. |
+| `outcome` | `array-like \| str` | — | The numeric outcome, one value per document: values, a column name of `data`, or a formula such as `"score ~ age + gender"`. A formula's left side is a column of `data` and its right side holds fixed covariates. The outcome and every column of the document vectors are regressed on them by OLS, and PLS and its test run on the residuals; split_exact permutes residuals against residuals (Kennedy, 1995); the test can run slightly liberal when the covariates use many degrees of freedom relative to n. Random effects and an `ssd()` term raise `ValueError` (use `fit_regression`). With a formula, `r2` is the R² of the residualized outcome, `docs.residual` has the covariates taken out, and `predict()` is not available. The covariates' own coefficients are not reported; use `fit_regression` for them. Missing values drop the document. |
 | `data` | DataFrame or `dict` of 1-D arrays | `None` | One row per document: the outcome column and the formula's covariates. |
 | `k` | `int \| "auto"` | `"auto"` | Number of PLS components. `int` fits at exactly that k. `"auto"` calls `plskit.pls1_find_k_optimal` (selector `r2_se`). The p-value is plskit's default split-half test (`test_method="auto"`: `split_exact` or `split_nb`, chosen from X alone; `result.test.name` says which ran) at the fitted `k`; with `k="auto"` it is the k=1 test. The diagnostic chain used to pick `k` is `split_nb`. |
 | `k_max` | `int` | `5` | Cap for `k="auto"`, clamped to `min(k_max, n-1, D)`. Ignored when `k` is an int. |
@@ -485,7 +495,7 @@ from ssdiff import Embeddings, SSD
 emb = Embeddings.load()
 
 # Lexicon selection: the SSD needs no lexicon yet
-ssd = SSD(emb, df["text"])
+ssd = SSD(df["text"], embeddings=emb)
 lex = ssd.suggest_lexicon("score", data=df, top_k=30)
 lexicon = lex.tokens[:20]
 

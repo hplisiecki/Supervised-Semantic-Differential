@@ -30,7 +30,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 df = pd.read_csv(os.path.join(HERE, "data", "measuring_hate_speech.csv.gz"))
 
 emb = Embeddings.load("en")
-ssd = SSD(emb, df["text"], use_full_doc=True)
+ssd = SSD(df["text"], embeddings=emb, use_full_doc=True)
 
 # The text column is named "text", so ssd() is shown as ssd(text).
 res = ssd.fit_regression("score ~ women * ssd()", data=df)

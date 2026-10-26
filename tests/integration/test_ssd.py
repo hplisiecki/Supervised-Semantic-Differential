@@ -20,7 +20,7 @@ from ssdiff.utils.diagnostics import _get_hook, progress_hook
 
 @pytest.mark.parametrize("method", ["fit_pls", "fit_regression"])
 def test_categorical_y_raises(tiny_kv, sample_docs, sample_groups, lexicon, method):
-    ssd = SSD(tiny_kv, sample_docs, lexicon)
+    ssd = SSD(sample_docs, embeddings=tiny_kv, lexicon=lexicon)
     with pytest.raises(ValueError, match="categorical"):
         getattr(ssd, method)(sample_groups)
 
@@ -32,7 +32,7 @@ def test_categorical_y_raises(tiny_kv, sample_docs, sample_groups, lexicon, meth
 def test_fit_pls_constant_y_rejected(tiny_kv, sample_docs, lexicon):
     """Constant y has zero variance — fitting PLS1 is undefined and must error."""
     constant_y = np.ones(len(sample_docs))
-    ssd = SSD(tiny_kv, sample_docs, lexicon)
+    ssd = SSD(sample_docs, embeddings=tiny_kv, lexicon=lexicon)
     with pytest.raises(ValueError, match="nonzero variance"):
         ssd.fit_pls(constant_y, k=1, n_splits=20)
 
@@ -43,8 +43,8 @@ def test_fit_pls_constant_y_rejected(tiny_kv, sample_docs, lexicon):
 
 def test_use_full_doc_differs(tiny_kv, sample_docs, lexicon):
     """Whole-document vectors differ from seed-window vectors for the same text and lexicon."""
-    ctx = SSD(tiny_kv, sample_docs, lexicon, use_full_doc=False)
-    full = SSD(tiny_kv, sample_docs, lexicon, use_full_doc=True)
+    ctx = SSD(sample_docs, embeddings=tiny_kv, lexicon=lexicon, use_full_doc=False)
+    full = SSD(sample_docs, embeddings=tiny_kv, lexicon=lexicon, use_full_doc=True)
     assert not np.allclose(ctx._vectors()[0], full._vectors()[0])
 
 
@@ -148,7 +148,7 @@ def _y2(n, q=3, seed=0):
 
 def test_y_2d_array_accepted(tiny_kv, sample_docs, lexicon):
     y = _y2(len(sample_docs))
-    res = SSD(tiny_kv, sample_docs, lexicon).fit_multipls(y, n_perm=20, n_splits=5)
+    res = SSD(sample_docs, embeddings=tiny_kv, lexicon=lexicon).fit_multipls(y, n_perm=20, n_splits=5)
     assert res.y.shape == (len(sample_docs), 3)
     assert res.outcome_names == ["y1", "y2", "y3"]
 
@@ -157,7 +157,7 @@ def test_y_2d_nan_row_and_empty_doc_stay_aligned(tiny_kv, sample_docs, lexicon):
     docs = [list(d) for d in sample_docs] + [["zzz_not_in_vocab"]]
     y = _y2(len(docs))
     y[1, 2] = np.nan
-    res = SSD(tiny_kv, docs, lexicon).fit_multipls(y, n_perm=20, n_splits=5)
+    res = SSD(docs, embeddings=tiny_kv, lexicon=lexicon).fit_multipls(y, n_perm=20, n_splits=5)
     expected_rows = [i for i in range(len(docs)) if i != 1 and i != len(docs) - 1]
     np.testing.assert_array_equal(res.y, y[expected_rows])
     assert res.x.shape[0] == res.y.shape[0]
@@ -167,19 +167,19 @@ def test_y_2d_nan_row_and_empty_doc_stay_aligned(tiny_kv, sample_docs, lexicon):
 def test_y_2d_non_numeric_raises(tiny_kv, sample_docs, lexicon):
     y = np.array([["a", "b"]] * len(sample_docs), dtype=object)
     with pytest.raises(ValueError, match="numeric"):
-        SSD(tiny_kv, sample_docs, lexicon).fit_multipls(y)
+        SSD(sample_docs, embeddings=tiny_kv, lexicon=lexicon).fit_multipls(y)
 
 
 @pytest.mark.parametrize("method", ["fit_pls", "fit_regression", "fit_groups"])
 def test_single_outcome_fits_reject_2d_y(tiny_kv, sample_docs, lexicon, method):
-    ssd = SSD(tiny_kv, sample_docs, lexicon)
+    ssd = SSD(sample_docs, embeddings=tiny_kv, lexicon=lexicon)
     with pytest.raises(ValueError, match="fit_multipls"):
         getattr(ssd, method)(_y2(len(sample_docs)))
 
 
 @pytest.mark.parametrize("method", ["fit_pls", "fit_regression", "fit_groups"])
 def test_single_column_2d_y_asks_for_1d(tiny_kv, sample_docs, lexicon, method):
-    ssd = SSD(tiny_kv, sample_docs, lexicon)
+    ssd = SSD(sample_docs, embeddings=tiny_kv, lexicon=lexicon)
     with pytest.raises(ValueError, match="1-D outcome"):
         getattr(ssd, method)(_y2(len(sample_docs), q=1))
 
@@ -214,7 +214,7 @@ def test_predict_training_text_reproduces_fit(ssd_instance, parity_df, fit):
 
 def test_predict_nan_for_documents_without_vector(tiny_kv, sample_docs, sample_y, lexicon):
     """No known word, or no seed in seed-context mode, gives NaN."""
-    res = SSD(tiny_kv, sample_docs, lexicon).fit_pls(sample_y, k=1, n_splits=20)
+    res = SSD(sample_docs, embeddings=tiny_kv, lexicon=lexicon).fit_pls(sample_y, k=1, n_splits=20)
     pred = res.predict(
         [["kraj", "piekny", "dom"], ["zzz_not_in_vocab"], ["piekny", "dom"], []]
     )
@@ -224,14 +224,14 @@ def test_predict_nan_for_documents_without_vector(tiny_kv, sample_docs, sample_y
 
 def test_predict_full_doc_mode(tiny_kv, sample_docs, sample_y):
     """Full-document fits predict on documents without any seed word."""
-    res = SSD(tiny_kv, sample_docs, use_full_doc=True).fit_pls(sample_y, k=1, n_splits=20)
+    res = SSD(sample_docs, embeddings=tiny_kv, use_full_doc=True).fit_pls(sample_y, k=1, n_splits=20)
     pred = res.predict([["piekny", "dom"]])
     assert np.isfinite(pred).all()
 
 
 def test_predict_without_sif(tiny_kv, sample_docs, sample_y, lexicon):
     """sif_a=None: predict() on the training text rebuilds the fit's vectors."""
-    res = SSD(tiny_kv, sample_docs, lexicon, sif_a=None).fit_pls(sample_y, k=1, n_splits=20)
+    res = SSD(sample_docs, embeddings=tiny_kv, lexicon=lexicon, sif_a=None).fit_pls(sample_y, k=1, n_splits=20)
     pred = res.predict(sample_docs)
     np.testing.assert_allclose(pred, [d.y_hat for d in res.docs], rtol=1e-10)
 

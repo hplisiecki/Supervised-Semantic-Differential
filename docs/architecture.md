@@ -16,6 +16,8 @@ SSD                           — one text; builds its document vectors once, di
   │                         └── dict[str, _PLSComponentResult]  (ssd_gradients > 1 only,
   │                                                              keys "dim-1" … "dim-N")
   ├── .fit_regression() → PCAOLSResult       (one text term)
+  │                         └── dict[str, _PLSComponentResult]  (ssd_gradients > 1 only,
+  │                                                              keys "dim-1" … "dim-N")
   │                     → RegressionResult   (_MultiContainer → Result; several text terms)
   │                         └── dict[term, PCAOLSResult]        (keys "ssd(essay)", "sexM:ssd(essay)")
   ├── .fit_groups()    → GroupResult         (_MultiContainer → Result)
@@ -175,6 +177,12 @@ X (n_kept × D) per text, y (n_kept), data
         ├─ group coefficient names by text term; per term:
         │      w_K = the term's component coefficients  (÷ sd(y) for Gaussian identity link)
         │      β = V_K w_K / X_scale    (back-project; no sign flip)
+        ├─ ssd_gradients = N > 1 (one text, one plain ssd() term) → N gradients:
+        │      split the K components into N consecutive blocks (np.array_split)
+        │      piece_j = V_K[block_j]' w_K[block_j]   (pieces sum to V_K' w_K, orthogonal)
+        │      W = pieces / ‖pieces‖ (D × N, orthonormal)
+        │      backends.pls.pls1_rotate(W, Xs, ys, rotate="words", L) as in fit_pls
+        │      leaves "dim-1", …, "dim-N": β_i = W_rot[:, i] / X_scale
         └─ one term → PCAOLSResult; several terms → RegressionResult of PCAOLSResult leaves;
            several texts → RegressionResult keyed by text
 ```
@@ -264,12 +272,13 @@ Every result is either a **leaf** (one direction in embedding space + its interp
 Result                                          (core.py)
  ├─ _SingleResult                               (single_result.py)   — leaf base
  │   ├─ ContinuousResult                        (continuous_result.py)
- │   │   ├─ PLSResult                             — with ssd_gradients > 1 also holds
+ │   │   │      — with ssd_gradients > 1 holds
  │   │   │      self._leaves : dict[str, _PLSComponentResult]   # "dim-1", …, "dim-N"
+ │   │   ├─ PLSResult
  │   │   └─ PCAOLSResult                          — also a leaf inside RegressionResult
  │   ├─ PairResult                              (group_result.py — leaf inside GroupResult)
  │   ├─ ContrastResult                          (contrast_result.py — no documents)
- │   └─ _PLSComponentResult                     (multi_pls_result.py — leaf inside MultiPLSResult or PLSResult)
+ │   └─ _PLSComponentResult                     (multi_pls_result.py — leaf inside MultiPLSResult, PLSResult or PCAOLSResult)
  │
  └─ _MultiContainer                             (multi_container.py) — container base
      ├─ GroupResult                             (group_result.py)
@@ -432,7 +441,7 @@ With several texts there is one more comparison for each text: the full formula 
 
 ### `fit_pls()` — plskit `test_method="auto"`
 
-`plskit.pls1_confirmatory_test` with its default `test_method="auto"`: repeated train/test splits, calibrated against a permutation null (`split_exact`) or by an asymptotic correction (`split_nb`). plskit picks the method from X alone and reports it in `result.test_method`, which becomes `result.test.name`. It runs at the fitted `k` (at k=1 when `k="auto"`). `split_nb` is used only in the diagnostic chain that picks `k`.
+`plskit.pls1_confirmatory_test` with its default `test_method="auto"`: repeated train/test splits, calibrated against a permutation null (`split_exact`) or by an asymptotic correction (`split_nb`). plskit picks the method from X alone and reports it in `result.test_method`, which becomes `result.test.name`. It runs at the fitted `k` (at k=1 when `k="auto"`). The diagnostic chain that picks `k` always uses `split_nb`.
 
 With a formula the test sees the residualized y and X, so `split_exact` permutes residuals against residuals (Kennedy, 1995). The residualized arrays are kept in the result's raw diagnostics (`x_resid`, `y_resid`) so a rerun tests the same data.
 

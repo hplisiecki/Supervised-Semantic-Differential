@@ -36,7 +36,7 @@ emb = Embeddings.load("en")
 
 # Without a lexicon and without use_full_doc, the SSD can only tokenize; that
 # is all the lexicon helpers need.
-ssd = SSD(emb, df["text"])
+ssd = SSD(df["text"], embeddings=emb)
 
 # ---- 1. Words near the seeds ----
 # For each seed: the top_k closest words that occur in the texts. Every seed

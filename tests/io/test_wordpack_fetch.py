@@ -263,7 +263,7 @@ def test_a_tag_whose_pack_is_cached_loads_without_a_host(host, tmp_path, monkeyp
 
 def test_the_name_a_text_records_loads_the_same_pack(host):
     emb = Embeddings.load("en")
-    recorded = SSD(emb, ["the dog swims"], use_full_doc=True).tokenizer.removeprefix("wordpack:")
+    recorded = SSD(["the dog swims"], embeddings=emb, use_full_doc=True).tokenizer.removeprefix("wordpack:")
     again = Embeddings.load(recorded)
     assert (again.name, again.version) == (emb.name, emb.version)
 

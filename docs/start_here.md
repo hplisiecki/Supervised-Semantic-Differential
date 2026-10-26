@@ -14,6 +14,7 @@ This folder holds three tiers of documentation; runnable examples are in [`../ex
 |---|---|
 | [`embeddings.md`](embeddings.md) | Get embeddings and texts ready. The ready English packs (`Embeddings.load()`), tags and full names, where packs are stored, and loading your own embedding file with token lists for another language. |
 | [`api_reference.md`](api_reference.md) | Fit a model. Covers `Embeddings`, `SSD`, the fit methods (`fit_regression`, `fit_pls`, `fit_groups`, `fit_multipls`), formulas with the text term `ssd()`, several texts, `contrast`, and a full workflow example. Results are only sketched here. |
+| [`../examples/regression_quickstart.py`](../examples/regression_quickstart.py) | `ssdiff.fit_regression("score ~ women + ssd(text)", df)`: the text built from a column with every default, and the statsmodels names of the result. |
 | [`../examples/regression.py`](../examples/regression.py) | `fit_regression`: the text as a predictor, alone and with a covariate. |
 | [`../examples/regression_interaction.py`](../examples/regression_interaction.py) | An interaction with the text, `score ~ women * ssd()`, its tests, and `contrast`. |
 | [`../examples/pls.py`](../examples/pls.py) | `fit_pls`: alone, with a covariate, and with several rotated gradients. |
@@ -50,7 +51,7 @@ This folder holds three tiers of documentation; runnable examples are in [`../ex
 from ssdiff import Embeddings, SSD
 
 emb = Embeddings.load()                    # the default English wordpack, downloaded once
-ssd = SSD(emb, df["text"], lexicon=["happy", "sad", "joy"])   # one text, no outcome
+ssd = SSD(df["text"], embeddings=emb, lexicon=["happy", "sad", "joy"])   # one text, no outcome
 
 result = ssd.fit_regression("score", data=df)   # PCA regression, F-test p-value
 # result = ssd.fit_regression("score ~ age + sex*ssd()", data=df)  # covariates and interactions
@@ -63,7 +64,7 @@ print(result.words.pos)         # top 20 β-pos neighbors
 result.report().save("report.md")
 ```
 
-The outcome is the first argument of each fit: values, a column name of `data`, or a formula. Several texts in one model use `ssdiff.fit_regression("score ~ ssd(essay) + ssd(diary)", df, essay=..., diary=...)`. Two fitted gradients are compared with `ssdiff.contrast(g1, g2, emb)`.
+The outcome is the first argument of each fit: values, a column name of `data`, or a formula. Several texts in one model use `ssdiff.fit_regression("score ~ ssd(essay) + ssd(diary)", df)`; each `ssd(name)` is a text passed as a keyword (`essay=SSD(...)`), else the column `name` of `df` with every default. Two fitted gradients are compared with `ssdiff.contrast(g1, g2, emb)`.
 
 See [`../examples/pls.py`](../examples/pls.py) for a runnable end-to-end script, and [`../examples/several_outcomes.py`](../examples/several_outcomes.py) for `fit_multipls`.
 

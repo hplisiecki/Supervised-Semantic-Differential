@@ -110,7 +110,7 @@ def main() -> None:
         json.dump(corpus_data, f, ensure_ascii=False)
 
     # 5. Fit and freeze the golden (from reloaded emb + 1-token docs).
-    ssd = SSD(emb, [[w] for w in words], use_full_doc=True)
+    ssd = SSD([[w] for w in words], embeddings=emb, use_full_doc=True)
     res = ssd.fit_pls(y, k=K, n_splits=N_SPLITS, random_state=RANDOM_STATE)
 
     golden = {

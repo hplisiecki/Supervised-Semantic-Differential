@@ -724,7 +724,7 @@
     "sweep",
     "y ~ cov",
     "gaussian",
-    null,
+    1,
     null
    ]
   ]

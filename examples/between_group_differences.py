@@ -1,10 +1,5 @@
 """Between-group differences: how do the texts of labelled groups differ?
 
-``fit_groups`` is the older API for this question. The same question can be
-asked with ``fit_regression`` and a ``factor:ssd(text)`` term, followed by
-``ssdiff.contrast`` between the group gradients (see
-regression_interaction.py).
-
 ``fit_groups`` takes one label per document. It compares the mean document
 vectors of the groups. The omnibus permutation test asks whether any group
 differs from the others; then each pair of groups gets its own permutation
@@ -36,10 +31,11 @@ df["target"] = flags.idxmax(axis=1).where(flags.sum(axis=1) == 1)
 print(df["target"].value_counts(dropna=False))
 
 emb = Embeddings.load("en")
-ssd = SSD(emb, df["text"], use_full_doc=True)
+ssd = SSD(df["text"], embeddings=emb, use_full_doc=True)
 
-# The outcome is the label column of `data`. n_perm=1000 (default 5000) only
-# shortens the run.
+# The outcome is the label column of `data`. n_perm=1000 (default 5000)
+# shortens the run; it also sets the smallest possible p-value,
+# 1/(n_perm + 1) before the Holm correction.
 gr = ssd.fit_groups("target", data=df, n_perm=1000)
 print(gr)
 # The omnibus test, then one row per pair.

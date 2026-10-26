@@ -30,14 +30,14 @@ for t in targets:
 outcomes = [f"score_{t}" for t in targets]
 
 emb = Embeddings.load("en")
-ssd = SSD(emb, df["text"], use_full_doc=True)
+ssd = SSD(df["text"], embeddings=emb, use_full_doc=True)
 
 # The outcome is a list of column names of `data` (no formula). By default
 # there is one dimension per outcome. rotate="words" rotates the dimensions so
 # that each reads as its own group of words; the test is on the first
 # dimension before rotation, so rotating does not change the p-value.
-# n_perm=200 (default 1000) and n_splits=20 (default 50) only shorten the run.
-mp = ssd.fit_multipls(outcomes, data=df, rotate="words", n_perm=200, n_splits=20)
+# n_splits=20 (default 50) shortens the run.
+mp = ssd.fit_multipls(outcomes, data=df, rotate="words", n_splits=20)
 print(mp)
 print(mp.test)
 

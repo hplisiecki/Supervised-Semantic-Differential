@@ -47,12 +47,12 @@ _NO_ROTATION_META = {"sweeps": 0, "V_converged": 0.0, "kaiser_normalized": False
 
 
 def pls1_rotate(W, Xs, ys, *, rotate, L=None):
-    """Rotate PLS1 weights ``W`` (D × N, orthonormal) and score each dimension.
+    """Rotate orthonormal weights ``W`` (D × N) and score each dimension.
 
     ``rotate="words"`` runs varimax against ``L``, orders the dimensions by
     ``|corr(Xs @ W_rot[:, i], ys)|``, descending, and flips each so that
-    correlation is positive. ``rotate=None`` keeps the NIPALS order and
-    signs: NIPALS gives ``w_1 ∝ Xs' ys`` and orthonormal W, so dimensions
+    correlation is positive. ``rotate=None`` (PLS1 weights from NIPALS)
+    keeps the NIPALS order and signs: NIPALS gives ``w_1 ∝ Xs' ys`` and orthonormal W, so dimensions
     2…N have zero covariance with ``ys``, and ordering or signing them by it
     would follow rounding noise.
 

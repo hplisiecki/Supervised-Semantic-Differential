@@ -192,11 +192,12 @@ def _continuous(result, kind, sps, spc, doc_texts):
         tables["covariates"] = _view_table(covariates)
     unit = _unit_tables(result, sps, spc)
     unit["docs"], rows = _scored_docs(result, doc_texts)
-    leaves = result.keys() if kind == "pls" else []
+    leaves = result.keys()
     units = [{"key": "main", "label": "β" if leaves else "", "pos_label": "+β", "neg_label": "−β",
               "tables": unit}]
     if leaves:
-        # fit_pls(ssd_gradients=N): one more unit per rotated gradient, laid out as MultiPLS dimensions.
+        # ssd_gradients=N (fit_pls, fit_regression): one more unit per rotated gradient, laid out as
+        # MultiPLS dimensions.
         tables["pls_info"] = _view_table(result.pls_info)
         doc_ids = [r["doc_id"] for r in rows]
         for key in leaves:

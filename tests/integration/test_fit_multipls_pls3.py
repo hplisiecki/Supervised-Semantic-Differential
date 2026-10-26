@@ -24,7 +24,7 @@ def _cos(a, b):
 @pytest.fixture(scope="module")
 def planted(tiny_kv_large, lexicon):
     docs = _make_large_docs(200, np.random.default_rng(0))
-    ssd = SSD(tiny_kv_large, docs, lexicon)
+    ssd = SSD(docs, embeddings=tiny_kv_large, lexicon=lexicon)
     Xs = _std(ssd._vectors()[0])
     rng = np.random.default_rng(1)
     # PLS3 recovers Xs'Xs d, which points along d only for an eigenvector of
@@ -233,6 +233,6 @@ def test_words_rotation_on_a_partial_wordpack(wordpack_path, monkeypatch):
         [seeds[j % 3]] + [keys[i] for i in rng.choice(np.arange(18, 48), 3, replace=False)]
         for j in range(60)
     ]
-    ssd = SSD(emb, docs, lexicon=set(seeds))
+    ssd = SSD(docs, embeddings=emb, lexicon=set(seeds))
     res = ssd.fit_multipls(rng.normal(size=(60, 3)), ssd_gradients=2, rotate="words", n_perm=19, n_splits=5)
     assert res.U_rot.shape == (16, 2)

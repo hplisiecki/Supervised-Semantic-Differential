@@ -724,7 +724,7 @@
     "fixed",
     null,
     "gaussian",
-    null,
+    1,
     null
    ]
   ]

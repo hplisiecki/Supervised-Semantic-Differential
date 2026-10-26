@@ -7,13 +7,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from ssdiff.results.format import fmt_p, fmt_r
+from ssdiff.results.format import fmt_p
 from ssdiff.ssd import SSD
 from ssdiff.utils.math import f_sf, pca_fit_transform, standardize
 
 
 def _ssd(kv, docs, lexicon, **kw):
-    return SSD(kv, docs, lexicon, **kw)
+    return SSD(docs, embeddings=kv, lexicon=lexicon, **kw)
 
 
 @pytest.fixture
@@ -140,9 +140,9 @@ def test_mixed_model(tiny_kv, large_docs, lexicon, frame):
     text = res.summary()
     assert "Random effects:" in text
     assert "_ssd_" not in text
-    header, row = _block(text, "SSD effects:")
-    assert header.split() == ["p"]
-    assert row.split()[:2] == ["text", fmt_p(res.test.pvalue)]
+    header, row = _block(text, "Text terms:")
+    assert row.split()[0] == "ssd()" and fmt_p(res.pvalues["ssd()"]) in row.split()
+    assert "Joint tests:" not in text
 
 
 def test_missing_covariate_raises(tiny_kv, large_docs, lexicon, frame):
@@ -262,7 +262,7 @@ def test_regression_covariates_hold_components_fixed(tiny_kv, large_docs, lexico
     np.testing.assert_allclose([r.estimate for r in cov], coef[:2], rtol=1e-6)
     np.testing.assert_allclose([r.se for r in cov], se[:2], rtol=1e-6)
     assert res.test.name == "f_test"
-    assert res.stats.backend == "PCA+GLMM"
+    assert res.stats.backend == "PCA+OLS"
 
 
 @pytest.mark.parametrize("fit", [
@@ -296,7 +296,8 @@ def test_summary_drops_text_terms(tiny_kv, large_docs, lexicon, frame):
     corr = _block(text, "Correlation of Fixed Effects:")
     assert corr[0].split() == ["(Intercept)"]
     assert [line.split()[0] for line in corr[1:]] == ["age"]
-    header, row = _block(text, "SSD effects:")
+    header, row = _block(text, "Text terms:")
+    # One text term in an OLS model: its Wald F is the with-vs-without F.
     assert fmt_p(res.test.pvalue) in row.split()
     # The p value ends where the Pr(>|t|) column of the fixed effects ends.
     pr_end = _block(text, "Fixed effects:")[0].index("Pr(>|t|)") + len("Pr(>|t|)")
@@ -307,7 +308,7 @@ def test_summary_names_text_by_series_name(tiny_kv, large_docs, lexicon, frame):
     ssd = _ssd(tiny_kv, pd.Series(large_docs, name="essay"), lexicon)
     text = ssd.fit_regression("rating ~ age", data=frame, fixed_k=3).summary()
     assert "Formula: rating ~ age + ssd(essay)" in text
-    assert _block(text, "SSD effects:")[1].split()[0] == "essay"
+    assert _block(text, "Text terms:")[1].split()[0] == "ssd(essay)"
     written = ssd.fit_regression("rating ~ age + ssd()", data=frame, fixed_k=3).summary()
     assert "Formula: rating ~ age + ssd(essay)" in written
 
@@ -329,9 +330,9 @@ def test_regression_summary_f_test(tiny_kv, large_docs, lexicon, frame):
     assert params["df"] == k and params["df_resid"] == df_resid
     assert params["statistic"] == pytest.approx(f, rel=1e-6)
     assert params["r2_delta"] == pytest.approx((rss0 - rss1) / tss, rel=1e-6)
-    header, row = _block(res.summary(), "SSD effects:")
-    assert header.split() == ["ΔR²", "p"]
-    assert row.split()[:3] == ["text", fmt_r(params["r2_delta"], digits=3), fmt_p(res.test.pvalue)]
+    header, row = _block(res.summary(), "Text terms:")
+    assert header.split() == ["df", "F", "value", "p"]
+    assert row.split()[:4] == ["ssd()", str(k), f"{f:.4g}", fmt_p(res.test.pvalue)]
 
 
 def test_pls_summary_without_formula(tiny_kv, large_docs, large_y, lexicon):

@@ -325,7 +325,7 @@ def test_seeded_lexicon_report_has_seed_and_cos_columns():
 def _parity_text_with_empty_last(parity_emb, parity_df, parity_lexicon, n=12):
     """First ``n`` parity texts plus one whose words are all out of vocabulary."""
     texts = list(parity_df["text"][:n]) + ["zzzqqq"]
-    return SSD(parity_emb, texts, parity_lexicon), texts
+    return SSD(texts, embeddings=parity_emb, lexicon=parity_lexicon), texts
 
 
 def test_docs_doc_id_and_text_match_text_row_with_nan_y(
@@ -351,6 +351,6 @@ def test_counts_span_text_with_missing_group_label(
     """Documents with a None label are dropped from the counts."""
     groups = large_groups_2.copy()
     groups[2] = None
-    res = SSD(tiny_kv, large_docs, lexicon).fit_groups(groups, n_perm=10, random_state=0)
+    res = SSD(large_docs, embeddings=tiny_kv, lexicon=lexicon).fit_groups(groups, n_perm=10, random_state=0)
 
     assert res.stats.n_kept == 49

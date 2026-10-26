@@ -47,7 +47,7 @@ def golden_run():
 
     emb = Embeddings.load(EMB_PATH)
     y = np.asarray(cdata["y"], dtype=float)
-    ssd = SSD(emb, cdata["docs"], use_full_doc=True)
+    ssd = SSD(cdata["docs"], embeddings=emb, use_full_doc=True)
     result = ssd.fit_pls(
         y, k=golden["k"], n_splits=cdata["n_splits"], random_state=cdata["random_state"],
     )

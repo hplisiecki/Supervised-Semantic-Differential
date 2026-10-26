@@ -11,56 +11,74 @@ from ssdiff.utils.vectors import compute_global_sif
 
 
 def test_token_lists(tiny_kv, sample_docs, lexicon):
-    t = SSD(tiny_kv, sample_docs, lexicon)
+    t = SSD(sample_docs, embeddings=tiny_kv, lexicon=lexicon)
     assert t.docs == sample_docs and t.pre_docs is None and t.tokenizer is None
     assert len(t) == len(sample_docs) and t.name is None
 
 
 def test_strings_need_a_wordpack(tiny_kv):
     with pytest.raises(TypeError, match="token lists"):
-        SSD(tiny_kv, ["kraj dobry"])
+        SSD(["kraj dobry"], embeddings=tiny_kv)
 
 
 def test_wordpack_strings_and_name(parity_emb, parity_df, parity_lexicon):
-    t = SSD(parity_emb, parity_df["text"], parity_lexicon)
+    t = SSD(parity_df["text"], embeddings=parity_emb, lexicon=parity_lexicon)
     assert t.name == "text" and t.pre_docs is not None
     assert t.tokenizer == f"wordpack:{parity_emb.name}-{parity_emb.version}"
 
 
 def test_a_list_among_strings_is_refused(parity_emb):
     with pytest.raises(TypeError, match="join each participant's posts"):
-        SSD(parity_emb, ["people work.", ["people", "work"]])
+        SSD(["people work.", ["people", "work"]], embeddings=parity_emb)
 
 
 def test_with_lexicon_shares_tokens(tiny_kv, sample_docs, lexicon):
-    base = SSD(tiny_kv, sample_docs)
+    base = SSD(sample_docs, embeddings=tiny_kv)
     t = base.with_lexicon(lexicon)
     assert t.docs is base.docs and t.lexicon == set(lexicon)
     np.testing.assert_array_equal(
-        t._vectors()[0], SSD(tiny_kv, sample_docs, lexicon)._vectors()[0]
+        t._vectors()[0], SSD(sample_docs, embeddings=tiny_kv, lexicon=lexicon)._vectors()[0]
     )
 
 
 def test_no_lexicon_raises_at_vectors(tiny_kv, sample_docs):
     with pytest.raises(ValueError, match="with_lexicon"):
-        SSD(tiny_kv, sample_docs).n_kept
+        SSD(sample_docs, embeddings=tiny_kv, use_full_doc=False).n_kept
+
+
+def test_use_full_doc_follows_the_lexicon(tiny_kv, sample_docs, lexicon):
+    assert SSD(sample_docs, embeddings=tiny_kv).use_full_doc is True
+    assert SSD(sample_docs, embeddings=tiny_kv, lexicon=lexicon).use_full_doc is False
+    both = SSD(sample_docs, embeddings=tiny_kv, lexicon=lexicon, use_full_doc=True)
+    assert both.use_full_doc is True and both.lexicon == set(lexicon)
+
+
+def test_default_embeddings_load_the_default_tag(monkeypatch, parity_emb, parity_df):
+    from ssdiff.embeddings import Embeddings
+
+    calls = []
+    monkeypatch.setattr(Embeddings, "load", classmethod(lambda cls, *a, **k: calls.append(a) or parity_emb))
+    t = SSD(parity_df["text"])
+    assert calls == [()] and t.use_full_doc is True
+    assert t.tokenizer == f"wordpack:{parity_emb.name}-{parity_emb.version}"
+    assert t.n_kept > 0
 
 
 def test_sif_counts_use_all_documents(tiny_kv, sample_docs, lexicon):
     docs = sample_docs + [["piekny", "dom"]]   # no lexicon word: dropped from the fit
-    counts = SSD(tiny_kv, docs, lexicon)._vectors()[2]
+    counts = SSD(docs, embeddings=tiny_kv, lexicon=lexicon)._vectors()[2]
     assert counts == compute_global_sif(docs)
     assert counts != compute_global_sif(sample_docs)
 
 
 def test_empty_cells_get_no_vector(parity_emb, parity_lexicon):
     texts = pd.Series(["", None, float("nan"), "people work every day."], name="t")
-    t = SSD(parity_emb, texts, parity_lexicon)
+    t = SSD(texts, embeddings=parity_emb, lexicon=parity_lexicon)
     assert t._vectors()[1].tolist() == [False, False, False, True]
 
 
 def test_pickle_drops_embeddings_and_vectors(tiny_kv, sample_docs, lexicon):
-    t = SSD(tiny_kv, sample_docs, lexicon)
+    t = SSD(sample_docs, embeddings=tiny_kv, lexicon=lexicon)
     t._vectors()
     s = pickle.loads(pickle.dumps(t))
     assert s.embeddings is None and s._cache is None and s.docs == sample_docs
@@ -68,7 +86,7 @@ def test_pickle_drops_embeddings_and_vectors(tiny_kv, sample_docs, lexicon):
 
 @pytest.fixture
 def text(tiny_kv, large_docs, lexicon):
-    return SSD(tiny_kv, large_docs, lexicon)
+    return SSD(large_docs, embeddings=tiny_kv, lexicon=lexicon)
 
 
 def test_outcome_forms_agree(text, large_y):
@@ -127,5 +145,5 @@ def test_multipls_columns_from_a_dict(text, large_y):
 
 def test_n_no_vector(tiny_kv, large_docs, lexicon, large_y):
     docs = [["dom", "las"]] * 3 + large_docs[3:]   # no lexicon word in the first three
-    r = SSD(tiny_kv, docs, lexicon).fit_regression(large_y, fixed_k=3)
+    r = SSD(docs, embeddings=tiny_kv, lexicon=lexicon).fit_regression(large_y, fixed_k=3)
     assert r.n_no_vector == 3

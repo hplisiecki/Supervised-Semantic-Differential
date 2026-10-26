@@ -24,7 +24,7 @@ def _direct(ssd, y):
 def planted(tiny_kv_large, lexicon):
     """y built from two embedding dimensions, so k='auto' picks more than one component."""
     docs = _make_large_docs(150, np.random.default_rng(0))
-    ssd = SSD(tiny_kv_large, docs, lexicon)
+    ssd = SSD(docs, embeddings=tiny_kv_large, lexicon=lexicon)
     X, has_vector, _ = ssd._vectors()
     rng = np.random.default_rng(1)
     y = np.full(len(docs), np.nan)

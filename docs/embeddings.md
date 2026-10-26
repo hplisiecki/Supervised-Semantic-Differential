@@ -12,7 +12,7 @@ For the argument tables of `Embeddings` see [`api_reference.md`](api_reference.m
 from ssdiff import Embeddings, SSD
 
 emb = Embeddings.load()                    # the same pack as Embeddings.load("en")
-ssd = SSD(emb, df["text"], lexicon)        # strings: the pack's own tokenizer and stopwords
+ssd = SSD(df["text"], embeddings=emb, lexicon=lexicon)   # strings: the pack's own tokenizer and stopwords
 ```
 
 The first call downloads the pack (380 MB) into a cache directory. Later calls load it from there.
@@ -84,7 +84,7 @@ emb = Embeddings.load("path/to/model.bin", verbose=True)
 emb.normalize(l2=True, abtt=1)        # L2 + ABTT (remove the top principal component)
 
 tokens = [["happy", "day", "sunshine"], ["sad", "rain", "cold"], ...]   # one token list per document
-ssd = SSD(emb, tokens, lexicon)
+ssd = SSD(tokens, embeddings=emb, lexicon=lexicon)
 ```
 
 | Format | Extension | Notes |

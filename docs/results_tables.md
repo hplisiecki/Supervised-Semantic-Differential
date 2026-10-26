@@ -297,7 +297,7 @@ Tuple-key lookup `gr.pairs[('g1', 'g2')]` returns the raw `Pair` dataclass direc
 
 ### Per-pair views — `gr[('g1', 'g2')].words` / `.clusters` / `.snippets`
 
-`gr[('g1', 'g2')]` returns a `PairResult` for that pair. Its `.words`, `.clusters`, and `.snippets` attributes dispatch to the same view classes as continuous results, with the `contrast` column populated (`"g1_g2"`) rather than `None`. Reverse-order access `gr[('g2', 'g1')]` is normalized to canonical order, so it returns the identical view — no sign-flip.
+`gr[('g1', 'g2')]` returns a `PairResult` for that pair. Its `.words`, `.clusters`, and `.snippets` attributes dispatch to the same view classes as continuous results, with the `contrast` column populated (`"g1_g2"`) rather than `None`. Canonical order only — reverse-order access `gr[('g2', 'g1')]` raises `KeyError` naming the canonical order.
 
 **`gr[('g1', 'g2')].words` — `WordsView`**
 

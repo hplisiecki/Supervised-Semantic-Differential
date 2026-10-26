@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import re
 import warnings
 from collections.abc import Sequence
@@ -25,7 +26,7 @@ from ssdiff.backends.regression import (
 )
 from ssdiff.embeddings import Embeddings
 from ssdiff.results.schema import TermTest
-from ssdiff.utils.math import _categorical_mask, f_sf, pca_fit_transform, standardize
+from ssdiff.utils.math import _categorical_mask, chi2_sf, f_sf, pca_fit_transform, standardize
 from ssdiff.utils.text import build_docs_from_preprocessed, preprocess_texts_wordpack
 from ssdiff.utils.vectors import build_and_normalize_doc_vectors, compute_global_sif
 
@@ -44,13 +45,13 @@ def _check_tokenizer(embeddings, text) -> None:
         raise ValueError(
             f"The text was tokenized with the wordpack {tokenizer[len('wordpack:'):]}, "
             "but these embeddings are not a wordpack. Load that wordpack with "
-            "Embeddings.load(...), or build the text from token lists: SSD(emb, token_lists)."
+            "Embeddings.load(...), or build the text from token lists: SSD(token_lists, embeddings=emb)."
         )
     expected = f"wordpack:{embeddings.name}-{embeddings.version}"
     if tokenizer != expected:
         raise ValueError(
             f"The text was tokenized with {tokenizer}, but the embeddings are "
-            f"{expected}. Build the text with SSD(emb, texts)."
+            f"{expected}. Build the text with SSD(texts, embeddings=emb)."
         )
 
 
@@ -245,6 +246,79 @@ def _compare_row(cmp) -> tuple[str, dict]:
     return ("f_test" if f_test else "lrt"), info
 
 
+def _whole_model_test(cols, f_ph: str, labels: list[str], text_labels: set[str],
+                      cmp, *, family: str, link: str | None) -> dict:
+    """``fvalue``, ``f_pvalue``, ``llr`` and ``llr_pvalue`` of the model against its null.
+
+    The null drops every fixed-term label and keeps the intercept, random
+    effects and offsets (``null_formula``). OLS (Gaussian, identity link, no
+    random effects) gets glmm's F-test, every other model the LR test of the
+    two ML fits; the other pair is NaN. A formula without an intercept has
+    no nested null of this kind, so all four are NaN.
+    """
+    import glmm
+
+    nan = float("nan")
+    out = {"fvalue": nan, "f_pvalue": nan, "llr": nan, "llr_pvalue": nan}
+    if not glmm.term_labels(f_ph)[1]:
+        return out
+    # When every fixed term is a text term, the all-text comparison is this one.
+    if set(labels) == text_labels:
+        fit0, table = cmp.fit0, cmp.table
+    else:
+        # The null alone, by ML as glmm.compare fits it, set against cmp.fit1,
+        # which already is the full model.
+        fit0 = glmm.fit(cols, null_formula(f_ph, set(labels)), family=family, link=link,
+                        reml=False, anova_test="Wald")
+        table = glmm.anova(fit0, cmp.fit1)
+    fit1 = cmp.fit1
+    if fit1.family == "gaussian" and fit1.link == "identity" and not fit1.re_groups:
+        out["fvalue"] = float(table["F"][1])
+        out["f_pvalue"] = float(table["Pr(>F)"][1])
+    else:
+        llr = 2.0 * (fit1.loglik - fit0.loglik)
+        out["llr"] = float(llr)
+        out["llr_pvalue"] = chi2_sf(llr, int(fit1.df - fit0.df))
+    return out
+
+
+def _regression_gradients(p, w_reg: np.ndarray, n: int, embeddings) -> dict:
+    """The *n* rotated gradients of one text term from its fitted component weights.
+
+    The K components (``p.components``, orthonormal rows in standardized
+    space) are split into *n* consecutive blocks, the first blocks one
+    component longer when *n* does not divide K. Block j's piece
+    ``components[j].T @ w_reg[j]`` is the model's beta restricted to those
+    components; the pieces sum to the term's beta and are mutually
+    orthogonal, so their unit vectors are orthonormal weights W. W is then
+    rotated by words, as in ``fit_pls(ssd_gradients=n)``.
+    """
+    from ssdiff.backends.pls import pls1_rotate, word_target
+
+    blocks = np.array_split(np.arange(len(w_reg)), n)
+    pieces = np.column_stack([p.components[b].T @ w_reg[b] for b in blocks])
+    total = float(np.linalg.norm(pieces.sum(axis=1)))
+    norms = np.linalg.norm(pieces, axis=0)
+    for j, (b, norm) in enumerate(zip(blocks, norms), 1):
+        comps = f"components {b[0] + 1}-{b[-1] + 1}" if len(b) > 1 else f"component {b[0] + 1}"
+        if not np.all(np.isfinite(pieces[:, j - 1])):
+            raise ValueError(
+                f"ssd_gradients: gradient {j} ({comps}) has a coefficient glmm could "
+                "not estimate (aliased)."
+            )
+        if norm <= 1e-12 * total:
+            raise ValueError(
+                f"ssd_gradients: gradient {j} ({comps}) is zero: the model gives those "
+                "components no weight. Use a smaller ssd_gradients."
+            )
+    W = pieces / norms
+    L = word_target(embeddings.vectors, W, p.X_mean, p.X_scale)
+    dims = pls1_rotate(W, p.Xs, p.ys, rotate="words", L=L)
+    dims["beta"] = dims["W_rot"] / p.X_scale[:, None]
+    dims["rotate"] = "words"
+    return dims
+
+
 def _fit_regression(
     y: np.ndarray,
     y_name: str,
@@ -261,6 +335,7 @@ def _fit_regression(
     verbose: bool,
     pca_sweep_args: dict | None,
     fit_args: dict,
+    ssd_gradients: int = 1,
 ):
     """Fit *formula*, whose ``ssd(...)`` terms stand for the *texts*, with glmm.
 
@@ -270,7 +345,9 @@ def _fit_regression(
     replace its placeholder in the formula; the result is one leaf per text
     term (the term's coefficients back-projected to document space), or the
     leaf alone when there is one term. With several texts the result is keyed
-    by text, then by term.
+    by text, then by term. With ``ssd_gradients > 1`` (one text, the plain
+    ``ssd()`` term only) the leaf also holds that many rotated gradients
+    (``_regression_gradients``).
     """
     import glmm
 
@@ -283,6 +360,17 @@ def _fit_regression(
             "pick another name."
         )
     several = len(texts) > 1
+    f_ph = "_ssd_y ~" + to_placeholders(formula).partition("~")[2]
+    labels, _ = glmm.term_labels(f_ph)
+    if ssd_gradients > 1:
+        ph = placeholder(next(iter(texts)))
+        if several or text_labels(labels, ph) != [ph]:
+            raise ValueError(
+                "fit_regression(ssd_gradients > 1) needs the text as one plain ssd() "
+                f"term, but the formula is {formula!r}. "
+                "A moderated term's beta is a slope difference, which corr(score, y) "
+                "does not describe."
+            )
 
     valid = np.isfinite(y)
     keep = valid.copy()
@@ -341,7 +429,7 @@ def _fit_regression(
         z, components, _ = pca_fit_transform(Xs, max_comp)
         prefix = f"_ssd_{name}_pca_" if several else "_ssd_pca_"
         parts[name] = SimpleNamespace(
-            rows=rows, X_mean=X_mean, X_scale=X_scale, sweep_result=sweep_result,
+            rows=rows, Xs=Xs, ys=ys, X_mean=X_mean, X_scale=X_scale, sweep_result=sweep_result,
             z=z, components=components,
             pcs=[f"{prefix}{i}" for i in range(1, max_comp + 1)],
             ph=placeholder(name),
@@ -354,15 +442,14 @@ def _fit_regression(
         rows0, _ssd_y=rows0.y,
         **{c: p.z[:, i] for p in parts.values() for i, c in enumerate(p.pcs)},
     )
-    f_ph = "_ssd_y ~" + to_placeholders(formula).partition("~")[2]
-    labels, _ = glmm.term_labels(f_ph)
     own_labels = {name: text_labels(labels, p.ph) for name, p in parts.items()}
     for lab in labels:
         if sum(p.ph in lab.split(":") for p in parts.values()) > 1:
             raise ValueError(
                 f"The term '{lab}' has two texts; two texts cannot interact in one term."
             )
-    h0 = null_formula(f_ph, {lab for v in own_labels.values() for lab in v})
+    all_text_labels = {lab for v in own_labels.values() for lab in v}
+    h0 = null_formula(f_ph, all_text_labels)
     h1 = expand(f_ph, {p.ph: p.pcs for p in parts.values()})
     cmp = glmm.compare(cols, h0, h1, family=family, link=link)
     fit = cmp.fit1
@@ -385,6 +472,12 @@ def _fit_regression(
             list(fit.names), {c: (p.shown, i) for i, c in enumerate(p.pcs, 1)}
         )
     n_leaves = sum(len(p.groups) for p in parts.values())
+    k = len(next(iter(parts.values())).pcs)
+    if ssd_gradients > k:
+        raise ValueError(
+            f"ssd_gradients={ssd_gradients} is more than the K={k} PCA "
+            "components of the fit; use ssd_gradients <= K."
+        )
 
     # The all-text row, one row per text, then one Wald row per label of a
     # text that has several.
@@ -413,8 +506,21 @@ def _fit_regression(
                     for _, pos in members
                 ]
                 wald_tests[name].append(_wald_row(fit, lab_shown, np.eye(len(fit.names))[idx]))
-    tests += [t for name in parts for t in text_tests[name]]
-    tests += [t for name in parts for t in wald_tests[name]]
+    joint_tests = tests + [t for name in parts for t in text_tests[name]]
+    tests = joint_tests + [t for name in parts for t in wald_tests[name]]
+
+    # The statsmodels names of the result: one Wald test per text term (result
+    # key), the whole-model test, and the kept rows' labels.
+    eye = np.eye(len(fit.names))
+    term_tests = [
+        _wald_row(fit, key, eye[[pos for _, pos in members]])
+        for p in parts.values() for key, members in p.groups.items()
+    ]
+    whole_test = _whole_model_test(
+        cols, f_ph, labels, all_text_labels, cmp, family=family, link=link,
+    )
+    kept = np.flatnonzero(keep)
+    obs_index = data.index[kept] if hasattr(data, "iloc") else kept
 
     results = {}
     for name, p in parts.items():
@@ -449,8 +555,13 @@ def _fit_regression(
             # keep the sign of the model's coefficients. Without covariates an
             # OLS fit already correlates positively with y.
             beta = (p.components.T @ w_reg) / scale
+            # score_corr and cov_share use the raw standardized x and y, the
+            # covariates not removed: SSD._residualize covers fixed effects
+            # only, not GLM families or random effects.
+            dims = (_regression_gradients(p, w_reg, ssd_gradients, text.embeddings)
+                    if ssd_gradients > 1 else None)
             leaf = PCAOLSResult(
-                backend="PCA+OLS" if fit_args["formula"] is None and linear else "PCA+GLMM",
+                backend="PCA+OLS" if linear and not fit.re_groups else "PCA+GLMM",
                 beta=beta,
                 pvalue=pvalue,
                 r2=float(fit.r_squared),
@@ -464,6 +575,8 @@ def _fit_regression(
                     "pca_k_source": "sweep" if fixed_k is None else "fixed",
                     "formula": fit_args["formula"],
                     "family": fit.family,
+                    "ssd_gradients": ssd_gradients,
+                    "rotate": "words" if ssd_gradients > 1 else None,
                 },
                 raw_diagnostics={
                     "sweep_result": sweep_result,
@@ -473,12 +586,15 @@ def _fit_regression(
                 sweep=_sweep_rows,
                 test_name=test_name,
                 test_info=test_info,
+                dims=dims,
                 **kwargs,
             )
             leaf._formula_shown = formula_shown
             leaf.fit_args = fit_args
             leaf.n_no_vector = rows.n_no_vector
             leaf._term = key
+            leaf._term_tests, leaf._joint_tests = tuple(term_tests), tuple(joint_tests)
+            leaf._whole_test, leaf._obs_index = whole_test, obs_index
             leaves[key] = leaf
         results[name] = (
             next(iter(leaves.values())) if len(leaves) == 1
@@ -514,42 +630,45 @@ class SSD:
     sif_a : float or None
     use_full_doc : bool
 
-    >>> emb = Embeddings.load("english.wordpack")
-    >>> ssd = SSD(emb, df["text"], lexicon)
+    >>> ssd = SSD(df["text"])                     # default wordpack, full documents
+    >>> ssd = SSD(df["text"], embeddings=Embeddings.load("en"), lexicon=lexicon)
     >>> ssd.with_lexicon(other_lexicon)    # same tokens, another lexicon
     """
 
     def __init__(
         self,
-        embeddings: Embeddings,
         texts: Sequence[str] | Sequence[Sequence[str]],
-        lexicon: Sequence[str] | set[str] | None = None,
         *,
+        embeddings: Embeddings | None = None,
+        lexicon: Sequence[str] | set[str] | None = None,
         window: int = 3,
         sif_a: float | None = 1e-3,
-        use_full_doc: bool = False,
+        use_full_doc: bool | None = None,
     ) -> None:
         """Tokenize the texts; document vectors are built on first use.
 
         Parameters
         ----------
-        embeddings : Embeddings
-            L2-normalised word embeddings. Strings need a wordpack.
         texts : sequence of str, or sequence of token lists
             One entry per document. Strings are tokenized with the
             wordpack's tokenizer and stopwords; an empty, ``None`` or NaN
             cell is an empty document. Token lists are used as given.
+        embeddings : Embeddings or None, default None
+            L2-normalised word embeddings. Strings need a wordpack.
+            ``None`` loads ``Embeddings.load()``, the ``"default"`` wordpack
+            tag, which prints its tag message to stderr.
         lexicon : sequence or set of str, optional
-            Seed words for context-window extraction. Needed for vectors
-            unless ``use_full_doc=True``; ``with_lexicon`` adds one later.
+            Seed words for context-window extraction; ``with_lexicon`` adds
+            one later.
         window : int, default 3
             Context window size (tokens) around each seed word.
         sif_a : float or None, default 1e-3
             SIF smoothing parameter. ``None`` turns SIF off: every word
             weighs 1 (plain mean).
-        use_full_doc : bool, default False
-            If True, use full-document vectors instead of seed-windowed
-            contexts.
+        use_full_doc : bool or None, default None
+            True builds each document's vector from all its words, False
+            from the context windows around the lexicon's words. ``None``
+            means True when ``lexicon`` is None and False otherwise.
 
         Raises
         ------
@@ -557,23 +676,27 @@ class SSD:
             If ``texts`` is a single string, or holds strings and the
             embeddings are not a wordpack.
         ValueError
-            If ``window < 1`` or ``sif_a <= 0``.
+            If ``texts`` is empty, ``window < 1`` or ``sif_a <= 0``.
         RuntimeError
             If the embeddings are not L2-normalised.
         """
         _check_window_sif(window, sif_a)
+        if isinstance(texts, str):
+            # Iterating a str would make one document per character.
+            raise TypeError("texts is a single string; pass a list of texts, e.g. [text].")
+        if embeddings is None:
+            embeddings = Embeddings.load()
         if not embeddings.l2_normalized:
             raise RuntimeError(
                 "SSD requires L2-normalised embeddings. Call "
                 "emb.normalize(l2=True, abtt=N) before constructing SSD."
             )
-        if isinstance(texts, str):
-            # Iterating a str would make one document per character.
-            raise TypeError("texts is a single string; pass a list of texts, e.g. [text].")
 
         name = getattr(texts, "name", None)
         self.name: str | None = None if name is None else str(name)
         texts = list(texts)
+        if not texts:
+            raise ValueError("texts is empty; pass one text per document.")
 
         if texts and isinstance(texts[0], (list, tuple)):
             bad = next((i for i, d in enumerate(texts) if not isinstance(d, (list, tuple))), None)
@@ -606,7 +729,7 @@ class SSD:
         self.lexicon = set(lexicon) if lexicon is not None else set()
         self.window = window
         self.sif_a = sif_a
-        self.use_full_doc = use_full_doc
+        self.use_full_doc = lexicon is None if use_full_doc is None else use_full_doc
         self._cache = None
 
     def with_lexicon(
@@ -642,11 +765,11 @@ class SSD:
         if self.embeddings is None:
             raise RuntimeError(
                 "This SSD has no embeddings (they are not pickled). "
-                "Build it again with SSD(embeddings, texts, lexicon)."
+                "Build it again with SSD(texts, embeddings=emb, lexicon=lexicon)."
             )
         if not self.use_full_doc and not self.lexicon:
             raise ValueError(
-                "This SSD has no lexicon. Build it with SSD(emb, texts, lexicon), "
+                "This SSD has no lexicon. Build it with SSD(texts, lexicon=lexicon), "
                 "use ssd.with_lexicon(lexicon), or pass use_full_doc=True."
             )
         if self._cache is None:
@@ -673,6 +796,14 @@ class SSD:
         state["embeddings"] = None
         state["_cache"] = None
         return state
+
+    def __deepcopy__(self, memo: dict) -> SSD:
+        # Bypasses __getstate__, so a copy (and a deep-copied result's text)
+        # keeps its embeddings.
+        new = object.__new__(type(self))
+        memo[id(self)] = new
+        new.__dict__.update(copy.deepcopy(self.__dict__, memo))
+        return new
 
     # ── Shared helpers ─────────────────────────────────────────
 
@@ -869,7 +1000,7 @@ class SSD:
         With a formula (``"y ~ age + gender"``), y and every column of the
         document vectors are first regressed on the formula's fixed effects by
         OLS, and PLS runs on the residuals (Frisch–Waugh–Lovell). split_exact permutes the residualized
-        y against the residualized vectors (Kennedy, 1995); it can run
+        y against the residualized vectors (Kennedy, 1995); the test can run
         slightly liberal when the covariates use many degrees of freedom
         relative to n.
 
@@ -1419,6 +1550,7 @@ class SSD:
         k_min: int = 2,
         k_max: int = 120,
         k_step: int = 2,
+        ssd_gradients: int = 1,
         verbose: bool = False,
         pca_sweep_args: dict | None = None,
     ):
@@ -1460,6 +1592,25 @@ class SSD:
             Fixed number of PCA components. None = auto-select via sweep.
         k_min, k_max, k_step : int
             Range for PCA-K sweep when fixed_k is None.
+        ssd_gradients : int, default 1
+            Number of gradients returned, in ``[1, K]``. At 1 the result is
+            the standard fit alone. At N > 1 the result also holds N rotated
+            gradients, ``result["dim-1"]`` … ``result["dim-N"]``, built from
+            this fit's own model: the K components are split into N
+            consecutive blocks (``np.array_split``: K=10, N=3 gives 4/3/3;
+            block 1 holds the highest-variance components), block j's
+            gradient is the model's beta restricted to its components, and
+            the N unit gradients are rotated by words as in
+            ``fit_pls(ssd_gradients=N)``, ``rotate="words"``, which is the
+            only rotation here. Each leaf has ``stats`` (``score_corr``,
+            ``cov_share``), ``words``, ``clusters`` and ``snippets``, and no
+            p-value. ``score_corr`` and ``cov_share`` use the standardized x
+            and y with the covariates not removed, so with covariates, a
+            non-Gaussian family or random effects they are descriptive. The
+            standard fit (``beta``, ``pvalue``, ``r2``, ``model``,
+            ``covariates``, ``docs``, ``predict()``) is the same for every N.
+            N > 1 needs the text as one plain ``ssd()`` term: an interaction
+            with the text (``group*ssd()``, ``age:ssd()``) raises.
         verbose : bool
             Print progress.
         pca_sweep_args : dict, optional
@@ -1477,7 +1628,8 @@ class SSD:
         Returns
         -------
         PCAOLSResult or RegressionResult
-            A formula with one text term gives a ``PCAOLSResult``; one with
+            A formula with one text term gives a ``PCAOLSResult`` (with the
+            gradient leaves of ``ssd_gradients > 1``); one with
             several (``group*ssd()``) gives a ``RegressionResult`` with one
             ``PCAOLSResult`` leaf per text term, keyed by term
             (``res["grouplow:ssd(essay)"]``).
@@ -1499,7 +1651,12 @@ class SSD:
             have, if a ``data`` column name starts with ``_ssd_``, if the
             formula has ``ssd(...)`` terms for more than one text, or if a
             column the formula uses has missing values in kept documents.
+            Also when ``ssd_gradients`` is not an int, is < 1 or > K, is > 1
+            with a formula whose text is not one plain ``ssd()`` term, or
+            gives a gradient that is zero or not finite (the error names it).
         """
+        if not isinstance(ssd_gradients, int) or ssd_gradients < 1:
+            raise ValueError(f"ssd_gradients must be an int >= 1; got {ssd_gradients!r}")
         formula, y, y_name = _regression_outcome(outcome, data, len(self))
         full = (
             with_text_term(formula) if formula is not None else f"{y_name} ~ ssd()"
@@ -1513,12 +1670,12 @@ class SSD:
             )
         fit_args = {"formula": formula, "family": family, "link": link,
                     "fixed_k": fixed_k, "k_min": k_min, "k_max": k_max, "k_step": k_step,
-                    "pca_sweep_args": pca_sweep_args}
+                    "ssd_gradients": ssd_gradients, "pca_sweep_args": pca_sweep_args}
         return _fit_regression(
             y, y_name, full, data, {names[0]: self},
             family=family, link=link, fixed_k=fixed_k, k_min=k_min, k_max=k_max,
             k_step=k_step, verbose=verbose, pca_sweep_args=pca_sweep_args,
-            fit_args=fit_args,
+            fit_args=fit_args, ssd_gradients=ssd_gradients,
         )
 
     # ── Group comparison backend ──────────────────────────────
@@ -2119,11 +2276,16 @@ def fit_regression(
     pca_sweep_args: dict | None = None,
     **texts: SSD,
 ):
-    """Regress an outcome on several texts in one model.
+    """Regress an outcome on one or several texts in one model.
 
-    ``ssdiff.fit_regression("score ~ age + ssd(essay) + sex*ssd(diary)", df,
-    essay=essay, diary=diary)``. The left side is the outcome column of
-    *data*; each keyword names a text in the formula as ``ssd(name)``. Every
+    ``ssdiff.fit_regression("score ~ age + ssd(essay) + sex*ssd(diary)", df)``.
+    The left side is the outcome column of *data*. Each ``ssd(name)`` is a
+    text: the keyword ``name=SSD(...)`` when one is passed, else the column
+    ``name`` of *data*, built as ``SSD(data[name])`` with every default. All
+    texts built from columns in one call share one ``Embeddings.load()`` (the
+    ``"default"`` wordpack tag). A text that needs other settings (a lexicon,
+    other embeddings) is built with ``SSD`` and passed by keyword, which wins
+    over a column of the same name. Every
     text and *data* have one row per document, in the same order. A row stays
     when it has a valid outcome and a vector in every text. Each text gets its
     own standardization, PCA and K; ``fixed_k``, ``k_min``, ``k_max``,
@@ -2145,8 +2307,9 @@ def fit_regression(
     ------
     ValueError
         If the formula has no ``ssd(name)`` term, has bare ``ssd()``, names a
-        text that was not passed, or a text was passed that the formula does
-        not name; or if the texts and *data* differ in length.
+        text that is neither passed nor a column of *data*, or a text was
+        passed that the formula does not name; or if the texts and *data*
+        differ in length.
     """
     if "~" not in formula:
         raise ValueError(f"fit_regression(): the formula {formula!r} needs an outcome and a '~'.")
@@ -2162,14 +2325,24 @@ def fit_regression(
             "write ssd(name) and pass name=text."
         )
     unused = [n for n in texts if n not in names]
-    missing = [n for n in names if n not in texts]
-    if unused or missing:
+    if unused:
         raise ValueError(
-            f"fit_regression(): the formula names {names} but the texts passed are "
-            f"{list(texts)} (not in the formula: {unused}; not passed: {missing})."
+            f"fit_regression(): the texts {unused} were passed but the formula "
+            f"names only {names}."
         )
     if data is None:
         raise ValueError("fit_regression() needs data=df.")
+    missing = [n for n in names if n not in texts and n not in data]
+    if missing:
+        raise ValueError(
+            f"fit_regression(): the formula names the texts {missing}, which are "
+            "neither columns of data nor passed as keywords. Add a text column to "
+            f"data, or pass {missing[0]}=SSD(...)."
+        )
+    columns = [n for n in names if n not in texts]
+    if columns:
+        emb = Embeddings.load()
+        texts = {**texts, **{n: SSD(data[n], embeddings=emb) for n in columns}}
     sizes = {n: len(t) for n, t in texts.items()}
     if len(set(sizes.values())) != 1:
         raise ValueError(f"fit_regression(): the texts differ in length: {sizes}.")

@@ -28,7 +28,7 @@ df = df.rename(columns={"Word": "word", "V.Mean.Sum": "valence", "A.Mean.Sum": "
 
 emb = Embeddings.load("en")
 # One text; each fit names its outcome. See regression.py for use_full_doc.
-ssd = SSD(emb, df["word"], use_full_doc=True)
+ssd = SSD(df["word"], embeddings=emb, use_full_doc=True)
 
 # ---- The text alone ----
 # The outcome is a column name of `data`. k="auto" picks the number of PLS

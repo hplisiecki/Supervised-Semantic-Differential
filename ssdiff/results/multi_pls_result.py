@@ -3,8 +3,9 @@
 Container of ``_PLSComponentResult`` leaves keyed by ``"dim-1"``,
 ``"dim-2"``, …. Mirrors the ``GroupResult`` / ``PairResult`` pattern: one
 shared ``.test`` on the container, one ``.beta`` / ``.words`` /
-``.outcomes`` / etc. per leaf. ``PLSResult`` holds the same leaves, without
-``.outcomes``, for ``fit_pls(ssd_gradients=N)``.
+``.outcomes`` / etc. per leaf. ``PLSResult`` and ``PCAOLSResult`` hold the
+same leaves, without ``.outcomes``, for ``fit_pls(ssd_gradients=N)`` and
+``fit_regression(ssd_gradients=N)``.
 
 Access patterns (canonical):
 - ``res["dim-1"]`` → ``_PLSComponentResult`` for one (rotated) dimension
@@ -37,8 +38,8 @@ def _dim_label(key: str) -> str:
 def _dimension_sections(result, n_words: int | None) -> list:
     """Report sections of a result's dimension leaves.
 
-    Shared by ``MultiPLSResult`` and a ``PLSResult`` fit with
-    ``ssd_gradients > 1``: rotation diagnostics, one row per dimension, then
+    Shared by ``MultiPLSResult`` and a ``PLSResult`` or ``PCAOLSResult`` fit
+    with ``ssd_gradients > 1``: rotation diagnostics, one row per dimension, then
     each dimension's outcome loadings (PLS3 leaves only) and, when
     ``n_words`` is set and embeddings are attached, its top words per pole.
     """
@@ -136,12 +137,12 @@ class PLSComponentStatsView(ScalarView):
 
 
 class _PLSComponentResult(_SingleResult):
-    """One rotated dimension: a leaf inside ``MultiPLSResult`` or a ``PLSResult``.
+    """One rotated dimension: a leaf inside ``MultiPLSResult``, ``PLSResult`` or ``PCAOLSResult``.
 
     ``key`` is ``"dim-1"`` / ``"dim-2"`` / …. The container computes the
     leaf's ``beta``, ``stats`` and, for PLS3 only, ``outcomes`` rows.
     ``beta`` is the dimension's rotated weight column divided by
-    ``X_scale``: the raw doc-vector space that ``fit_pls``'s ``coef / scale``
+    ``X_scale``: the raw doc-vector space that the standard fit's ``beta``
     and the ``"words"`` rotation target use.
 
     Has no independent ``.test`` and no p-value — use ``container.test(...)``.

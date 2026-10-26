@@ -334,7 +334,7 @@ def test_ssd_init_raises_on_unnormed_embedding(tiny_kv, sample_docs, lexicon):
     tiny_kv_raw.__dict__.update(tiny_kv.__dict__)
     tiny_kv_raw.l2_normalized = False
     with pytest.raises(RuntimeError, match="L2-normalised embeddings"):
-        SSD(tiny_kv_raw, sample_docs, lexicon)
+        SSD(sample_docs, embeddings=tiny_kv_raw, lexicon=lexicon)
 
 
 def test_get_vector_norm_true_raises_on_unnormed():

@@ -6,7 +6,7 @@
  "software": {
   "package": "ssdiff",
   "language": "python",
-  "version": "3.3.0"
+  "version": "4.0.0"
  },
  "texts": [
   {
@@ -370,7 +370,7 @@
      "sweep",
      "y ~ ssd(essay) + group*ssd(diary)",
      "gaussian",
-     null,
+     1,
      null
     ]
    ]
@@ -546,7 +546,7 @@
        "sweep",
        "y ~ ssd(essay) + group*ssd(diary)",
        "gaussian",
-       null,
+       1,
        null
       ]
      ]
@@ -6781,7 +6781,7 @@
        "sweep",
        "y ~ ssd(essay) + group*ssd(diary)",
        "gaussian",
-       null,
+       1,
        null
       ]
      ]
@@ -12028,7 +12028,7 @@
        "sweep",
        "y ~ ssd(essay) + group*ssd(diary)",
        "gaussian",
-       null,
+       1,
        null
       ]
      ]
@@ -17195,7 +17195,7 @@
        "sweep",
        "y ~ ssd(essay) + group*ssd(diary)",
        "gaussian",
-       null,
+       1,
        null
       ]
      ]

@@ -88,7 +88,7 @@ for w in result.words.pos:
 
 Returned by `fit_pls()`.
 
-**Scalar views** — `.stats`, `.fit_info`, `.test`; `.pls_info` with `ssd_gradients > 1` (see [Gradient leaves](#gradient-leaves--fit_plsssd_gradientsn))
+**Scalar views** — `.stats`, `.fit_info`, `.test`; `.pls_info` with `ssd_gradients > 1` (see [Gradient leaves](#gradient-leaves--ssd_gradientsn))
 
 **Arrays** (numpy):
 
@@ -125,9 +125,9 @@ result.docs.misdiagnosed(5, direction="over")   # residual < 0
 result.docs.id(42)                           # full detail view; needs the text attached, and shows its raw text for strings only
 ```
 
-### Gradient leaves — `fit_pls(ssd_gradients=N)`
+### Gradient leaves — `ssd_gradients=N`
 
-With `ssd_gradients=N > 1`, a `PLSResult` also holds N leaves keyed `"dim-1"`, …, `"dim-N"`, one per rotated gradient. Everything above describes the standard fit and stays the same as with `ssd_gradients=1`.
+With `ssd_gradients=N > 1`, a `PLSResult` (from `fit_pls`) or a `PCAOLSResult` (from `fit_regression`) also holds N leaves keyed `"dim-1"`, …, `"dim-N"`, one per rotated gradient. Everything above describes the standard fit and stays the same as with `ssd_gradients=1`. `fit_pls` takes the gradients from a separate N-component PLS1 fit; `fit_regression` splits the K components of its own model into N consecutive blocks, and each block's part of the model's beta is one gradient, always rotated by words.
 
 ```python
 res = ssd.fit_pls("score", data=df, ssd_gradients=3)
@@ -150,7 +150,24 @@ Everything on `PLSResult`, plus:
 - `.stats` adds `r2_adj`
 - `.pca_k`, `.pca_components`, `.pca_weights` — PCA basis and the components' regression coefficients
 - `.model` — the `glmm` fit of the outcome on the formula and the K component scores (`_ssd_pca_1` … `_ssd_pca_K`; response `_ssd_y`): covariate coefficients, random effects, `.summary()`. `.covariates` lists its covariate rows, with the components held fixed; empty without a formula.
-- `.summary()` — glmm's summary of `.model` without the `_ssd_*` rows (fixed effects and their correlations), with an SSD effects row below the fixed effects that holds the text's ΔR² and p. The other blocks describe the full model, components included. `.model.summary()` prints the full glmm summary.
+- `.summary()` — glmm's summary of `.model` without the `_ssd_*` rows (fixed effects and their correlations). Below the fixed effects, a text-term table: one row per text term with the df, statistic and p of its Wald test. With several text terms, the joint tests of `.test` (all text terms; each text) follow, with the R² they add (OLS only). The other blocks describe the full model, components included. `.model.summary()` prints the full glmm summary.
+- statsmodels names, read from `.model` (they need pandas):
+
+  | Name | Content |
+  |---|---|
+  | `.params`, `.bse`, `.tvalues` | covariate estimates, standard errors, `params / bse` (t; z for a non-Gaussian model); Series indexed by coefficient name |
+  | `.conf_int(alpha=0.05)` | covariate confidence intervals, a DataFrame with columns `0` and `1` |
+  | `.cov_params()` | covariance matrix of the covariate estimates |
+  | `.pvalues` | the covariates' p-values, then one row per text term (`ssd(essay)`, `sexM:ssd(essay)`, …, the result keys): the Wald test of that term's K coefficients |
+  | `.fvalue`, `.f_pvalue` | F-test of the whole model against `outcome ~ 1`; OLS only (Gaussian, identity link, no random effects), else NaN |
+  | `.llr`, `.llr_pvalue` | likelihood-ratio test of the whole model against `outcome ~ 1` with the same random effects; every model that is not OLS, else NaN |
+  | `.df_model`, `.df_resid`, `.nobs` | fixed coefficients without the intercept (covariates plus K per text term); `nobs` minus the fixed coefficients (not a Satterthwaite df for a mixed model); kept rows |
+  | `.rsquared`, `.rsquared_adj` | the whole model's R²; NaN for GLMs and mixed models |
+  | `.aic`, `.bic`, `.llf` | from `.model` |
+  | `.resid`, `.fittedvalues` | response residuals and fitted means, indexed by the kept rows of `data` (its index for a DataFrame, row positions otherwise) |
+  | `.random_effects` | dict keyed by grouping factor: a DataFrame with one row per level and one column per random-effect term; empty without random effects |
+
+  A text term has no single estimate, so it appears only in `.pvalues`: `pd.concat([res.params, res.pvalues], axis=1)` has NaN estimates on the text rows. A formula without an intercept (`y ~ 0 + …`) has NaN `fvalue`, `f_pvalue`, `llr` and `llr_pvalue`.
 - `.test` — columns `name` (`"f_test"` or `"lrt"`), `pvalue`, `statistic` (F or χ²), `df` (the number of components), `df_resid` (the F-test's residual df; `None` for a likelihood-ratio test) and `r2_delta` (the R² the components add; NaN unless the model is OLS)
 - `.sweep_result`, `.sweep` — full sweep diagnostics (`None` if `fixed_k` was set)
 - `.plot_sweep(path=None, dpi=300)` — dual-axis chart of interpretability vs β-change. Returns the matplotlib `Figure`; writes to `path` when given, otherwise calls `plt.show()`. Needs matplotlib.
@@ -169,7 +186,8 @@ res.keys()                     # ['ssd(essay)', 'sexM:ssd(essay)']
 res["ssd(essay)"].words        # gradient at the reference level of sex
 res["sexM:ssd(essay)"].words   # how the gradient for sexM differs from it
 res.test                       # all-text test, then one Wald test per term
-res.summary()                  # glmm summary without the text rows, plus one row per test
+res.summary()                  # glmm summary without the text rows, a row per text term, the joint tests
+res.pvalues                    # covariates, then one Wald p-value per text term
 res.covariates                 # covariate coefficients
 res.model                      # the glmm fit shared by all leaves
 res.save_page("interaction.html")
@@ -178,7 +196,7 @@ res.save_page("interaction.html")
 - A key is the formula term with `ssd()` shown as `ssd(<text name>)`. The text name is the Series name given to `SSD`; without one the key reads `ssd()`.
 - A leaf is a `PCAOLSResult` with `.beta`, `.gradient`, `.words`, `.clusters`, `.snippets`, `.docs`, `.report()`. Its `beta` is the gradient of that term alone. The gradient of one level is the sum of the `beta` of the main text term and of that level's term.
 - `res.words`, `res.clusters`, `res.snippets`, `res.beta`, `res.gradient` fan out across the leaves, as on `GroupResult`.
-- `.model`, `.fit_info`, `.sweep` and `.covariates` are the same for every leaf.
+- `.model`, `.fit_info`, `.sweep` and `.covariates` are the same for every leaf, and so are the statsmodels names (`.params`, `.pvalues`, `.fvalue`, …) and `.summary()`.
 - The container has `.summary()`, `.save_page()` and `.attach()`, and no `.report()` or `.predict()`: call those on a leaf.
 
 **`res.test`** has one row per test, with columns `label`, `name`, `pvalue`, `statistic`, `df`, `df_resid`, `r2_delta`:
@@ -203,7 +221,7 @@ both.fit_info["diary"]   # fit_info, sweep and n_no_vector are dicts keyed by te
 both.test                # all texts, one row per text, then one Wald row per term
 ```
 
-Each text has its own PCA and K. `both.text` and `both.embeddings` are `None`; each entry holds its own. After un-pickling, `both.attach(texts={"essay": ..., "diary": ...}, embeddings={"essay": emb, "diary": emb})` takes dicts keyed by text name.
+Each text has its own PCA and K. The statsmodels names of the whole model (`both.params`, `both.pvalues`, `both.fvalue`, …) are the same on `both` and on every entry; `both.pvalues` has one row per term of every text. `both.text` and `both.embeddings` are `None`; each entry holds its own. After un-pickling, `both.attach(texts={"essay": ..., "diary": ...}, embeddings={"essay": emb, "diary": emb})` takes dicts keyed by text name.
 
 ---
 

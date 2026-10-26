@@ -65,7 +65,7 @@ print(tokens[0])
 # the top principal component of all words (ABTT; Mu & Viswanath, 2018), and
 # scales the rows to length 1 again.
 emb.normalize(l2=True, abtt=1)
-ssd = SSD(emb, tokens, use_full_doc=True)
+ssd = SSD(tokens, embeddings=emb, use_full_doc=True)
 res = ssd.fit_regression("score ~ ssd()", data=df)
 res.summary()
 print(res.words)

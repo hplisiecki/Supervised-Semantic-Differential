@@ -79,6 +79,15 @@ def test_pls_gradients_page_data(ssd_instance, parity_df):
     assert [r[0] for r in t["docs"]["rows"]] == [doc.doc_id for doc in res.docs]
 
 
+def test_regression_gradients_page_data(ssd_instance, parity_df):
+    res = ssd_instance.fit_regression(parity_df["y"], fixed_k=4, ssd_gradients=2)
+    d = page_data(res)
+    json.dumps(d, allow_nan=False)
+    assert d["kind"] == "pca_ols" and "pls_info" in d["tables"]
+    assert [(u["key"], u["label"]) for u in d["units"]] == [("main", "β"), ("dim-1", "Dim 1"), ("dim-2", "Dim 2")]
+    assert d["units"][1]["tables"]["stats"]["columns"] == ["cov_share", "score_corr"]
+
+
 @pytest.mark.parametrize("doc_texts, expect", [(0, "none"), (1, "some"), (None, "all")])
 def test_doc_texts(pls_result, doc_texts, expect):
     rows = page_data(pls_result, doc_texts=doc_texts)["units"][0]["tables"]["docs"]["rows"]
