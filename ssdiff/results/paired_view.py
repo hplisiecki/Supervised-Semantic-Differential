@@ -18,19 +18,19 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from ssdiff.results.core import (
+    _add_docx_table,
     _check_ext,
     _get_ext,
+    _json_default,
     _project,
     _render_csv,
     _render_md_table,
     _render_tex_table,
+    _require,
     _row_to_dict,
     _validate_cols,
     _warn,
-    _json_default,
-    _require,
 )
-
 
 # ---------------------------------------------------------------------------
 # Multi-sheet xlsx helper
@@ -63,7 +63,7 @@ def _write_docx_sectioned(
     sections: list[tuple[str, list[dict], Sequence[str]]],
     path: str | Path,
 ) -> None:
-    """Write a .docx file with one heading + table per section.
+    """Write a .docx file with one captioned table per section.
 
     Parameters
     ----------
@@ -74,13 +74,8 @@ def _write_docx_sectioned(
     docx = _require("docx", extra="results")
     doc = docx.Document()
     for title, rows, cols in sections:
-        doc.add_heading(title, level=1)
-        table = doc.add_table(rows=1 + len(rows), cols=len(cols))
-        for j, c in enumerate(cols):
-            table.rows[0].cells[j].text = str(c)
-        for i, r in enumerate(rows, start=1):
-            for j, c in enumerate(cols):
-                table.rows[i].cells[j].text = fmt_cell(r.get(c), c)
+        _add_docx_table(doc, [str(c) for c in cols],
+                        [[fmt_cell(r.get(c), c) for c in cols] for r in rows], caption=title)
     doc.save(str(path))
 
 

@@ -1,8 +1,8 @@
 """APA-inspired formatting primitives (en_US locale).
 
-D11 contract — numeric formatting rules applied uniformly across all
+Numeric formatting rules applied uniformly across all
 text/markdown/html/latex/docx renderers. Unit-tested in
-tests/test_results_format.py against the exact strings in the spec.
+tests/results/test_format.py.
 """
 
 from __future__ import annotations
@@ -134,7 +134,8 @@ def fmt_table(
     max_width: int | None = None,
     text_truncate: int | None = None,
 ) -> str:
-    """Render a fixed-width table with D11 alignment rules.
+    """Render a fixed-width table: numeric columns right-aligned, others
+    left-aligned.
 
     Parameters
     ----------
@@ -185,10 +186,9 @@ def fmt_table(
 def default_alignment(n_cols: int) -> tuple[bool, ...]:
     """First column left-aligned, all subsequent columns right-aligned.
 
-    Returns a tuple suitable for `fmt_table(numeric=...)`. Per
-    spec_console_repr.md: labels live in column 0 and read better
-    flush-left; remaining columns are numeric or short codes that line
-    up better right-aligned.
+    Returns a tuple suitable for `fmt_table(numeric=...)`. Labels live
+    in column 0 and read better flush-left; remaining columns are numeric or
+    short codes that line up better right-aligned.
     """
     if n_cols <= 0:
         return ()

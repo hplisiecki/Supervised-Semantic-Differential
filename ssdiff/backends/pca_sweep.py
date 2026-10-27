@@ -38,12 +38,13 @@ from ssdiff.backends._sweep_math import (
 from ssdiff.backends._sweep_math import (
     zscore_ignore_nan as _zscore_ignore_nan,
 )
-from ssdiff.lang_config import get_config as _get_lang_config
 from ssdiff.utils import _diagnostic
 from ssdiff.utils.math import kmeans_auto_k, unit_vector
+from ssdiff.utils.neighbors import skip_neighbor
 
-# Restrict neighbor search to the top-N most-frequent vocab rows; matches the
-# cluster_top_neighbors default used on the public path.
+# Restrict neighbor search to the top-N most-frequent vocab rows. Equals
+# embeddings._RAM_TOP_N and the cluster_top_neighbors default; change the
+# three together (see embeddings._RAM_TOP_N).
 _RESTRICT_VOCAB = 50_000
 # Candidate pool size before regex filtering — must be >= cluster_topn.
 _NEIGHBOR_CAND = 2000
@@ -55,7 +56,7 @@ _MIN_CLUSTER_SIZE = 2
 def _top_indices_filtered(
     sim_col: np.ndarray,
     keys: list[str],
-    bad_re,
+    skip,
     topn: int,
     cand: int,
 ) -> np.ndarray:
@@ -72,7 +73,7 @@ def _top_indices_filtered(
     raw = raw[np.argsort(-sim_col[raw])]
     out: list[int] = []
     for i in raw:
-        if not bad_re.match(keys[int(i)]):
+        if not skip(keys[int(i)]):
             out.append(int(i))
             if len(out) >= topn:
                 break
@@ -110,7 +111,7 @@ def _cluster_from_indices(
         centroid = unit_vector(Wc.mean(axis=0))
         clusters.append({
             "side": side,
-            "size": int(len(idx)),
+            "size": len(idx),
             "centroid_cos_beta": float(centroid @ beta_unit),
             "coherence": float(np.mean((Wc @ centroid).astype(float))),
         })
@@ -134,7 +135,6 @@ def pca_sweep(
     out_dir: str | None = None,
     prefix: str = "pca_k",
     verbose: bool = False,
-    lang: str = "pl",
 ) -> PCAKSelectionResult:
     """Single-pass sweep over PCA_K on pre-standardized doc vectors.
 
@@ -212,7 +212,7 @@ def pca_sweep(
                 if total_var_full > 0 else 0.0
             )
 
-            # OLS in PCA space (normal equations, matches official)
+            # OLS in PCA space via the normal equations
             w_reg = np.linalg.solve(z.T @ z, z.T @ ys)
 
             # Back-project to document space
@@ -251,7 +251,8 @@ def pca_sweep(
     restrict = min(_RESTRICT_VOCAB, emb_n_full.shape[0])
     emb_n = emb_n_full[:restrict]
     keys = embeddings.index_to_key
-    bad_re = _get_lang_config(lang).bad_token_re
+    def skip(word):
+        return skip_neighbor(embeddings, word)
 
     valid_records = [r for r in records if r[0]]
     if valid_records:
@@ -291,7 +292,7 @@ def pca_sweep(
             sim_col = sims_all[:, col + side_off]
             try:
                 indices = _top_indices_filtered(
-                    sim_col, keys, bad_re,
+                    sim_col, keys, skip,
                     topn=cluster_topn, cand=_NEIGHBOR_CAND,
                 )
                 clusters.extend(_cluster_from_indices(

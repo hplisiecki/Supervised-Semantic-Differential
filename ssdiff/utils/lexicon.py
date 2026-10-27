@@ -7,7 +7,7 @@ from collections.abc import Iterable, Sequence
 
 import numpy as np
 
-from .math import _categorical_mask
+from .math import _categorical_mask, l2_normalize_rows_inplace, unit_vector
 
 __all__: list[str] = []
 
@@ -28,26 +28,14 @@ def _as_float_array(y: Iterable) -> np.ndarray:
 def _to_unit_tokens(unit) -> list[str]:
     """Convert a single text unit to a flat token list.
 
-    Handles str, list[str], list[list[str]] (profiles), and None.
+    Handles str, list[str] and None.
     """
     if unit is None:
         return []
     if isinstance(unit, str):
         return unit.split()
     if isinstance(unit, (list, tuple)):
-        if not unit:
-            return []
-        first = unit[0]
-        if isinstance(first, str):
-            return list(unit)
-        if isinstance(first, (list, tuple)):
-            out: list[str] = []
-            for post in unit:
-                if isinstance(post, (list, tuple)):
-                    out.extend(t for t in post if isinstance(t, str))
-                elif isinstance(post, str):
-                    out.extend(post.split())
-            return out
+        return list(unit)
     return str(unit).split()
 
 
@@ -55,8 +43,7 @@ def _texts_to_token_lists(texts: Sequence) -> list[list[str]]:
     """Batch-convert text units to token lists.
 
     Fast path for homogeneous str or list[str] inputs;
-    falls back to per-element :func:`_to_unit_tokens` for profiles
-    and mixed inputs.
+    falls back to per-element :func:`_to_unit_tokens` for mixed inputs.
     """
     if not texts:
         return []
@@ -271,14 +258,19 @@ def _rank_for_token_stats(
 
 
 # -------------------------
-# Shared helpers (used by Corpus methods)
+# Shared helpers (used by the SSD lexicon methods)
 # -------------------------
 
 
 def _filter_y(
     docs: list[list[str]], y, *, var_type: str = "continuous",
-) -> tuple[list[list[str]], np.ndarray]:
-    """Filter docs and y for valid entries. Returns (docs, y_clean)."""
+) -> tuple[list[list[str]], np.ndarray | None]:
+    """Filter docs and y for valid entries. Returns (docs, y_clean).
+
+    ``y=None`` drops nothing and returns ``(docs, None)``.
+    """
+    if y is None:
+        return docs, None
     _validate_var_type(var_type)
     if var_type == "categorical":
         y_arr = np.asarray(y, dtype=object)
@@ -294,6 +286,14 @@ def _filter_y(
             docs = [docs[i] for i in range(len(docs)) if mask[i]]
             y_arr = y_arr[mask]
         return docs, y_arr
+
+
+def _frequent_tokens(token_sets: list[set[str]], min_docs: int) -> list[str]:
+    """Tokens that are in at least *min_docs* documents."""
+    df_counts: Counter = Counter()
+    for ts in token_sets:
+        df_counts.update(ts)
+    return [t for t, c in df_counts.items() if c >= min_docs]
 
 
 def _rank_tokens(
@@ -315,7 +315,7 @@ def _rank_tokens(
     y : ndarray
         Outcome variable (already cleaned).
     top_k, min_docs, n_bins, corr_cap, var_type :
-        Same as ``Corpus.suggest_lexicon``.
+        Same as ``SSD.suggest_lexicon``.
 
     Returns
     -------
@@ -326,10 +326,7 @@ def _rank_tokens(
     """
     is_categorical = var_type == "categorical"
 
-    df_counts: Counter = Counter()
-    for ts in token_sets:
-        df_counts.update(ts)
-    vocab = [t for t, c in df_counts.items() if c >= min_docs]
+    vocab = _frequent_tokens(token_sets, min_docs)
     if not vocab:
         return []
 
@@ -364,6 +361,61 @@ def _rank_tokens(
             direction=direction,
         ))
 
-    rows.sort(key=lambda r: (-r["rank"], -r["cov_bal"], -r["freq"]))
+    rows.sort(key=lambda r: (-r["rank"], -r["cov_bal"], -r["freq"], r["token"]))
     return rows[:top_k]
 
+
+def _seed_endings(seed: str) -> list[str]:
+    """Forms of *seed* with an English ending.
+
+    The endings are English and are tried for every corpus, whatever its
+    language. A form that doubles the last consonant is not built.
+    """
+    forms = [seed + ending for ending in ("s", "es", "d", "ed", "ing")]
+    if seed.endswith("y"):
+        forms += [seed[:-1] + "ies", seed[:-1] + "ied"]
+    if seed.endswith("e"):
+        forms.append(seed[:-1] + "ing")
+    return forms
+
+
+def _seed_neighbours(
+    token_sets: list[set[str]],
+    embeddings,
+    seeds: Sequence[str],
+    *,
+    top_k: int,
+    min_docs: int,
+) -> list[tuple[str, str, float]]:
+    """Tokens of the text to list for *seeds*, as ``(seed, token, cos)`` rows.
+
+    A candidate is a token that is in at least *min_docs* documents and is a
+    key of *embeddings*. Each seed lists itself with cosine 1 when it is a
+    candidate, the *top_k* other candidates closest to it, and those of its
+    :func:`_seed_endings` that are candidates, whatever their cosine. A token
+    has one row: of the seeds that list it, the one with the highest cosine;
+    a seed's row is its own. Rows are sorted by cosine, highest first; equal
+    cosines keep the order the seeds were given in, and a seed's own row comes
+    before that seed's other rows at cosine 1.
+    """
+    # Sorted so that equal cosines come out in the same order on every run.
+    candidates = sorted(t for t in _frequent_tokens(token_sets, min_docs) if t in embeddings)
+    if not candidates:
+        return []
+    row_of = {t: i for i, t in enumerate(candidates)}
+    unit = np.stack([embeddings[t] for t in candidates])
+    l2_normalize_rows_inplace(unit)
+
+    best: dict[str, tuple[str, str, float]] = {}
+    for seed in seeds:
+        cos = unit @ unit_vector(embeddings[seed])
+        closest = [i for i in np.argsort(-cos, kind="stable") if candidates[i] != seed]
+        listed = closest[:top_k] + [row_of[t] for t in _seed_endings(seed) if t in row_of]
+        for row in [(seed, candidates[i], float(cos[i])) for i in listed]:
+            if row[1] not in best or row[2] > best[row[1]][2]:
+                best[row[1]] = row
+    # A seed's row is its own, even when another seed is as close to it.
+    for seed in seeds:
+        if seed in row_of:
+            best[seed] = (seed, seed, 1.0)
+    return sorted(best.values(), key=lambda row: (-min(row[2], 1.0), seeds.index(row[0]), row[1] != row[0]))

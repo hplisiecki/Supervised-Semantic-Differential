@@ -7,30 +7,33 @@ import numpy as np
 from .math import l2_normalize_rows_inplace
 
 
-def compute_global_sif(sentences: list[list[str]]) -> tuple[dict[str, int], int]:
+def compute_global_sif(docs) -> tuple[dict[str, int], int]:
     """Compute word counts for SIF weighting.
 
     Parameters
     ----------
-    sentences : list[list[str]]
-        Tokenized sentences (each sentence is a list of token strings).
+    docs : list[list[str]]
+        Token lists (documents or sentences).
 
     Returns
     -------
     word_counts : dict[str, int]
-        Mapping from each word to its total count across all sentences.
+        Mapping from each word to its total count across all documents.
     total_tokens : int
         Sum of all word counts.
     """
     wc: dict[str, int] = {}
-    for sent in sentences:
-        for t in sent:
+    for doc in docs:
+        for t in doc:
             wc[t] = wc.get(t, 0) + 1
     return wc, sum(wc.values())
 
 
 def _occ_vectors_in_doc(doc, embeddings, lexicon, wc, tot, window, sif_a):
-    """SIF-averaged context vectors for each seed occurrence in a doc."""
+    """SIF-averaged context vectors for each seed occurrence in a doc.
+
+    ``sif_a=None`` gives every word weight 1 (plain mean).
+    """
     occ = []
     D = embeddings.vector_size
     for i, token in enumerate(doc):
@@ -45,7 +48,7 @@ def _occ_vectors_in_doc(doc, embeddings, lexicon, wc, tot, window, sif_a):
             c = doc[j]
             if c not in embeddings:
                 continue
-            a = sif_a / (sif_a + wc.get(c, 0) / max(tot, 1))
+            a = 1.0 if sif_a is None else sif_a / (sif_a + wc.get(c, 0) / max(tot, 1))
             sum_v += a * embeddings[c]
             w_sum += a
         if w_sum > 0:
@@ -54,14 +57,17 @@ def _occ_vectors_in_doc(doc, embeddings, lexicon, wc, tot, window, sif_a):
 
 
 def _full_doc_vector(tokens, embeddings, wc, tot, sif_a) -> np.ndarray | None:
-    """SIF-weighted mean of all tokens in a doc (no lexicon filtering)."""
+    """SIF-weighted mean of all tokens in a doc (no lexicon filtering).
+
+    ``sif_a=None`` gives every word weight 1 (plain mean).
+    """
     D = embeddings.vector_size
     sum_v = np.zeros(D, dtype=np.float64)
     w_sum = 0.0
     for c in tokens:
         if c not in embeddings:
             continue
-        a = sif_a / (sif_a + wc.get(c, 0) / max(tot, 1))
+        a = 1.0 if sif_a is None else sif_a / (sif_a + wc.get(c, 0) / max(tot, 1))
         sum_v += a * embeddings[c]
         w_sum += a
     if w_sum == 0.0:
@@ -84,17 +90,18 @@ def build_doc_vectors(
 
     Parameters
     ----------
-    docs : list[list[str]] or list[list[list[str]]]
-        Flat token lists or grouped profiles.
+    docs : list[list[str]]
+        Token lists, one per document.
     embeddings : Embeddings
         Word embeddings.
     lexicon : set[str]
         Seed words.
     global_wc, total_tokens : word counts from compute_global_sif.
+        Unused when ``sif_a`` is None.
     window : int
         Context window around seed words.
-    sif_a : float
-        SIF smoothing parameter.
+    sif_a : float or None
+        SIF smoothing parameter. ``None`` gives every word weight 1.
     mode : "seed" | "full"
         "seed" uses lexicon-seeded contexts; "full" uses entire document.
 
@@ -110,59 +117,24 @@ def build_doc_vectors(
     X_list = []
     keep_mask = []
 
-    # Detect flat vs grouped docs
-    is_flat = None
-    for item in docs:
-        if item:
-            is_flat = isinstance(item[0], str)
-            break
-    if is_flat is None:
-        return np.zeros((0, embeddings.vector_size), dtype=np.float64), np.zeros(0, dtype=bool)
-
-    if is_flat:
-        for d in docs:
-            if not d:
+    for d in docs:
+        if not d:
+            keep_mask.append(False)
+            continue
+        if use_seeds:
+            occ = _occ_vectors_in_doc(d, embeddings, lexicon, global_wc, total_tokens, window, sif_a)
+            if not occ:
                 keep_mask.append(False)
-                continue
-            if use_seeds:
-                occ = _occ_vectors_in_doc(d, embeddings, lexicon, global_wc, total_tokens, window, sif_a)
-                if not occ:
-                    keep_mask.append(False)
-                else:
-                    keep_mask.append(True)
-                    X_list.append(np.mean(occ, axis=0).astype(np.float64))
             else:
-                v = _full_doc_vector(d, embeddings, global_wc, total_tokens, sif_a)
-                if v is None:
-                    keep_mask.append(False)
-                else:
-                    keep_mask.append(True)
-                    X_list.append(v)
-    else:
-        for posts in docs:
-            if not posts:
+                keep_mask.append(True)
+                X_list.append(np.mean(occ, axis=0).astype(np.float64))
+        else:
+            v = _full_doc_vector(d, embeddings, global_wc, total_tokens, sif_a)
+            if v is None:
                 keep_mask.append(False)
-                continue
-            if use_seeds:
-                occ_all = []
-                for p in posts:
-                    if p:
-                        occ_all.extend(
-                            _occ_vectors_in_doc(p, embeddings, lexicon, global_wc, total_tokens, window, sif_a)
-                        )
-                if not occ_all:
-                    keep_mask.append(False)
-                else:
-                    keep_mask.append(True)
-                    X_list.append(np.mean(occ_all, axis=0).astype(np.float64))
             else:
-                tokens_all = [t for p in posts for t in p]
-                v = _full_doc_vector(tokens_all, embeddings, global_wc, total_tokens, sif_a)
-                if v is None:
-                    keep_mask.append(False)
-                else:
-                    keep_mask.append(True)
-                    X_list.append(v)
+                keep_mask.append(True)
+                X_list.append(v)
 
     X = np.vstack(X_list) if X_list else np.zeros((0, embeddings.vector_size), dtype=np.float64)
     return X, np.array(keep_mask, dtype=bool)
@@ -173,9 +145,10 @@ def build_and_normalize_doc_vectors(
     embeddings,
     lexicon,
     window: int = 3,
-    sif_a: float = 1e-3,
+    sif_a: float | None = 1e-3,
     use_full_doc: bool = False,
     l2_normalize: bool = True,
+    sif_counts: tuple[dict[str, int], int] | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Compute SIF word counts, build document vectors, and optionally L2-normalize.
 
@@ -184,23 +157,28 @@ def build_and_normalize_doc_vectors(
 
     Parameters
     ----------
-    docs : list[list[str]] or list[list[list[str]]]
-        Tokenized documents. Either flat token lists or grouped profiles
-        (list of posts per document).
+    docs : list[list[str]]
+        Tokenized documents.
     embeddings : Embeddings
         Word embedding model providing vector lookups.
     lexicon : set[str]
         Seed words used for context-window extraction in "seed" mode.
     window : int, default 3
         Context window half-width around each seed word.
-    sif_a : float, default 1e-3
+    sif_a : float or None, default 1e-3
         SIF smoothing parameter (lower values give more aggressive
-        down-weighting of frequent words).
+        down-weighting of frequent words). ``None`` turns SIF off: every
+        word weighs 1 and no word counts are computed.
     use_full_doc : bool, default False
         If True, use the entire document for vectorization ("full" mode)
         instead of only seed-word contexts ("seed" mode).
     l2_normalize : bool, default True
         If True, L2-normalize each document vector to unit length.
+    sif_counts : (word_counts, total_tokens) or None, default None
+        SIF word counts from :func:`compute_global_sif`. ``None`` counts
+        *docs* themselves. Prediction on new documents passes the training
+        documents' counts, so a word keeps the weight it had in the fit.
+        Ignored when ``sif_a`` is None.
 
     Returns
     -------
@@ -209,19 +187,12 @@ def build_and_normalize_doc_vectors(
     keep_mask : (n_docs,) bool ndarray
         Boolean mask indicating which input documents yielded a valid vector.
     """
-    # Flatten docs for SIF counting
-    flat_sents = []
-    for item in docs:
-        if not item:
-            continue
-        if isinstance(item[0], str):
-            flat_sents.append(item)
-        else:
-            for sub in item:
-                if sub:
-                    flat_sents.append(sub)
-
-    global_wc, total_tokens = compute_global_sif(flat_sents)
+    if sif_a is None:
+        global_wc, total_tokens = None, 0
+    else:
+        if sif_counts is None:
+            sif_counts = compute_global_sif(docs)
+        global_wc, total_tokens = sif_counts
     mode = "full" if use_full_doc else "seed"
 
     X, keep_mask = build_doc_vectors(

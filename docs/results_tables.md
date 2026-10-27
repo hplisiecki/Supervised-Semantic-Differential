@@ -54,14 +54,14 @@ Row-cap knobs are **per view**, not global. Each size-bearing view is callable:
 | `result.clusters.pos` / `.neg` | `topn=100` neighbors → auto-K clusters | `clusters.pos(topn=50, k=5, k_min=2, k_max=10, min_cluster_size=2, random_state=2137)` |
 | `result.snippets` | `top_per_side=30` | `snippets(top_per_side=200, min_cosine=0.4, n_jobs=-1)` |
 | Everything else (slicing) | `view[:k]` | returns a `_no_trunc=True` sub-view |
-| Terminal display only | `DEFAULT_MAX_ROWS = 20` | `view.to_text(max_rows=50)` |
+| Terminal display only | `DEFAULT_MAX_ROWS = 20` (10 for snippet views, 50 for `DocsView`) | `view.to_text(max_rows=50)` |
 | On save only | — | `view.save("x.csv", k=50)` caps without recomputing |
 
 Cluster and snippet reruns with different parameters are cached separately — the original call's view remains available until you call `result.clear_cache("clusters")` / `.clear_cache("snippets")`.
 
 ---
 
-## Continuous results — `PLSResult` / `PCAOLSResult`
+## Continuous results — `PLSResult` / `PCAOLSResult` / `RegressionResult`
 
 ### `stats` — `StatsView` (ScalarView, PLS) / `OLSStatsView` (PCA+OLS)
 
@@ -79,21 +79,23 @@ Cluster and snippet reruns with different parameters are cached separately — t
 | `beta_norm` |  | internal scale; `iqr_effect` is the interpretable version |
 | `delta` |  | `0.1 · beta_norm · y_std` — engineering quantity |
 | `iqr_effect` | ✓ | interpretable effect size: Q4−Q1 change in `y` |
-| `y_corr_pred` |  | ≈ `√r²` for a linear fit — duplicate signal |
+| `y_corr_pred` |  | ≈ `√r²` for a linear fit without a formula — duplicate signal |
 
 ### `fit_info` — `FitInfoView` (ScalarView)
 
 | column | default | note |
 |---|:---:|---|
-| `n_components` | ✓ | defines the fit |
-| `pca_k` | ✓ | meaningful when PCA preprocess / PCA+OLS; `None` otherwise |
-| `p_method` | ✓ | which significance test was used |
-| `n_perm` |  | test config — on `.test` |
-| `n_splits` |  | same |
-| `split_mean_r` |  | surfaced as `split_r2` on `.test` |
-| `random_state` | ✓ | reproducibility anchor |
+| `n_components` | ✓ | PLS k; PCA regression K |
+| `p_at_k` | ✓ | `fit_pls`: the k the test runs at (1 for `k="auto"`) |
+| `n_splits` |  | `fit_pls` test config — on `.test` |
+| `random_state` | ✓ | `fit_pls` seed |
 | `k_min` / `k_max` / `k_step` |  | PCA-sweep config — on `.sweep` |
 | `best_k` |  | PCA-sweep output — on `.sweep` |
+| `pca_k_source` |  | `fit_regression`: `"sweep"` or `"fixed"` |
+| `formula` |  | formula given to `fit_pls` / `fit_regression` |
+| `family` |  | `fit_regression`: glmm family |
+| `ssd_gradients` |  | `fit_pls`: number of gradients returned; `None` for PCA+OLS |
+| `rotate` |  | `fit_pls`: rotation of those gradients; `None` for one gradient |
 
 ### `words` — `WordsView` (tabular)
 
@@ -105,11 +107,11 @@ Cluster and snippet reruns with different parameters are cached separately — t
 | `cos_beta` | ✓ | cosine similarity to the semantic gradient |
 | `contrast` |  | group-only; `None` for continuous |
 
-### `words.pos` / `.neg` — `SidedWordsView`
+### `words.pos` / `.neg` — `WordsViewSided`
 
 Same columns + same defaults as `WordsView`. Row cap default = 20 (per side). Use `words.pos(50)` or `words.pos(None)` to resize.
 
-### `clusters.pos` / `.neg` — `SidedClustersView`
+### `clusters.pos` / `.neg` — `ClustersViewSided`
 
 | column | default | note |
 |---|:---:|---|
@@ -122,20 +124,20 @@ Same columns + same defaults as `WordsView`. Row cap default = 20 (per side). Us
 | `top_words` | ✓ | comma-joined top-5 cluster words by `cos_centroid` desc (eager, cheap) |
 | `top_snippet` |  | text of the highest-cosine snippet in this cluster; **opt-in** via `cols="all"` or explicit cols list (filling triggers full snippet extraction on first request); clipped to 40 chars in repr, full text in exports |
 
-**Zoom:** `clusters.pos(cluster_id)` filters to one cluster. The repr appends a "Top 5 cluster snippets" sub-table (columns `seed`, `cosine`, `doc_id`, `text_window`) — independent of the `top_snippet` column on the main row. Pass `clusters.pos(cluster_id, top_snippets=N)` to resize the sub-table. Without an attached corpus, the sub-table is replaced by `(attach corpus to populate)`. `save()` on a zoomed view writes only the 1-row summary (`cols="all"` to include `top_snippet`); the snippet table is reached via `clusters.pos(cluster_id).snippets.save(...)`.
+**Zoom:** `clusters.pos(cluster_id)` filters to one cluster. The repr appends a "Top 5 cluster snippets" sub-table (columns `seed`, `cosine`, `doc_id`, `text_window`) — independent of the `top_snippet` column on the main row. Pass `clusters.pos(cluster_id, top_snippets=N)` to resize the sub-table. Without an attached text, the sub-table is replaced by `(attach texts to populate)`. `save()` on a zoomed view writes only the 1-row summary (`cols="all"` to include `top_snippet`); the snippet table is reached via `clusters.pos(cluster_id).snippets.save(...)`.
 
 ### `clusters.pos(cid).words` — `ClusterWordsView`
 
 | column | default | note |
 |---|:---:|---|
 | `cluster_id` | ✓ | kept so rows stand alone when saved |
-| `side` |  | implied by parent `SidedClustersView` |
+| `side` |  | implied by parent `ClustersViewSided` |
 | `word` | ✓ | |
 | `cos_centroid` | ✓ | |
 | `cos_beta` | ✓ | |
 | `contrast` |  | group-only |
 
-### `snippets` — `SnippetsView` (+ `SidedSnippetsView`)
+### `snippets` — `SnippetsView` (+ `SnippetsViewSided`)
 
 | column | default | note |
 |---|:---:|---|
@@ -148,19 +150,18 @@ Same columns + same defaults as `WordsView`. Row cap default = 20 (per side). Us
 | `start_sent_idx` / `end_sent_idx` |  | reconstruction detail |
 | `text_window` | ✓ | "what does this mean" column; truncated to 40 chars in terminal |
 | `text_surface` |  | full enclosing sentence(s) |
-| `text_lemmas` |  | lemmatized variant |
+| `text_lemmas` |  | the enclosing sentence(s) as the tokens used in the fit |
 | `cluster_id` |  | set when clusters were computed |
-| `post_id` |  | multi-post docs (forums) |
 | `contrast` |  | group-only |
 
 ### `docs` — `DocsView`
 
 | column | default | note |
 |---|:---:|---|
-| `doc_id` | ✓ | aligns with corpus row index |
+| `doc_id` | ✓ | position of the document in the text given to `SSD` |
 | `y_true` | ✓ | |
-| `y_hat` | ✓ | |
-| `residual` | ✓ | `y_true − y_hat` |
+| `y_hat` | ✓ | the text's score on the y scale; for a non-Gaussian `fit_regression`, the model's fitted mean on the response scale |
+| `residual` | ✓ | `y_true` minus `model`'s fitted value (`fit_regression`), or the PLS fit's residual on the residualized y (`fit_pls` with a formula), so the covariates are taken out of it while `y_hat` is the text's part only; otherwise `y_true − y_hat` |
 | `alignment_score` | ✓ | cosine along β — complementary to `y_hat` |
 
 Default = full. Nothing to prune.
@@ -169,20 +170,84 @@ Default = full. Nothing to prune.
 
 | column | default | note |
 |---|:---:|---|
-| `name` | ✓ | `"raw_perm" \| "split_nb" \| "split_perm"` |
+| `name` | ✓ | `"split_exact"` or `"split_nb"`, whichever plskit ran |
 | `pvalue` | ✓ | |
-| `split_r2` | ✓ | only present after `"split_nb"` / `"split_perm"` |
+| `split_r2` | ✓ | held-out split statistic |
 | `n_splits` |  | config — reachable via `.params` |
-| `n_perm` |  | config |
 | `random_state` |  | config |
 
 ### `test` — `PCAOLSTestView` (ScalarView)
 
-Columns: `name`, `pvalue`. Default = full (rerun is a no-op; F-test is analytic).
+| column | default | note |
+|---|:---:|---|
+| `name` | ✓ | `"f_test"` or `"lrt"` |
+| `pvalue` | ✓ | |
+| `statistic` | ✓ | F for `"f_test"`, χ² for `"lrt"` |
+| `df` | ✓ | the number of components K |
+| `df_resid` | ✓ | the F-test's residual df; `None` for `"lrt"` |
+| `r2_delta` | ✓ | R² the components add; NaN unless the model is OLS |
+
+Rerun is a no-op; the test is analytic.
+
+### `test` — `RegressionTestView` (RegressionResult)
+
+One row per test. No registered default subset, so the default is every column.
+
+| column | default | note |
+|---|:---:|---|
+| `label` | ✓ | empty for the all-text test; a text's name for a per-text test (several texts); a term such as `sex:ssd(essay)` for a per-term test |
+| `name` | ✓ | `"f_test"` or `"lrt"` for the tests that compare two fits; `"wald_f"` or `"wald_chisq"` for a term |
+| `pvalue` | ✓ | |
+| `statistic` | ✓ | F or χ² |
+| `df` | ✓ | tested coefficients |
+| `df_resid` | ✓ | residual df of an F test; `None` for χ² tests |
+| `r2_delta` | ✓ | R² the tested terms add; NaN unless the model is OLS; `None` on Wald rows |
+
+Rows iterate as `TermTest` dataclasses.
+
+### `covariates` — `CovariatesView` (PCAOLSResult, RegressionResult)
+
+| column | default | note |
+|---|:---:|---|
+| `term` | ✓ | coefficient name in `model`; a factor gives one row per level after the first |
+| `estimate` | ✓ | on y's scale; link scale for a non-Gaussian `fit_regression` model |
+| `se` | ✓ | |
+| `statistic` | ✓ | t or z, as in `model.summary()` |
+| `p_value` | ✓ | |
+| `ci_low`, `ci_high` | ✓ | 95% bounds from `model.confint()` |
+
+One row per coefficient of the formula, with the text held fixed (the K components, also inside an interaction; their own rows are left out). Empty without a formula.
 
 ### `sweep` — `SweepView` (PCAOLSResult only)
 
-Columns: `k`, `r2`, `r2_adj`, `pvalue`. One row per K tested. Default = full.
+One row per K tested.
+
+| column | default | note |
+|---|:---:|---|
+| `k` | ✓ | |
+| `var_explained` | ✓ | |
+| `mean_coherence` |   | |
+| `mean_abs_cosb` |   | |
+| `aggregate` |   | |
+| `n_clusters` |   | |
+| `total_size` |   | |
+| `beta_delta_1_minus_cos` |   | |
+| `interp_hat` |   | |
+| `interp_resid` |   | |
+| `interp_resid_z` |   | |
+| `interp_auck` | ✓ | |
+| `stab_good_raw` |   | |
+| `stab_z_raw` |   | |
+| `stab_auck_raw` | ✓ | |
+| `joint_score` | ✓ | |
+
+### Term leaves — `res['sexM:ssd(essay)']` (RegressionResult)
+
+A leaf is a `PCAOLSResult`. Its `words`, `clusters`, `snippets` and `docs` have the columns above. Its `pvalue` and `test` are the fit's all-text test. On the container, `res.stats` leaves `beta_norm`, `delta` and `iqr_effect` empty, because each leaf has its own. `res.fit_info` and `res.sweep` are those of the first leaf; with several texts they are dicts keyed by text name.
+
+### Gradient leaves — `res['dim-1']` (PLSResult, `ssd_gradients > 1`)
+
+`res.pls_info` and the per-leaf `res['dim-1'].stats` have the same columns as on `MultiPLSResult`: see [`pls_info`](#pls_info--plsinfoview-scalarview) and [per-leaf `stats`](#per-leaf-stats--resdim-1stats--plscomponentstatsview-scalarview). A PLS1 leaf has no `outcomes`; its `words`, `clusters` and `snippets` have the columns above.
 
 ---
 
@@ -232,7 +297,7 @@ Tuple-key lookup `gr.pairs[('g1', 'g2')]` returns the raw `Pair` dataclass direc
 
 ### Per-pair views — `gr[('g1', 'g2')].words` / `.clusters` / `.snippets`
 
-`gr[('g1', 'g2')]` returns a `PairResult` for that pair. Its `.words`, `.clusters`, and `.snippets` attributes dispatch to the same view classes as continuous results, with the `contrast` column populated (`"g1_g2"`) rather than `None`. Reverse-order access `gr[('g2', 'g1')]` is normalized to canonical order, so it returns the identical view — no sign-flip.
+`gr[('g1', 'g2')]` returns a `PairResult` for that pair. Its `.words`, `.clusters`, and `.snippets` attributes dispatch to the same view classes as continuous results, with the `contrast` column populated (`"g1_g2"`) rather than `None`. Canonical order only — reverse-order access `gr[('g2', 'g1')]` raises `KeyError` naming the canonical order.
 
 **`gr[('g1', 'g2')].words` — `WordsView`**
 
@@ -256,41 +321,78 @@ Same columns and defaults as the continuous `SnippetsView` / `SnippetsViewSided`
 
 ---
 
-## `MultiPLSResult` *(in development)*
+## `MultiPLSResult`
 
-Shared model-level views. Per-leaf views (`res['dim-1'].words` etc.) reuse the continuous `WordsView` / `SidedWordsView` classes and their defaults documented above.
+Every view below has no registered default subset, so the default is the full column list. Per-leaf `.words` / `.clusters` / `.snippets` (`res['dim-1'].words` etc.) reuse the continuous views and defaults documented above.
 
 ### `stats` — `MultiPLSStatsView` (ScalarView)
 
 | column | default | note |
 |---|:---:|---|
-| `r2` | ✓ | model-level R² from the unrotated combined β |
-| `pvalue` | ✓ | shared whole-model p (raw_perm / split_nb / split_perm) |
 | `n` | ✓ | documents in fit |
-| `n_components` | ✓ | number of rotated dims |
-| `rotate` | ✓ | `"varimax"` / `"raw"` |
+| `q` | ✓ | number of outcomes |
+| `ssd_gradients` | ✓ | number of dimensions |
+| `rotate` | ✓ | `None`, `"words"` or `"outcomes"` |
+| `cov_explained` | ✓ | share of squared cross-covariance captured by the dimensions; the same for every `rotate` |
+| `pvalue` | ✓ | LV1 test p-value; `NaN` if no test info |
 
 ### `pls_info` — `PLSInfoView` (ScalarView)
 
+On `MultiPLSResult`, and on a `PLSResult` from `fit_pls(ssd_gradients=N)` with N > 1.
+
 | column | default | note |
 |---|:---:|---|
-| `n_components` | ✓ | |
+| `ssd_gradients` | ✓ | number of dimensions |
 | `rotate` | ✓ | |
-| `order` |  | dim permutation applied post-rotation (identity once returned) |
-| `signs` |  | per-dim sign flips applied for `corr(t_i, y) > 0` |
-| `kaiser_normalized` |  | varimax Kaiser row-normalisation flag |
-| `sweeps` |  | varimax pairwise-sweep count |
-| `V_converged` |  | final varimax criterion value |
-| `pvalue_source` | ✓ | which test produced `stats.pvalue` |
-| `random_state` | ✓ | reproducibility anchor |
+| `order` | ✓ | dimension permutation from the reordering after rotation (identity when `rotate=None`) |
+| `signs` | ✓ | per-dimension sign flip: largest outcome loading made positive (PLS3), score correlation with y made positive (PLS1) |
+| `kaiser_normalized` | ✓ | varimax Kaiser row-normalisation flag |
+| `sweeps` | ✓ | varimax pairwise-sweep count; 0 without varimax |
+| `V_converged` | ✓ | final varimax criterion value |
+| `random_state` | ✓ | the fit's seed |
 
 ### `test` — `MultiPLSTestView` (ScalarView)
 
-Same columns and semantics as `PLSTestView` (see above) — both go through `backends.pls.run_signal_test`, which dispatches to `plskit.pls1_signal_test`.
+| column | default | note |
+|---|:---:|---|
+| `name` | ✓ | `"split_exact"` |
+| `pvalue` | ✓ | LV1 test; does not depend on `rotate` |
+| `statistic` | ✓ | held-out LV1 correlation |
+| `n_splits` | ✓ | |
+| `n_perm` | ✓ | |
+| `random_state` | ✓ | |
 
-### Per-leaf — `res['dim-i'].words`, `res['combined'].words`
+Rerun with `res.test(n_splits=..., n_perm=..., seed=...)`.
 
-Same columns and defaults as the continuous `WordsView` (see [Continuous results](#continuous-results--plsresult--pcaolsresult)). Per-leaf `.clusters` / `.snippets` / `.docs` are reserved for a later milestone.
+### `outcomes` — `res['dim-1'].outcomes` — `OutcomesView` (tabular)
+
+| column | default | note |
+|---|:---:|---|
+| `outcome` | ✓ | outcome name, or the group name on a group row |
+| `group` | ✓ | group the outcome belongs to; `None` without groups or for ungrouped outcomes |
+| `loading` | ✓ | outcome loading on this dimension; on a group row, the plain mean of the group's outcome loadings (outcomes scored in opposite directions cancel) |
+
+With `outcome_groups`, one extra row per group follows the per-outcome rows.
+
+### Per-leaf `stats` — `res['dim-1'].stats` — `PLSComponentStatsView` (ScalarView)
+
+| column | default | note |
+|---|:---:|---|
+| `cov_share` | ✓ | this dimension's share of the squared cross-covariance of all dimensions (with y, for PLS1); sums to 1 over the dimensions |
+| `score_corr` | ✓ | in-sample correlation of the word-side and outcome-side scores; for PLS1, of the dimension's score with y |
+
+---
+
+## `ContrastResult`
+
+### `stats` — `ContrastStatsView` (ScalarView)
+
+| column | default | note |
+|---|:---:|---|
+| `cos_g1_g2` | ✓ | cosine of the two gradients |
+| `diff_norm` | ✓ | length of `unit(g1) − unit(g2)` before it is normalized |
+
+`words` and `clusters` have the continuous columns, with `contrast` empty.
 
 ---
 

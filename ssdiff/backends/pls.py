@@ -1,134 +1,112 @@
-"""PLS backend — multi-component PLS1 + W-subspace rotation.
+"""PLS backend — rotation of PLS1 weights and of a PLS3 saliency pair.
 
-Owns ``mpls_fit`` only: PLS1 fit + varimax/raw rotation, with reordering
-by ``|corr(t_i, y)|`` and sign-flipping so ``corr > 0``. Significance
-testing and k-selection live in ``ssdiff.ssd`` and call ``plskit``
-directly.
+Owns ``word_target``, ``pls1_rotate`` and ``pls3_rotate``. Fitting,
+significance testing and k-selection live in ``ssdiff.ssd`` and call
+``plskit`` directly.
 """
 
 from __future__ import annotations
 
-from typing import Callable, Literal
-
 import numpy as np
-
 import plskit
 
+__all__ = ("pls1_rotate", "pls3_rotate", "word_target")
 
-__all__ = ("mpls_fit",)
 
+def word_target(vectors, W, X_mean, X_scale):
+    """Varimax target for ``rotate="words"``: the leading vocabulary rows projected onto ``W``.
 
-def mpls_fit(
-    Xs: np.ndarray,
-    ys: np.ndarray,
-    *,
-    n_components: int,
-    rotate: Literal["raw", "varimax"],
-    E_target: np.ndarray | Callable[[np.ndarray], np.ndarray],
-) -> dict:
-    """Fit PLS1 on already-standardised inputs, then rotate the W-subspace.
-
-    Parameters
-    ----------
-    Xs, ys : ndarray
-        Already-standardised ``X`` / ``y``. The caller standardises
-        upstream (matches ``plskit.pls1_fit``'s ``pre_standardized=True``
-        path).
-    n_components : int
-        Exact number of components. Raises if NIPALS deflation collapses.
-    rotate : {"raw", "varimax"}
-        Rotation applied to W. ``"raw"`` still reorders by
-        ``|corr(t_i, y)|`` and sign-flips.
-    E_target : ndarray ``(V, D)`` or callable ``(W) -> (V, k)``
-        Loading basis (or projector) used as the simple-structure target.
-        Callable form lets the caller fold standardisation into the
-        matmul to avoid materialising a full ``(V, D)`` standardised copy.
-
-    Returns
-    -------
-    dict
-        Keys: ``W``, ``P``, ``Q``, ``W_rot``, ``T_rot``, ``beta_combined``,
-        ``order``, ``signs``, ``rotation_meta``.
+    Each of the first ``_RESTRICT_VOCAB`` rows of ``vectors`` is centred by
+    ``X_mean``, scaled by ``X_scale`` (as the doc vectors were) and projected
+    onto the columns of ``W`` (D × k). Returns an (n_rot, k) float64 array.
     """
-    Xs = np.asarray(Xs, dtype=np.float64)
-    ys = np.asarray(ys, dtype=np.float64)
+    from ssdiff.backends.pca_sweep import _RESTRICT_VOCAB
 
-    try:
-        model = plskit.pls1_fit(Xs, ys, k=n_components, pre_standardized=True)
-    except plskit.PlsKitError as exc:
-        raise ValueError(
-            f"plskit.pls1_fit rejected n_components={n_components}: {exc}. "
-            f"Reduce n_components or check for near-duplicate rows / "
-            f"near-zero variance columns in X."
-        ) from exc
+    emb_dtype = vectors.dtype
+    n_rot = min(_RESTRICT_VOCAB, int(vectors.shape[0]))
+    # Fold standardisation into the matmul instead of materialising a
+    # standardised (n_rot, D) copy of the vocabulary.
+    M = (W / X_scale.astype(emb_dtype, copy=False)[:, None]).astype(emb_dtype, copy=False)
+    L = vectors[:n_rot] @ M
+    L -= X_mean.astype(emb_dtype, copy=False) @ M
+    return L.astype(np.float64, copy=False)
 
-    actual_k = model.W.shape[1]
-    if actual_k < n_components:
-        raise ValueError(
-            f"plskit.pls1_fit returned {actual_k} components but "
-            f"n_components={n_components} was requested (NIPALS deflation "
-            f"collapsed). Reduce n_components or check for near-duplicate "
-            f"rows / near-zero variance columns in X."
-        )
 
-    if rotate == "raw":
-        R_rot = np.eye(n_components)
-        W_pre = model.W.copy()
-        rot_meta_pre: dict = {"rotate": "raw", "sweeps": 0,
-                              "V_converged": 0.0, "kaiser_normalized": False}
-    elif rotate == "varimax":
-        if callable(E_target):
-            L = np.asarray(E_target(model.W), dtype=np.float64)
-        else:
-            E_arr = np.asarray(E_target)
-            L = (E_arr @ model.W.astype(E_arr.dtype, copy=False)).astype(
-                np.float64, copy=False
-            )
-        rot = plskit.rotate(model.W, method="varimax", L=L)
-        R_rot = rot.spec.R
-        W_pre = rot.W_rot
-        rot_meta_pre = {
-            "rotate": "varimax",
-            "sweeps": rot.spec.sweeps,
-            "V_converged": rot.spec.V_converged,
-            "kaiser_normalized": rot.spec.args["kaiser_normalize"],
-        }
+def _varimax(W, L):
+    """Orthogonal ``R`` (k × k) from varimax of ``W`` against target ``L``, and plskit's diagnostics."""
+    rot = plskit.rotate(W, method="varimax", L=L)
+    meta = {
+        "sweeps": rot.spec.sweeps,
+        "V_converged": rot.spec.V_converged,
+        "kaiser_normalized": rot.spec.args["kaiser_normalize"],
+    }
+    return np.asarray(rot.spec.R, dtype=np.float64), meta
+
+
+_NO_ROTATION_META = {"sweeps": 0, "V_converged": 0.0, "kaiser_normalized": False}
+
+
+def pls1_rotate(W, Xs, ys, *, rotate, L=None):
+    """Rotate orthonormal weights ``W`` (D × N) and score each dimension.
+
+    ``rotate="words"`` runs varimax against ``L``, orders the dimensions by
+    ``|corr(Xs @ W_rot[:, i], ys)|``, descending, and flips each so that
+    correlation is positive. ``rotate=None`` (PLS1 weights from NIPALS)
+    keeps the NIPALS order and signs: NIPALS gives ``w_1 ∝ Xs' ys`` and orthonormal W, so dimensions
+    2…N have zero covariance with ``ys``, and ordering or signing them by it
+    would follow rounding noise.
+
+    ``cov_share[i]`` is ``(W_rot[:, i]' Xs' ys)²`` over its sum across i;
+    the sum, ``‖W' Xs' ys‖²``, is the same for every rotation.
+    """
+    k = W.shape[1]
+    if rotate is None:
+        R, meta = np.eye(k), dict(_NO_ROTATION_META)
     else:
-        raise ValueError(f"rotate must be 'raw' or 'varimax'; got {rotate!r}")
-
-    # Order by |corr(T_pre[:, i], y)| desc, sign-flip so corr > 0.
-    T_pre = Xs @ W_pre
-    y_c = ys - ys.mean()
-    y_norm = float(np.linalg.norm(y_c))
-    if y_norm < 1e-12:
-        y_norm = 1.0
-
-    corrs = np.zeros(n_components)
-    signs = np.ones(n_components)
-    for i in range(n_components):
-        ti = T_pre[:, i] - T_pre[:, i].mean()
-        t_norm = float(np.linalg.norm(ti))
-        if t_norm < 1e-12:
-            corrs[i] = 0.0
-            signs[i] = 1.0
-        else:
-            c = float(ti @ y_c) / (t_norm * y_norm)
-            corrs[i] = abs(c)
-            signs[i] = 1.0 if c >= 0 else -1.0
-
-    order = np.argsort(-corrs)
-    R_rot = R_rot[:, order] * signs[order][np.newaxis, :]
-
-    W_rot = W_pre[:, order] * signs[order][np.newaxis, :]
-    T_rot = T_pre[:, order] * signs[order][np.newaxis, :]
-
-    rotation_meta = {**rot_meta_pre, "R": R_rot,
-                     "order": order, "signs": signs[order]}
-
+        R, meta = _varimax(W, L)
+    W_rot = W @ R
+    score_corr = np.array([np.corrcoef(Xs @ W_rot[:, i], ys)[0, 1] for i in range(k)])
+    if rotate is None:
+        order, signs = np.arange(k), np.ones(k)
+    else:
+        order = np.argsort(-np.abs(score_corr), kind="stable")
+        signs = np.where(score_corr[order] < 0, -1.0, 1.0)
+    W_rot, R = W_rot[:, order] * signs, R[:, order] * signs
+    c = (W_rot.T @ (Xs.T @ ys)) ** 2
     return {
-        "W": model.W, "P": model.P, "Q": model.Q,
-        "W_rot": W_rot, "T_rot": T_rot,
-        "beta_combined": model.coef,
-        "order": order, "signs": signs[order],
-        "rotation_meta": rotation_meta,
+        "W_rot": W_rot, "R": R, "order": order, "signs": signs,
+        "score_corr": score_corr[order] * signs, "cov_share": c / c.sum(),
+        "rotation_meta": meta,
+    }
+
+
+def pls3_rotate(U, V, sigma, *, rotate, L=None):
+    """Rotate a PLS3 saliency pair with one shared orthogonal ``R``.
+
+    ``U_rot = U @ R`` and ``V_rot = V @ R``; ``c[i] = (R' Σ² R)_ii`` is the
+    squared cross-covariance of dimension i and sums to ``Σσ²`` for any R.
+    Varimax modes reorder by ``c``; every mode pins the sign so the
+    largest-|·| entry of each ``V_rot`` column is positive (plskit pins on
+    ``U``, an arbitrary embedding coordinate).
+
+    ``rotate="outcomes"`` with ``L=None`` targets the outcome loadings ``V``.
+    When V is square (k = q) it takes ``R = V'`` without varimax: the
+    rotation varimax converges to, each dimension loading 1 on one outcome.
+    """
+    k = U.shape[1]
+    if rotate is None:
+        R, meta = np.eye(k), dict(_NO_ROTATION_META)
+    elif rotate == "outcomes" and L is None and V.shape[0] == k:
+        R, meta = V.T.copy(), dict(_NO_ROTATION_META)
+    else:
+        R, meta = _varimax(U, V if L is None else L)
+    U_rot, V_rot = U @ R, V @ R
+    c = np.diag(R.T @ np.diag(sigma ** 2) @ R).copy()
+    order = np.arange(k) if rotate is None else np.argsort(-c, kind="stable")
+    U_rot, V_rot, R, c = U_rot[:, order], V_rot[:, order], R[:, order], c[order]
+    idx = np.argmax(np.abs(V_rot), axis=0)
+    signs = np.where(V_rot[idx, np.arange(k)] < 0, -1.0, 1.0)
+    return {
+        "U_rot": U_rot * signs, "V_rot": V_rot * signs, "R": R * signs,
+        "c": c, "order": order, "signs": signs, "rotation_meta": meta,
     }

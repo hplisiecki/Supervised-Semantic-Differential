@@ -9,6 +9,25 @@ from __future__ import annotations
 from dataclasses import MISSING, dataclass, fields
 
 
+def _setstate_filling_defaults(self, state):
+    """``__setstate__`` for a row class that gained trailing fields with defaults.
+
+    A pickle written before those fields existed has fewer state entries than
+    the class has fields; the missing tail takes the field defaults.
+    """
+    for i, f in enumerate(fields(self)):
+        if i < len(state):
+            object.__setattr__(self, f.name, state[i])
+        elif f.default is not MISSING:
+            object.__setattr__(self, f.name, f.default)
+        elif f.default_factory is not MISSING:
+            object.__setattr__(self, f.name, f.default_factory())
+        else:
+            raise TypeError(
+                f"Cannot unpickle {type(self).__name__}: state missing required field {f.name!r}"
+            )
+
+
 @dataclass(frozen=True, slots=True)
 class Word:
     """Single nearest-neighbor word ranked by cosine similarity to β.
@@ -34,6 +53,14 @@ class Word:
 
 
 @dataclass(frozen=True, slots=True)
+class Outcome:
+    """One outcome's loading on a PLS3 dimension (or a group's mean loading)."""
+    outcome: str
+    group: str | None
+    loading: float
+
+
+@dataclass(frozen=True, slots=True)
 class Cluster:
     """Summary row for one word cluster on a β pole.
 
@@ -56,7 +83,7 @@ class Cluster:
         Populated at cluster construction; empty string if not yet computed.
     top_snippet : str
         ``text_window`` of the highest-cosine snippet in this cluster.
-        Empty string when no corpus is attached or before view-level
+        Empty string when no text is attached or before view-level
         fill runs; populated by the view layer rebuilding the row via
         ``dataclasses.replace`` at first opt-in render.
     """
@@ -69,21 +96,7 @@ class Cluster:
     top_words: str = ""
     top_snippet: str = ""
 
-    def __setstate__(self, state):
-        # Old pickles (predating top_words/top_snippet) have fewer state
-        # entries than current fields; fill the tail with field defaults.
-        flds = fields(self)
-        for i, f in enumerate(flds):
-            if i < len(state):
-                object.__setattr__(self, f.name, state[i])
-            elif f.default is not MISSING:
-                object.__setattr__(self, f.name, f.default)
-            elif f.default_factory is not MISSING:
-                object.__setattr__(self, f.name, f.default_factory())
-            else:
-                raise TypeError(
-                    f"Cannot unpickle Cluster: state missing required field {f.name!r}"
-                )
+    __setstate__ = _setstate_filling_defaults
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,7 +137,7 @@ class Snippet:
     side : str
         ``"pos"`` or ``"neg"``.
     doc_id : int
-        Index into the parent corpus (aligns with ``Doc.doc_id``).
+        Index into the fit text (aligns with ``Doc.doc_id``).
     cosine : float
         Cosine similarity between the snippet's SIF-weighted vector and the
         semantic gradient.
@@ -144,8 +157,6 @@ class Snippet:
         Cluster this snippet's seed belongs to, if clusters were computed.
     contrast : str or None
         Group contrast key; ``None`` for continuous results.
-    post_id : int or None
-        Within-document post index for multi-post documents (e.g. forum data).
     """
     snippet_id: int
     side: str
@@ -161,7 +172,6 @@ class Snippet:
     text_lemmas: str
     cluster_id: int | None = None
     contrast: str | None = None
-    post_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -229,31 +239,44 @@ class Suggestion:
     Fields
     ------
     token : str
-        Lemma / surface form from the corpus vocabulary.
+        Lemma / surface form from the text vocabulary.
     freq : int
         Number of documents containing this token.
     cov_all : float
         Fraction of all documents containing this token.
-    cov_bal : float
+    cov_bal : float or None
         Balanced coverage — fraction after equalizing group sizes.
-    corr : float
+    corr : float or None
         Point-biserial or Spearman correlation with the outcome variable.
-    pvalue : float
+    pvalue : float or None
         P-value for the correlation (uncorrected).
-    direction : str
+    direction : str or None
         ``"positive"``, ``"negative"``, or ``"none"`` — sign of ``corr``.
-    rank : float
+    rank : float or None
         Combined ranking score: balanced coverage × (1 − |corr| / corr_cap).
-        Lower is better.
+        Higher is better.
+    seed : str or None
+        Of the seeds that list this token, the one it is closest to;
+        ``None`` without seeds.
+    cos : float or None
+        Cosine between the token's and that seed's embedding vectors;
+        ``None`` without seeds.
+
+    ``cov_bal``, ``corr``, ``pvalue``, ``direction`` and ``rank`` are ``None``
+    when the lexicon was computed with ``y=None``.
     """
     token: str
     freq: int
     cov_all: float
-    cov_bal: float
-    corr: float
-    pvalue: float
-    direction: str          # "positive", "negative", "none"
-    rank: float             # balanced coverage × (1 − |corr|/corr_cap)
+    cov_bal: float | None
+    corr: float | None
+    pvalue: float | None
+    direction: str | None   # "positive", "negative", "none"
+    rank: float | None      # balanced coverage × (1 − |corr|/corr_cap)
+    seed: str | None = None
+    cos: float | None = None
+
+    __setstate__ = _setstate_filling_defaults
 
 
 @dataclass(frozen=True, slots=True)
@@ -267,17 +290,18 @@ class Stats:
     Fields
     ------
     backend : str
-        ``"PLS"`` or ``"PCA+OLS"``.
+        ``"PLS"``, ``"PCA+OLS"``, or ``"PCA+GLMM"`` (``fit_regression`` with
+        random effects or a model other than Gaussian identity-link).
     r2 : float
         In-sample R² (variance explained by β).
     pvalue : float
         P-value from the active statistical test.
     n_raw : int
-        Total documents before preprocessing.
+        Documents in the text.
     n_kept : int
-        Documents retained after filtering (missing embeddings, short texts).
+        Documents retained after filtering (missing outcome, missing embeddings, short texts).
     n_dropped : int
-        Documents dropped during preprocessing.
+        Documents dropped: ``n_raw - n_kept``.
     y_mean, y_std : float
         Mean and standard deviation of the outcome on its original scale.
     beta_norm : float
@@ -291,7 +315,7 @@ class Stats:
     r2_adj : float or None
         Adjusted R² (PCA+OLS only).
     """
-    backend: str            # "PLS" | "PCA+OLS"
+    backend: str            # "PLS" | "PCA+OLS" | "PCA+GLMM"
     r2: float
     pvalue: float
     n_raw: int
@@ -319,6 +343,8 @@ class FitInfo:
     """
     n_components: int | None = None
     # PLS-specific
+    # pca_k and split_mean_r are never filled but stay: FitInfo unpickles by field
+    # position, so removing one would shift the later values of old pickles.
     pca_k: int | None = None
     p_at_k: int | None = None        # k at which the reported p-value was tested
     n_splits: int | None = None
@@ -330,21 +356,47 @@ class FitInfo:
     k_step: int | None = None
     best_k: int | None = None
     pca_k_source: str | None = None  # "sweep" | "fixed" | None (PLS)
+    formula: str | None = None       # fit_regression / fit_pls formula as given
+    family: str | None = None        # glmm family of fit_regression
+    ssd_gradients: int | None = None  # fit_pls, fit_regression: number of gradients returned
+    rotate: str | None = None        # their rotation (fit_regression: "words"); None for one
+    outcome: str | None = None       # the outcome's column name; "y" when given as values
+
+    __setstate__ = _setstate_filling_defaults
 
 
 @dataclass(frozen=True, slots=True)
 class Summary:
     """LexiconResult summary (present only after evaluate_lexicon).
 
-    Raw floats here; formatting is applied at render time (D11).
+    Raw floats here; formatting is applied at render time.
+    ``q1``, ``q4`` and ``corr_any`` are ``None`` when computed with ``y=None``.
     """
     docs_any: int
     cov_all: float
-    q1: float
-    q4: float
-    corr_any: float
+    q1: float | None
+    q4: float | None
+    corr_any: float | None
     hits_mean: float
     hits_median: float
     types_mean: float
     types_median: float
     group_cov: dict[str, float] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TermTest:
+    """One row of a regression's ``test`` table.
+
+    ``label`` is ``None`` for the all-text test, else the term label. A refit
+    row (``f_test`` or ``lrt``) carries ``r2_delta``; a Wald row (``wald_f``
+    or ``wald_chisq``) has ``r2_delta=None``, and ``wald_chisq`` has
+    ``df_resid=None``.
+    """
+    label: str | None
+    name: str
+    pvalue: float
+    statistic: float
+    df: float
+    df_resid: float | None
+    r2_delta: float | None

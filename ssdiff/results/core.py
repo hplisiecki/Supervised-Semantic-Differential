@@ -1,16 +1,18 @@
 """Result ABC, View / ScalarView protocols, parameter-keyed cache.
 
 The cache is a dict keyed on (view_name, frozen_params).
-Each distinct parameter set gets its own entry — this is how we
-fix the stale-cache bug documented in the spec (issue #2).
+Each distinct parameter set gets its own entry, so a view asked for with
+new parameters is never served a stale result.
 """
 
 from __future__ import annotations
 
+import copy
 import csv as _csv
 import html as _html
 import io
 import json
+import os
 import warnings
 from abc import ABC
 from collections.abc import Callable, Iterator, Sequence
@@ -30,9 +32,8 @@ from ssdiff.results.display import (
     build_view_save_hint,
 )
 
-# ``DEFAULT_COLS`` / ``DEFAULT_MAX_ROWS`` live in ``results.display`` as part
-# of the display-layer scaffolding. Re-exported here so existing internal
-# imports (``from ssdiff.results.core import DEFAULT_MAX_ROWS``) keep working.
+# ``DEFAULT_COLS`` / ``DEFAULT_MAX_ROWS`` are defined in ``results.display`` and
+# re-exported here.
 
 T = TypeVar("T")
 
@@ -66,7 +67,7 @@ def _import_pandas():
 # ---------------- cols validation --------------------------------------------
 
 def _validate_cols(cols, view: View) -> tuple[tuple[str, ...], str | None]:
-    """Enforce D9 rules on a `cols` argument.
+    """Validate a `cols` argument.
 
     Returns (keep, warning_message_or_None).
 
@@ -126,17 +127,19 @@ def _json_default(obj):
 
 # ---------------- save() extension helpers -----------------------------------
 # ``TABULAR_EXTS`` lives in ``display`` next to the filename / column registries.
-SUPPORTED_EXTS = TABULAR_EXTS  # backward-compat re-export
+SUPPORTED_EXTS = TABULAR_EXTS  # alias of TABULAR_EXTS
 
 
 def _get_ext(path: str) -> str:
     """Extract and lowercase the file extension from ``path``, or raise ValueError."""
-    if "." not in path:
+    # The suffix of the last path part, so a dot in a folder name is not taken.
+    suffix = Path(path).suffix
+    if not suffix:
         raise ValueError(
             f"save() requires a path with an extension; got {path!r}. "
             f"Supported: {TABULAR_EXTS}"
         )
-    return path.rsplit(".", 1)[-1].lower()
+    return suffix[1:].lower()
 
 
 def _check_ext(ext: str) -> None:
@@ -199,20 +202,84 @@ def _write_xlsx(rows: list[dict], cols: Sequence[str], path: str) -> None:
     df.to_excel(path, index=False)
 
 
+# A rule of a .docx table: 1.5 pt (w:sz is in eighths of a point), black.
+_DOCX_RULE = {"val": "single", "sz": "12", "space": "0", "color": "000000"}
+
+
+def _add_docx_table(doc, headers: Sequence[str] | None, rows: Sequence[Sequence[str]], *,
+                    caption: str | None = None, widths: Sequence[float] | None = None,
+                    center: Sequence[int] = ()) -> None:
+    """Append a captioned table in the layout of a paper's results section.
+
+    Three horizontal rules and no vertical ones: above and below the header
+    row and under the last row. Times New Roman 11 pt, bold header, an italic
+    caption paragraph above the table. Run-level formatting, not document
+    styles, so the table keeps its look when pasted into another document.
+
+    *headers* is ``None`` for a table without a header row (the first rule
+    then sits above the first row). *widths* are fractions of the page's text
+    width, one per column; equal when ``None``. Columns in *center* are
+    centred.
+    """
+    from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    from docx.shared import Pt
+
+    def add_run(par, text, *, bold=False, italic=False):
+        run = par.add_run(text)
+        run.bold, run.italic = bold, italic
+        run.font.name, run.font.size = "Times New Roman", Pt(11)
+
+    if caption:
+        par = doc.add_paragraph()
+        par.paragraph_format.space_before = Pt(12)
+        par.paragraph_format.space_after = Pt(3)
+        add_run(par, caption, italic=True)
+
+    lines = ([list(headers)] if headers is not None else []) + [list(r) for r in rows]
+    if not lines:
+        return
+    n_cols = len(lines[0])
+    section = doc.sections[-1]
+    text_width = section.page_width - section.left_margin - section.right_margin
+    col_widths = [int(text_width * w) for w in (widths or [1 / n_cols] * n_cols)]
+
+    table = doc.add_table(rows=len(lines), cols=n_cols)
+    table.autofit = False
+    for col, w in zip(table.columns, col_widths):
+        col.width = w
+    last = len(lines) - 1
+    for i, values in enumerate(lines):
+        is_header = headers is not None and i == 0
+        rules = {"top": i == 0, "left": False, "bottom": is_header or i == last, "right": False}
+        for j, (cell, text) in enumerate(zip(table.rows[i].cells, values)):
+            cell.width = col_widths[j]
+            borders = OxmlElement("w:tcBorders")
+            for edge, on in rules.items():
+                el = OxmlElement(f"w:{edge}")
+                for k, v in (_DOCX_RULE if on else {"val": "nil"}).items():
+                    el.set(qn(f"w:{k}"), v)
+                borders.append(el)
+            cell._tc.get_or_add_tcPr().append(borders)
+            cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+            par = cell.paragraphs[0]
+            par.paragraph_format.space_before = par.paragraph_format.space_after = Pt(0)
+            par.paragraph_format.line_spacing = 1.0
+            if j in center:
+                par.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            add_run(par, str(text), bold=is_header)
+
+
 def _write_docx_table(rows: list[dict], cols: Sequence[str], path: str,
                       *, title: str | None = None) -> None:
-    """Write rows as a .docx table, with an optional heading, using python-docx."""
+    """Write rows as a .docx table, captioned with *title*, using python-docx."""
     from ssdiff.results.format import fmt_cell
     docx = _require("docx", extra="results")
     doc = docx.Document()
-    if title:
-        doc.add_heading(title, level=1)
-    table = doc.add_table(rows=1 + len(rows), cols=len(cols))
-    for j, c in enumerate(cols):
-        table.rows[0].cells[j].text = str(c)
-    for i, r in enumerate(rows, start=1):
-        for j, c in enumerate(cols):
-            table.rows[i].cells[j].text = fmt_cell(r.get(c), c)
+    _add_docx_table(doc, [str(c) for c in cols],
+                    [[fmt_cell(r.get(c), c) for c in cols] for r in rows], caption=title)
     doc.save(path)
 
 
@@ -228,7 +295,7 @@ class View(Generic[T]):
       - `params` property (for parameterized views; `{}` for paramless)
 
     Output methods (to_df, to_csv, …) are defined further down in this module
-    (Task 4) directly on `View` / `ScalarView`.
+    directly on `View` / `ScalarView`.
     """
 
     _name: str = ""
@@ -298,7 +365,7 @@ class View(Generic[T]):
             return body + "\n" + self._save_hint_html()
         return body
 
-    # -------- D8/D9 tabular output family --------------------------------
+    # -------- tabular output (to_dict, to_rows, to_df, save) -------------
     def to_dict(self, cols=None) -> list[dict]:
         """Return a list of row dicts, optionally restricted to ``cols``.
 
@@ -692,7 +759,7 @@ class Result(ABC):  # noqa: B024 — marker base class; subclasses share infra, 
     """
 
     embeddings: Any = None
-    corpus: Any = None
+    text: Any = None
     _access: tuple[str, ...] = ()
     _arrays: tuple[str, ...] = ()
 
@@ -784,26 +851,141 @@ class Result(ABC):  # noqa: B024 — marker base class; subclasses share infra, 
         """Two-form cache clearing.
 
         `clear_cache()` drops everything; `clear_cache("clusters")` drops
-        all entries whose view_name matches. No by-params form (D5).
+        all entries whose view_name matches. There is no form that clears by parameters.
         """
         if view is None:
             self._cache = {}
             return
         self._cache = {k: v for k, v in self._cache.items() if k[0] != view}
 
-    # -------- attach -----------------------------------------------------
-    def attach(self, corpus=None, embeddings=None) -> Result:
-        """Re-wire corpus / embeddings references after un-pickling (D14)."""
-        if corpus is not None:
-            self.corpus = corpus
+    # -------- pickling / attach ------------------------------------------
+    def __getstate__(self) -> dict:
+        state = self.__dict__.copy()
+        emb = state.get("embeddings")
+        if getattr(emb, "_pack", None) is not None:
+            # A wordpack is read from its file and cannot be pickled; attach()
+            # takes it back and checks it against this record.
+            state["embeddings"] = None
+            state["_wordpack"] = {"name": emb.name, "version": emb.version, "abtt": emb.abtt}
+        return state
+
+    def __deepcopy__(self, memo: dict) -> Result:
+        # Bypasses __getstate__, so a copy keeps a wordpack embedding.
+        new = object.__new__(type(self))
+        memo[id(self)] = new
+        new.__dict__.update(copy.deepcopy(self.__dict__, memo))
+        return new
+
+    def attach(self, texts=None, embeddings=None) -> Result:
+        """Re-wire the text / embeddings references after un-pickling.
+
+        ``texts`` are strings, or token lists when the fit was on token lists,
+        with the same number of documents as the fit's text; they are
+        tokenized with the result's embeddings. ``embeddings`` is an
+        ``Embeddings`` or a path to load. A result fit on
+        a wordpack is pickled without it: attach the same pack (name and
+        version) at the fit's ABTT; a path is loaded at that ABTT. A result
+        fit on another format keeps its Embeddings, and attach checks new ones
+        against their ABTT; once they are removed nothing records it, so
+        attach an ``Embeddings`` normalized as for the fit.
+        """
+        fit_emb = getattr(self, "embeddings", None)
+        pack = getattr(self, "_wordpack", None)
+        if isinstance(embeddings, (str, os.PathLike)):
+            from ssdiff.embeddings import Embeddings
+
+            embeddings = Embeddings.load(embeddings)
+            if pack is not None and embeddings._pack is not None:
+                embeddings.normalize(abtt=pack["abtt"])
+        if pack is not None and embeddings is not None:
+            got = {"name": embeddings.name, "version": embeddings.version, "abtt": embeddings.abtt}
+            if got != pack:
+                raise ValueError(
+                    f"This result was fit on wordpack {pack['name']}-{pack['version']} at "
+                    f"abtt={pack['abtt']}; got {got['name']}-{got['version']} at abtt={got['abtt']}."
+                )
+        elif embeddings is not None and fit_emb is not None and embeddings.abtt != fit_emb.abtt:
+            raise ValueError(f"This result was fit on embeddings at abtt={fit_emb.abtt}; got abtt={embeddings.abtt}.")
+        if embeddings is not None and not embeddings.l2_normalized:
+            raise RuntimeError(
+                "This result was fit on L2-normalised embeddings. Normalize them as "
+                "for the fit, e.g. Embeddings.load(path).normalize(l2=True, abtt=N), "
+                "and attach the Embeddings."
+            )
+        text = getattr(self, "text", None)
+        if texts is not None:
+            new_text = self._text_from(texts, embeddings if embeddings is not None else fit_emb)
+            if text is not None and len(new_text) != len(text):
+                raise ValueError(
+                    f"attach(texts=...) got {len(new_text)} documents; the fit's text has {len(text)} documents."
+                )
+            self.text = new_text
+        elif embeddings is not None and text is not None:
+            from ssdiff.ssd import _check_tokenizer
+
+            _check_tokenizer(embeddings, text)
         if embeddings is not None:
             self.embeddings = embeddings
+        if (texts is not None or embeddings is not None) and (
+            getattr(self, "text", None) is not None and getattr(self, "embeddings", None) is not None
+        ):
+            # Snippets look up every token; a partial embedding would read each
+            # row outside its RAM prefix from the file on every lookup.
+            self.embeddings = self.embeddings.with_corpus(self.text)
+            if self.text.embeddings is None:
+                self.text.embeddings = self.embeddings
         return self
+
+    def _text_from(self, texts, embeddings):
+        """An ``SSD`` of *texts* in the form of the fit's text, with its lexicon and settings.
+
+        Raises ``TypeError`` for the other form (strings vs token lists).
+        """
+        from ssdiff.ssd import SSD
+
+        if embeddings is None:
+            raise RuntimeError("These texts need embeddings; attach(embeddings=...) first.")
+        text = getattr(self, "text", None)
+        if isinstance(texts, str):
+            raise TypeError("texts is a single string; pass a list of texts, e.g. [text].")
+        texts = list(texts)
+        if text is not None and texts:
+            given = isinstance(texts[0], (list, tuple))
+            if given != (text.pre_docs is None):
+                raise TypeError(
+                    "This result was fit on token lists; pass token lists, one list of tokens per document."
+                    if text.pre_docs is None else
+                    "This result was fit on strings; pass strings, not token lists."
+                )
+        return SSD(
+            texts, embeddings=embeddings, lexicon=self.lexicon, window=self.window,
+            sif_a=self.sif_a, use_full_doc=getattr(text, "use_full_doc", False),
+        )
+
+    # -------- results page -------------------------------------------------
+    def page_data(self, *, title=None, dataset=None, snippets_per_side=200,
+                  snippets_per_cluster=50, doc_texts=50) -> dict:
+        """This result as the JSON object of the HTML results page. See ``save_page``."""
+        from ssdiff.results.page import page_data
+        return page_data(self, title=title, dataset=dataset, snippets_per_side=snippets_per_side,
+                         snippets_per_cluster=snippets_per_cluster, doc_texts=doc_texts)
+
+    def save_page(self, path="ssd_results.html", *, title=None, dataset=None, snippets_per_side=200,
+                  snippets_per_cluster=50, doc_texts=50) -> None:
+        """Write a self-contained HTML results page that opens from disk with no network.
+
+        ``doc_texts`` keeps the text of the ``doc_texts`` highest- and lowest-scoring
+        documents (and, for PLS and PCA+OLS, the most over- and under-predicted);
+        ``None`` keeps every document's text, ``0`` none.
+        """
+        from ssdiff.results.page import save_page
+        save_page(self, path, title=title, dataset=dataset, snippets_per_side=snippets_per_side,
+                  snippets_per_cluster=snippets_per_cluster, doc_texts=doc_texts)
 
     def _require_resource(self, resource: str, view_name: str) -> None:
         """Raise with an actionable hint when an accessor needs a missing resource."""
         if getattr(self, resource, None) is None:
             raise RuntimeError(
                 f"{view_name} needs {resource} but none is attached. "
-                f"Call result.attach({resource}=...) first."
+                f"Call result.attach({'texts' if resource == 'text' else resource}=...) first."
             )

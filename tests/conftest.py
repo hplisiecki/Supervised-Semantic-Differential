@@ -6,16 +6,17 @@ network access, or spaCy downloads needed.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
+import os
 
 import matplotlib
 
 matplotlib.use("Agg")
 
 import numpy as np
+import pandas as pd
 import pytest
 
-from ssdiff.corpus import Corpus
 from ssdiff.embeddings import Embeddings
 from ssdiff.utils.text import PreprocessedDoc
 
@@ -118,11 +119,6 @@ def sample_groups() -> np.ndarray:
     return np.array(["A", "A", "A", "A", "B", "B", "B", "B"], dtype=object)
 
 
-@pytest.fixture(scope="session")
-def sample_groups_3() -> np.ndarray:
-    return np.array(["X", "X", "X", "Y", "Y", "Z", "Z", "Z"], dtype=object)
-
-
 # --- Larger fixtures for group tests (need >=20 docs per group) ---
 
 def _make_large_docs(n: int, rng: np.random.Generator) -> list[list[str]]:
@@ -149,12 +145,6 @@ def large_docs() -> list[list[str]]:
 def large_groups_2() -> np.ndarray:
     """2 groups, 25 each."""
     return np.array(["A"] * 25 + ["B"] * 25, dtype=object)
-
-
-@pytest.fixture(scope="session")
-def large_groups_3() -> np.ndarray:
-    """3 groups: 20, 15, 15."""
-    return np.array(["X"] * 20 + ["Y"] * 15 + ["Z"] * 15, dtype=object)
 
 
 @pytest.fixture(scope="session")
@@ -224,107 +214,93 @@ def sample_preprocessed_docs() -> list[PreprocessedDoc]:
 
 
 # ---------------------------------------------------------------------------
-# Mock spaCy objects (for preprocess tests without spaCy)
-# ---------------------------------------------------------------------------
-
-@dataclass
-class MockToken:
-    text: str
-    lemma_: str
-    is_space: bool = False
-    is_punct: bool = False
-    is_quote: bool = False
-    is_currency: bool = False
-    is_digit: bool = False
-
-
-class MockSent:
-    def __init__(self, tokens, text, start_char, end_char):
-        self._tokens = tokens
-        self.text = text
-        self.start_char = start_char
-        self.end_char = end_char
-
-    def __iter__(self):
-        return iter(self._tokens)
-
-
-class MockDoc:
-    def __init__(self, sents, text):
-        self._sents = sents
-        self.text = text
-
-    @property
-    def sents(self):
-        return iter(self._sents)
-
-
-def _fake_nlp_pipe(texts, batch_size=64, n_process=1):
-    for t in texts:
-        words = t.split()
-        tokens = [MockToken(text=w, lemma_=w.lower()) for w in words]
-        sent = MockSent(tokens, text=t, start_char=0, end_char=len(t))
-        yield MockDoc(sents=[sent], text=t)
-
-
-class FakeNlp:
-    pipe_names = ["sentencizer"]
-
-    def pipe(self, texts, batch_size=64, n_process=1):
-        return _fake_nlp_pipe(texts, batch_size, n_process)
-
-
-@pytest.fixture
-def fake_nlp():
-    return FakeNlp()
-
-
-# ---------------------------------------------------------------------------
 # Fitted result fixtures (for test_results.py)
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="session")
-def ssd_instance(tiny_kv, sample_docs, sample_y, lexicon):
-    """SSD data container (no fit yet)."""
+def ssd_instance(parity_emb, parity_df, parity_lexicon):
+    """SSD text on the parity wordpack: strings, so ``pre_docs`` (snippets) exist."""
     from ssdiff.ssd import SSD
-    corpus = Corpus(sample_docs, pretokenized=True, lang="pl")
-    return SSD(tiny_kv, corpus, sample_y, lexicon)
+    return SSD(parity_df["text"], embeddings=parity_emb, lexicon=parity_lexicon)
+
+
+@pytest.fixture
+def two(parity_emb, parity_df, parity_lexicon):
+    """Two texts over the parity rows: ``essay`` from strings, ``diary`` from token lists."""
+    from ssdiff.ssd import SSD
+    essay = SSD(parity_df["text"], embeddings=parity_emb, lexicon=parity_lexicon)
+    diary = SSD(essay.docs[::-1], embeddings=parity_emb, lexicon=parity_lexicon)
+    return essay, diary
 
 
 @pytest.fixture(scope="session")
-def pls_result(ssd_instance):
+def pls_result(ssd_instance, parity_df):
     """Fitted PLSResult from SSD.fit_pls()."""
-    return ssd_instance.fit_pls(k=2, n_splits=20, random_state=42)
+    return ssd_instance.fit_pls(parity_df["y"], k=2, n_splits=20, random_state=42)
 
 
 @pytest.fixture(scope="session")
-def pcaols_result(ssd_instance):
-    """Fitted PCAOLSResult from SSD.fit_ols()."""
-    return ssd_instance.fit_ols(fixed_k=3)
+def pcaols_result(ssd_instance, parity_df):
+    """Fitted PCAOLSResult from SSD.fit_regression()."""
+    return ssd_instance.fit_regression(parity_df["y"], fixed_k=3)
 
 
 @pytest.fixture(scope="session")
 def pcaols_result_sweep(tiny_kv, large_docs, large_y, lexicon):
     """Fitted PCAOLSResult with sweep (fixed_k=None)."""
     from ssdiff.ssd import SSD
-    corpus = Corpus(large_docs, pretokenized=True, lang="pl")
-    ssd = SSD(tiny_kv, corpus, large_y, lexicon)
-    return ssd.fit_ols(fixed_k=None, k_min=2, k_max=6, k_step=1)
+    ssd = SSD(large_docs, embeddings=tiny_kv, lexicon=lexicon)
+    return ssd.fit_regression(large_y, fixed_k=None, k_min=2, k_max=6, k_step=1)
 
 
 @pytest.fixture(scope="session")
 def group_result_2g(tiny_kv, large_docs, large_groups_2, lexicon):
     """Fitted GroupResult with 2 groups."""
     from ssdiff.ssd import SSD
-    corpus = Corpus(large_docs, pretokenized=True, lang="pl")
-    ssd = SSD(tiny_kv, corpus, large_groups_2, lexicon)
-    return ssd.fit_groups(n_perm=50, random_state=42)
+    ssd = SSD(large_docs, embeddings=tiny_kv, lexicon=lexicon)
+    return ssd.fit_groups(large_groups_2, n_perm=50, random_state=42)
 
 
 @pytest.fixture(scope="session")
 def group_result_3g(tiny_kv, large_docs_3x20, large_groups_3x20, lexicon):
     """Fitted GroupResult with 3 groups."""
     from ssdiff.ssd import SSD
-    corpus = Corpus(large_docs_3x20, pretokenized=True, lang="pl")
-    ssd = SSD(tiny_kv, corpus, large_groups_3x20, lexicon)
-    return ssd.fit_groups(n_perm=50, random_state=42)
+    ssd = SSD(large_docs_3x20, embeddings=tiny_kv, lexicon=lexicon)
+    return ssd.fit_groups(large_groups_3x20, n_perm=50, random_state=42)
+
+
+# ---------------------------------------------------------------------------
+# Wordpack fixture
+# ---------------------------------------------------------------------------
+
+PARITY_DIR = os.path.join(os.path.dirname(__file__), "fixtures", "r_parity")
+
+WORDPACK_FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "wordpack", "fixture.wordpack")
+
+
+@pytest.fixture(scope="session")
+def wordpack_path() -> str:
+    """Synthetic wordpack: 48 keys, D = 16, name ``en-fixture`` version ``1``."""
+    return WORDPACK_FIXTURE
+
+
+@pytest.fixture(scope="session")
+def parity_emb() -> Embeddings:
+    """English wordpack (10,000 words, 100 dims) shared with the R parity fixtures."""
+    return Embeddings.load(os.path.join(PARITY_DIR, "parity.wordpack"))
+
+
+def _parity_texts() -> dict:
+    with open(os.path.join(PARITY_DIR, "texts.json")) as f:
+        return json.load(f)
+
+
+@pytest.fixture(scope="session")
+def parity_df() -> pd.DataFrame:
+    """240 texts with columns ``text``, ``y``, ``y2``, ``group``, ``cov``."""
+    return pd.DataFrame({k: v for k, v in _parity_texts().items() if k != "lexicon"})
+
+
+@pytest.fixture(scope="session")
+def parity_lexicon() -> list[str]:
+    return _parity_texts()["lexicon"]

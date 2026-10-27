@@ -2,7 +2,7 @@
 
 `ssdiff` is the reference Python implementation of the **Supervised Semantic Differential** (Plisiecki et al., 2025) — a method for finding interpretable semantic dimensions in text data that link to numeric outcomes or categorical groups.
 
-This folder holds four tiers of documentation plus a runnable demo. Start wherever fits your need.
+This folder holds three tiers of documentation; runnable examples are in [`../examples/`](../examples/). Start wherever fits your need.
 
 ---
 
@@ -12,9 +12,16 @@ This folder holds four tiers of documentation plus a runnable demo. Start wherev
 
 | Read this | When you want to… |
 |---|---|
-| [`api_reference.md`](api_reference.md) | Fit a model. Covers `Embeddings`, `Corpus`, `SSD`, and the fit methods (`fit_ols`, `fit_pls`, `fit_groups`, plus the in-development `fit_multipls`) with argument tables and a full workflow example. Results are only sketched here. |
-| [`../examples/demo_api.py`](../examples/demo_api.py) | See the whole pipeline in ~50 lines — load embeddings, build a corpus, fit PLS / PCA+OLS / groups, print stats, export a report. |
-| [`../examples/demo_multipls.py`](../examples/demo_multipls.py) | Minimal runnable example for the in-development `fit_multipls` (rotated multi-component PLS). |
+| [`embeddings.md`](embeddings.md) | Get embeddings and texts ready. The ready English packs (`Embeddings.load()`), tags and full names, where packs are stored, and loading your own embedding file with token lists for another language. |
+| [`api_reference.md`](api_reference.md) | Fit a model. Covers `Embeddings`, `SSD`, the fit methods (`fit_regression`, `fit_pls`, `fit_groups`, `fit_multipls`), formulas with the text term `ssd()`, several texts, `contrast`, and a full workflow example. Results are only sketched here. |
+| [`../examples/regression_quickstart.py`](../examples/regression_quickstart.py) | `ssdiff.fit_regression("score ~ women + ssd(text)", df)`: the text built from a column with every default, and the statsmodels names of the result. |
+| [`../examples/regression.py`](../examples/regression.py) | `fit_regression`: the text as a predictor, alone and with a covariate. |
+| [`../examples/regression_interaction.py`](../examples/regression_interaction.py) | An interaction with the text, `score ~ women * ssd()`, its tests, and `contrast`. |
+| [`../examples/pls.py`](../examples/pls.py) | `fit_pls`: alone, with a covariate, and with several rotated gradients. |
+| [`../examples/lexicon_analysis.py`](../examples/lexicon_analysis.py) | Build a lexicon with the lexicon helpers, then fit on the lexicon contexts. |
+| [`../examples/several_outcomes.py`](../examples/several_outcomes.py) | `fit_multipls`: one text against several outcomes. |
+| [`../examples/between_group_differences.py`](../examples/between_group_differences.py) | `fit_groups`: how the texts of labelled groups differ. |
+| [`../examples/custom_embedding.py`](../examples/custom_embedding.py) | Your own embedding file and token lists made with spaCy. |
 
 
 ### For power users — making results do what you want
@@ -34,7 +41,6 @@ This folder holds four tiers of documentation plus a runnable demo. Start wherev
 
 ## Also in this folder
 
-- [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md) — current rough edges and open items.
 - [`sweep_plot.png`](sweep_plot.png) — example PCA+OLS sweep chart.
 
 ---
@@ -42,50 +48,25 @@ This folder holds four tiers of documentation plus a runnable demo. Start wherev
 ## One-minute orientation
 
 ```python
-from ssdiff import Embeddings, Corpus, SSD
+from ssdiff import Embeddings, SSD
 
-emb    = Embeddings.load("glove.ssdembed")
-corpus = Corpus(texts, lang="en")
-ssd    = SSD(emb, corpus, y=scores, lexicon=["happy", "sad", "joy"])
+emb = Embeddings.load()                    # the default English wordpack, downloaded once
+ssd = SSD(df["text"], embeddings=emb, lexicon=["happy", "sad", "joy"])   # one text, no outcome
 
-result = ssd.fit_ols()          # PCA + OLS, F-test p-value
-# result = ssd.fit_pls()        # PLS with split-half test
-# result = ssd.fit_groups()     # categorical outcome, permutation test
-# result = ssd.fit_multipls(k=2)  # rotated multi-component PLS — in development
+result = ssd.fit_regression("score", data=df)   # PCA regression, F-test p-value
+# result = ssd.fit_regression("score ~ age + sex*ssd()", data=df)  # covariates and interactions
+# result = ssd.fit_pls("score", data=df)        # PLS with split-half test
+# result = ssd.fit_groups("condition", data=df) # categorical outcome, permutation test
+# result = ssd.fit_multipls(["a", "b"], data=df) # several outcomes, PLS3
 
 print(result.stats)             # headline r², p, n_kept, iqr_effect
 print(result.words.pos)         # top 20 β-pos neighbors
 result.report().save("report.md")
 ```
 
-See [`../examples/demo_api.py`](../examples/demo_api.py) for a runnable end-to-end script, and [`../examples/demo_multipls.py`](../examples/demo_multipls.py) for the rotated multi-component variant.
+The outcome is the first argument of each fit: values, a column name of `data`, or a formula. Several texts in one model use `ssdiff.fit_regression("score ~ ssd(essay) + ssd(diary)", df)`; each `ssd(name)` is a text passed as a keyword (`essay=SSD(...)`), else the column `name` of `df` with every default. Two fitted gradients are compared with `ssdiff.contrast(g1, g2, emb)`.
 
----
-
-## Low-RAM mode
-
-For machines that cannot fit the full embedding matrix in RAM (Colab free
-tier, 8 GB laptops, etc.), pass `ram_efficient=True` to
-`Embeddings.load`. Only an uncompressed `.ssdembed` file works in this
-mode — convert other formats once with the snippet below.
-
-```python
-# One-time: convert any format to .ssdembed and pre-normalise.
-emb = Embeddings.load("model.bin").normalize(l2=True, abtt=1)
-emb.save("model_norm")  # → model_norm.ssdembed
-
-# Each subsequent run:
-emb = Embeddings.load("model_norm.ssdembed", ram_efficient=True)
-ssd = SSD(emb, corpus, y, lexicon).fit_pls()  # loads the words your corpus needs
-```
-
-`SSD(...)` pulls in any corpus words beyond the top-50k automatically, so the
-same `ram_efficient=True` load can be reused across several corpora.
-
-RAM mode is read-only: `normalize`, `save`, and `SSD.fit_multipls` raise.
-For the full PLS / PCA+OLS / group-comparison pipeline this is enough —
-`fit_multipls` is the only fit method that needs the full vocabulary as a
-rotation target.
+See [`../examples/pls.py`](../examples/pls.py) for a runnable end-to-end script, and [`../examples/several_outcomes.py`](../examples/several_outcomes.py) for `fit_multipls`.
 
 ---
 

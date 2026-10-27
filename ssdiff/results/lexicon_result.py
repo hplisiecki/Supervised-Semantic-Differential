@@ -9,6 +9,12 @@ from ssdiff.results.format import fmt_count, fmt_d, fmt_p, fmt_pct, fmt_r
 from ssdiff.results.report import Report, Section, _resolve_section
 from ssdiff.results.schema import Suggestion, Summary
 
+
+def _opt(fmt, value, **kw) -> str:
+    """Format *value* with *fmt*; an outcome statistic that is ``None`` shows as empty."""
+    return "" if value is None else fmt(value, **kw)
+
+
 # ---------- LexiconStatsView (ScalarView) ----------
 
 class LexiconStatsView(ScalarView):
@@ -71,25 +77,35 @@ class SuggestionsView(View[Suggestion]):
 
     def __getitem__(self, i):
         if isinstance(i, slice):
-            return SuggestionsView(self._rows[i], _no_trunc=True)
+            return type(self)(self._rows[i], _no_trunc=True)
         return self._rows[i]
+
+
+class SeedSuggestionsView(SuggestionsView):
+    """Suggestions found from seeds: each token with its closest seed, highest cosine first."""
+
+    _columns = (
+        "seed", "token", "cos", "freq", "cov_all", "cov_bal", "corr", "pvalue",
+        "direction", "rank",
+    )
 
 
 # ---------- LexiconResult ----------
 
 class LexiconResult(Result):
-    """Result from Corpus.suggest_lexicon() or Corpus.evaluate_lexicon().
+    """Result from suggest_lexicon() or evaluate_lexicon().
 
     Attributes
     ----------
     stats : LexiconStatsView
         ScalarView exposing var_type, n_docs, n_tokens.
     suggestions : SuggestionsView
-        View of Suggestion rows in rank order.
+        View of Suggestion rows. A SeedSuggestionsView, with the ``seed`` and
+        ``cos`` columns, when suggest_lexicon was given seeds.
     summary : SummaryView or None
         Aggregate coverage (present only after evaluate_lexicon).
     tokens : list[str]
-        Token strings in rank order.
+        Each suggested token once, in table order.
     """
 
     def __init__(
@@ -100,22 +116,23 @@ class LexiconResult(Result):
         n_tokens: int,
         suggestions: list[Suggestion],
         summary: Summary | None = None,
-        corpus=None,
+        seeded: bool = False,
+        text=None,
     ):
         super().__init__()
-        self.corpus = corpus
+        self.text = text
 
         self.stats = LexiconStatsView(
             var_type=var_type, n_docs=n_docs, n_tokens=n_tokens,
         )
-        self.suggestions = SuggestionsView(suggestions)
+        self.suggestions = (SeedSuggestionsView if seeded else SuggestionsView)(suggestions)
         self.summary = SummaryView(summary) if summary is not None else None
 
     # -------- convenience property ----------------------------------------
 
     @property
     def tokens(self) -> list[str]:
-        """Token strings in rank order."""
+        """Each suggested token once, in table order."""
         return [s.token for s in self.suggestions]
 
     _access = (
@@ -172,25 +189,37 @@ class LexiconResult(Result):
         # Suggestions table
         if top_cfg:
             n_top = top_cfg["n"]
+            seeded = isinstance(self.suggestions, SeedSuggestionsView)
             rows = []
             for sug in list(self.suggestions)[:n_top]:
-                rows.append([
+                row = [
                     sug.token,
                     fmt_count(sug.freq),
                     fmt_pct(sug.cov_all),
-                    fmt_pct(sug.cov_bal),
-                    fmt_r(sug.corr, signed=True),
-                    fmt_p(sug.pvalue),
-                    sug.direction,
-                    fmt_r(sug.rank),
-                ])
+                    _opt(fmt_pct, sug.cov_bal),
+                    _opt(fmt_r, sug.corr, signed=True),
+                    _opt(fmt_p, sug.pvalue),
+                    sug.direction or "",
+                    _opt(fmt_r, sug.rank),
+                ]
+                if seeded:
+                    row[1:1] = [fmt_r(sug.cos)]
+                    row.insert(0, sug.seed)
+                rows.append(row)
+            headers = ["token", "freq", "cov_all", "cov_bal", "corr", "pvalue", "dir", "rank"]
+            numeric = [False, True, True, True, True, True, False, True]
+            if seeded:
+                headers[1:1] = ["cos"]
+                headers.insert(0, "seed")
+                numeric[1:1] = [True]
+                numeric.insert(0, False)
             if rows:
                 sections.append(Section(
                     title=f"Suggestions (top {min(n_top, len(rows))})",
                     kind="table",
-                    headers=["token", "freq", "cov_all", "cov_bal", "corr", "pvalue", "dir", "rank"],
+                    headers=headers,
                     rows=rows,
-                    numeric=[False, True, True, True, True, True, False, True],
+                    numeric=numeric,
                 ))
 
         # Summary section (only when evaluate_lexicon built the result)
@@ -199,9 +228,9 @@ class LexiconResult(Result):
             kv_rows = [
                 ("docs_any", fmt_count(sm.docs_any)),
                 ("cov_all", fmt_pct(sm.cov_all)),
-                ("q1", fmt_pct(sm.q1)),
-                ("q4", fmt_pct(sm.q4)),
-                ("corr_any", fmt_r(sm.corr_any, signed=True)),
+                ("q1", _opt(fmt_pct, sm.q1)),
+                ("q4", _opt(fmt_pct, sm.q4)),
+                ("corr_any", _opt(fmt_r, sm.corr_any, signed=True)),
                 ("hits_mean", fmt_d(sm.hits_mean)),
                 ("hits_median", fmt_d(sm.hits_median)),
                 ("types_mean", fmt_d(sm.types_mean)),

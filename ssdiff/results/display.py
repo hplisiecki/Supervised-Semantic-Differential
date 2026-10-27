@@ -14,7 +14,7 @@ _REPR_HINTS_ENABLED: bool = True
 def set_repr_hints(enabled: bool) -> None:
     """Toggle save-hint footers in __repr__ / _repr_html_ output.
 
-    Default: True. Disable for log-stream consumers (SSD_APP).
+    Default: True. Disable for log-stream consumers.
     """
     if not isinstance(enabled, bool):
         raise TypeError(f"enabled must be bool, got {type(enabled).__name__}")
@@ -36,7 +36,7 @@ DEFAULT_COLS: dict[str, tuple[str, ...]] = {
     # continuous
     "StatsView":           ("backend", "r2", "pvalue", "n_kept", "iqr_effect"),
     "OLSStatsView":        ("backend", "r2", "r2_adj", "pvalue", "n_kept", "iqr_effect"),
-    "FitInfoView":         ("n_components", "pca_k", "p_at_k", "random_state"),
+    "FitInfoView":         ("n_components", "p_at_k", "random_state"),
     "WordsView":           ("side", "rank", "word", "cos_beta"),
     "WordsViewSided":      ("side", "rank", "word", "cos_beta"),
     "ClustersView":        ("cluster_id", "side", "size", "coherence",
@@ -57,6 +57,8 @@ DEFAULT_COLS: dict[str, tuple[str, ...]] = {
     "PairStatsView":       ("T", "p_corrected", "cohens_d", "n_g1", "n_g2"),
     # lexicon
     "SuggestionsView":     ("rank", "token", "freq", "corr", "pvalue", "direction"),
+    "SeedSuggestionsView": ("seed", "rank", "token", "cos", "freq", "corr", "pvalue",
+                            "direction"),
     "SummaryView":         ("docs_any", "cov_all", "corr_any", "hits_median"),
 }
 
@@ -129,6 +131,7 @@ DEFAULT_FILENAMES: dict[str, str] = {
     "PairsListView":       "pairs.csv",
     # tabular — lexicon
     "SuggestionsView":     "lexicon_suggestions.csv",
+    "SeedSuggestionsView": "lexicon_suggestions.csv",
 }
 
 

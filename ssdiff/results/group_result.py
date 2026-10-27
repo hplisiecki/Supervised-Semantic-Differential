@@ -24,24 +24,20 @@ from dataclasses import replace
 
 import numpy as np
 
-from ssdiff.results.core import Result, ScalarView, TestView, View
+from ssdiff.results.core import ScalarView, TestView, View
 from ssdiff.results.format import fmt_count, fmt_d, fmt_p, fmt_r
 from ssdiff.results.multi_container import _MultiContainer
 from ssdiff.results.report import (
     Report,
     Section,
     _build_cluster_section,
+    _embeddings_row,
     _resolve_section,
 )
 from ssdiff.results.schema import (
-    Cluster,
-    ClusterWord,
     Pair,
-    Snippet,
-    Word,
 )
 from ssdiff.results.single_result import _SingleResult
-
 
 # ---------- Canonical pair helpers ----------
 
@@ -79,11 +75,10 @@ class PairResult(_SingleResult):
         g1: str,
         g2: str,
         embeddings=None,
-        corpus=None,
+        text=None,
         lexicon=None,
         window: int = 3,
-        sif_a: float = 1e-3,
-        lang: str | None = None,
+        sif_a: float | None = 1e-3,
     ):
         self._container = container
         self.g1 = str(g1)
@@ -108,8 +103,8 @@ class PairResult(_SingleResult):
         super().__init__(
             x=None,
             beta=beta,
-            embeddings=embeddings, corpus=corpus,
-            lexicon=lexicon, window=window, sif_a=sif_a, lang=lang,
+            embeddings=embeddings, text=text,
+            lexicon=lexicon, window=window, sif_a=sif_a,
         )
         # After super().__init__ sets self._x = None, reset both sentinels.
         self._x = None
@@ -139,8 +134,11 @@ class PairResult(_SingleResult):
         self._cache[key] = view
         return view
 
+    def _pole_names(self) -> tuple[str, str]:
+        return f"toward {self.g1}", f"toward {self.g2}"
+
     def __getstate__(self):
-        state = self.__dict__.copy()
+        state = super().__getstate__()
         state["_container"] = None
         state["_x_cache"] = None
         return state
@@ -378,17 +376,16 @@ class GroupResult(_MultiContainer):
         omnibus_p: float,
         pairs: list,  # list[Pair]
         embeddings=None,
-        corpus=None,
+        text=None,
         x=None,
         groups=None,
-        lang: str | None = None,
         lexicon=None,
         window: int = 3,
-        sif_a: float = 1e-3,
+        sif_a: float | None = 1e-3,
     ):
         super().__init__()  # Result.__init__ sets self._cache
         self.embeddings = embeddings
-        self.corpus = corpus
+        self.text = text
         self.G = G
         self.n_kept = n_kept
         self.n_perm = n_perm
@@ -403,10 +400,9 @@ class GroupResult(_MultiContainer):
             self._groups, self.group_labels, pairs = self._canonicalize(groups, pairs)
             self._x = x
 
-        self.lang = lang if lang is not None else getattr(corpus, "lang", None)
         self.lexicon = set(lexicon) if lexicon is not None else set()
         self.window = int(window)
-        self.sif_a = float(sif_a)
+        self.sif_a = None if sif_a is None else float(sif_a)
 
         self.stats = GroupStatsView(
             G=G, n_kept=n_kept, n_perm=n_perm,
@@ -442,9 +438,9 @@ class GroupResult(_MultiContainer):
         for p in self.pairs:
             leaves[(p.g1, p.g2)] = PairResult(
                 container=self, g1=p.g1, g2=p.g2,
-                embeddings=self.embeddings, corpus=self.corpus,
+                embeddings=self.embeddings, text=self.text,
                 lexicon=self.lexicon, window=self.window,
-                sif_a=self.sif_a, lang=self.lang,
+                sif_a=self.sif_a,
             )
         return leaves
 
@@ -547,7 +543,7 @@ class GroupResult(_MultiContainer):
     _access = (
         "stats", "test", "pairs", "words", "clusters", "snippets",
         "beta", "gradient", "beta_norm", "alignment_scores",
-        "group_labels", "report()", "test(...)", "attach(...)",
+        "group_labels", "report()", "save_page(...)", "test(...)", "attach(...)",
     )
     _arrays = ("x", "groups")
 
@@ -616,6 +612,9 @@ class GroupResult(_MultiContainer):
         ]
         if self.random_state is not None:
             omnibus_rows.append(("random_state", self.random_state))
+        provenance = _embeddings_row(self.embeddings)
+        if provenance is not None:
+            omnibus_rows.append(provenance)
         sections.append(Section(title="Omnibus", kind="kv", rows=omnibus_rows))
 
         if self.group_labels:
@@ -651,22 +650,13 @@ class GroupResult(_MultiContainer):
                 clusters_view = leaf.clusters
                 for side in ("pos", "neg"):
                     cl_view = getattr(clusters_view, side)
-
-                    def _snippet_provider(_leaf=leaf, _side=side):
-                        if getattr(_leaf, "corpus", None) is None:
-                            return None
-                        try:
-                            return _leaf._cluster_snippets_for(_side)
-                        except Exception:
-                            return None
-
                     sections.append(_build_cluster_section(
                         title=f"{pair_title} — {side}",
                         clusters_view=cl_view,
                         n_clusters=n_cl,
                         n_words=n_words,
                         n_snippets=n_snippets,
-                        snippet_provider=_snippet_provider,
+                        snippet_provider=cl_view._cluster_snippets,
                     ))
 
         # Top words — one table per pair

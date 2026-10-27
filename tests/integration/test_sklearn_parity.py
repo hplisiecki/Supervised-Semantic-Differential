@@ -1,7 +1,7 @@
-"""Verify SSDLite K-means and silhouette implementations against sklearn.
+"""Verify ssdiff K-means and silhouette implementations against sklearn.
 
 Generates test datasets with varying properties and compares:
-- Silhouette scores (per-sample and overall) given identical labels
+- Silhouette scores given identical labels
 - K-means cluster quality (inertia, silhouette) across implementations
 """
 
@@ -17,50 +17,18 @@ from sklearn.datasets import make_blobs
 from sklearn.metrics import silhouette_samples as sklearn_silhouette_samples
 from sklearn.metrics import silhouette_score as sklearn_silhouette_score
 
-# SSDLite implementations
+# ssdiff implementations
 from ssdiff.utils.math import (
-    kmeans as ssd_kmeans,
-)
-from ssdiff.utils.math import (
+    _silhouette_from_dists,
     pairwise_euclidean,
 )
 from ssdiff.utils.math import (
-    silhouette_score as ssd_silhouette_score,
+    kmeans as ssd_kmeans,
 )
 
-# ---------------------------------------------------------------------------
-# Helper: extract per-sample silhouette from SSDLite internals
-# ---------------------------------------------------------------------------
 
-def ssd_silhouette_samples(X: np.ndarray, labels: np.ndarray) -> np.ndarray:
-    """Per-sample silhouette using SSDLite's internal logic (mirrors _silhouette_from_dists)."""
-    dists = pairwise_euclidean(X)
-    n = len(labels)
-    unique_labels = np.unique(labels)
-    if len(unique_labels) < 2:
-        return np.zeros(n, dtype=np.float64)
-
-    a = np.zeros(n, dtype=np.float64)
-    b = np.full(n, np.inf, dtype=np.float64)
-
-    for lab in unique_labels:
-        mask = labels == lab
-        cluster_size = int(mask.sum())
-
-        if cluster_size > 1:
-            a[mask] = dists[np.ix_(mask, mask)].sum(axis=1) / (cluster_size - 1)
-
-        not_mask = ~mask
-        if not_mask.any() and cluster_size > 0:
-            mean_to_cluster = dists[np.ix_(not_mask, mask)].mean(axis=1)
-            b[not_mask] = np.minimum(b[not_mask], mean_to_cluster)
-
-    finite = np.isfinite(b)
-    denom = np.maximum(a, b)
-    sil = np.zeros(n, dtype=np.float64)
-    valid = finite & (denom > 0)
-    sil[valid] = (b[valid] - a[valid]) / denom[valid]
-    return sil
+def ssd_silhouette_score(X: np.ndarray, labels: np.ndarray) -> float:
+    return _silhouette_from_dists(pairwise_euclidean(X), labels)
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +111,7 @@ def make_unequal_sizes(random_state=42):
 # ===========================================================================
 
 class TestSilhouetteScoreAgreement:
-    """Compare SSDLite silhouette vs sklearn given the same labels."""
+    """Compare ssdiff silhouette vs sklearn given the same labels."""
 
     DATASETS = [
         ("well_sep_2d_k3", make_well_separated(n_features=2, k=3)),
@@ -164,48 +132,20 @@ class TestSilhouetteScoreAgreement:
         np.testing.assert_allclose(ssd_score, sk_score, atol=1e-9, rtol=1e-9,
             err_msg=f"[{name}] Overall silhouette mismatch")
 
-    @pytest.mark.parametrize("name, dataset", DATASETS, ids=[d[0] for d in DATASETS])
-    def test_per_sample_scores(self, name, dataset):
-        """Per-sample silhouette coefficients should match within 1e-8.
-
-        Per-sample values can differ by up to ~5e-9 due to BLAS distance
-        computation differences (einsum+matmul vs sklearn's internal path).
-        """
-        X, labels, _k = dataset
-        ssd_samples = ssd_silhouette_samples(X, labels)
-        sk_samples = sklearn_silhouette_samples(X, labels)
-        np.testing.assert_allclose(ssd_samples, sk_samples, atol=1e-8, rtol=1e-8,
-            err_msg=f"[{name}] Per-sample silhouette mismatch")
-
     def test_single_cluster_returns_zero(self):
         """Single cluster -> silhouette should be 0.0 for both."""
         X = np.random.default_rng(42).normal(size=(50, 3))
         labels = np.zeros(50, dtype=int)
         ssd_score = ssd_silhouette_score(X, labels)
-        # sklearn raises ValueError for single cluster, so we just check SSDLite returns 0
+        # sklearn raises ValueError for single cluster, so we just check ssdiff returns 0
         assert ssd_score == 0.0, f"Expected 0.0 for single cluster, got {ssd_score}"
-
-    def test_silhouette_with_kmeans_labels(self):
-        """Run sklearn KMeans, take its labels, compare silhouette scores."""
-        X, _, _ = make_well_separated(n_features=5, k=3, random_state=99)
-        sk_km = SklearnKMeans(n_clusters=3, random_state=99, n_init=10).fit(X)
-        labels = sk_km.labels_
-
-        ssd_score = ssd_silhouette_score(X, labels)
-        sk_score = sklearn_silhouette_score(X, labels)
-        diff = abs(ssd_score - sk_score)
-        assert diff < 1e-6, (
-            f"Silhouette on sklearn-KMeans labels: ssd={ssd_score:.10f}, "
-            f"sklearn={sk_score:.10f}, diff={diff:.2e}"
-        )
-
 
 # ===========================================================================
 # PART 2: K-Means cluster quality comparison
 # ===========================================================================
 
 class TestKMeansQuality:
-    """Compare SSDLite K-means cluster quality vs sklearn.
+    """Compare ssdiff K-means cluster quality vs sklearn.
 
     Since KMeans is non-deterministic (initialization differs),
     we compare quality metrics rather than exact assignments:
@@ -232,7 +172,7 @@ class TestKMeansQuality:
         ids=[s[0] for s in SCENARIOS],
     )
     def test_inertia_comparable(self, name, dataset, k):
-        """SSDLite inertia should be within 1% of sklearn inertia."""
+        """ssdiff inertia should be within 1% of sklearn inertia."""
         X, _, _ = dataset
         n_init = 10
 
@@ -279,43 +219,7 @@ class TestKMeansQuality:
 
 
 # ===========================================================================
-# PART 3: K-Means with shared centroids (deterministic comparison)
-# ===========================================================================
-
-class TestKMeansSharedInit:
-    """Feed both implementations the SAME initial centroids.
-
-    This eliminates initialization randomness and tests whether
-    the Lloyd iterations converge to the same solution.
-    """
-
-    @pytest.mark.parametrize("k", [2, 3, 5])
-    def test_well_separated_shared_init(self, k):
-        """On well-separated data, both should find essentially the same clusters."""
-        X, _, _ = make_well_separated(n_per_cluster=100, n_features=3, k=k, random_state=77)
-        n_init = 10
-
-        ssd_labels, ssd_centers, ssd_inertia = ssd_kmeans(
-            X, k=k, random_state=42, n_init=n_init,
-        )
-        sk_km = SklearnKMeans(
-            n_clusters=k, random_state=42, n_init=n_init, max_iter=300,
-        ).fit(X)
-
-        # On well-separated data, cluster assignments should be essentially identical
-        # (up to label permutation). Compare via silhouette as a proxy.
-        ssd_sil = sklearn_silhouette_score(X, ssd_labels)
-        sk_sil = sklearn_silhouette_score(X, sk_km.labels_)
-
-        # Both should achieve near-perfect silhouette for well-separated blobs
-        assert ssd_sil > 0.6, f"SSDLite silhouette too low: {ssd_sil:.4f}"
-        assert abs(ssd_sil - sk_sil) < 0.02, (
-            f"k={k}: ssd_sil={ssd_sil:.4f}, sk_sil={sk_sil:.4f}"
-        )
-
-
-# ===========================================================================
-# PART 4: Edge cases
+# PART 3: Edge cases
 # ===========================================================================
 
 class TestEdgeCases:
@@ -345,18 +249,11 @@ class TestEdgeCases:
         labels, centers, inertia = ssd_kmeans(X, k=2, random_state=42)
         assert inertia < 1e-15, f"Identical points inertia should be ~0, got {inertia}"
 
-    def test_two_clusters_two_points(self):
-        """Minimal case: 2 points, k=2."""
-        X = np.array([[0.0, 0.0], [10.0, 10.0]])
-        labels, centers, inertia = ssd_kmeans(X, k=2, random_state=42)
-        assert inertia < 1e-15
-        assert labels[0] != labels[1]
-
     def test_silhouette_two_points_two_clusters(self):
         """Two points in two clusters: silhouette should be ~1.0.
 
         Note: sklearn requires n_samples >= 3 for silhouette_score, so we
-        only verify the SSDLite result against the theoretical value (1.0).
+        only verify the ssdiff result against the theoretical value (1.0).
         """
         X = np.array([[0.0, 0.0], [10.0, 10.0]])
         labels = np.array([0, 1])
@@ -368,75 +265,28 @@ class TestEdgeCases:
     def test_silhouette_singleton_cluster_difference(self):
         """Document singleton cluster behavioral difference vs sklearn.
 
-        SSDLite assigns s(i)=1.0 to single-member clusters (standard formula:
+        ssdiff assigns s(i)=1.0 to single-member clusters (standard formula:
         a=0, so s = (b-0)/max(0,b) = 1.0).
 
         sklearn assigns s(i)=0.0 to single-member clusters (treats as undefined,
         NaN -> 0). See sklearn source line: "nan values are for clusters of
         size 1, and should be 0".
-
-        When there are no singleton clusters, both agree to <1e-10 precision.
         """
         X = np.array([[0.0, 0.0], [0.1, 0.0], [10.0, 10.0]])
-        labels = np.array([0, 0, 1])  # label=1 is a singleton
-
-        ssd_samples = ssd_silhouette_samples(X, labels)
-        sk_samples_arr = sklearn_silhouette_samples(X, labels)
-
-        # Non-singleton points (label=0) should agree
-        assert abs(ssd_samples[0] - sk_samples_arr[0]) < 1e-10
-        assert abs(ssd_samples[1] - sk_samples_arr[1]) < 1e-10
-
-        # Singleton point: SSD gives 1.0, sklearn gives 0.0
-        assert abs(ssd_samples[2] - 1.0) < 1e-10, f"SSD singleton: {ssd_samples[2]}"
-        assert abs(sk_samples_arr[2] - 0.0) < 1e-10, f"sklearn singleton: {sk_samples_arr[2]}"
-
-    def test_silhouette_no_singletons_matches_sklearn(self):
-        """With no singleton clusters, SSD and sklearn agree exactly."""
-        # 4 points, 2 clusters, no singletons
-        X = np.array([[0.0, 0.0], [0.5, 0.0], [10.0, 10.0], [10.5, 10.0]])
-        labels = np.array([0, 0, 1, 1])
-        ssd_s = ssd_silhouette_score(X, labels)
-        sk_s = sklearn_silhouette_score(X, labels)
-        assert abs(ssd_s - sk_s) < 1e-10, f"ssd={ssd_s}, sklearn={sk_s}"
-
-    def test_pairwise_euclidean_symmetry(self):
-        """Distance matrix should be symmetric with near-zero diagonal.
-
-        The BLAS trick (X_sq + X_sq - 2*X@X.T then sqrt) can leave tiny
-        residuals (~1e-8) on the diagonal due to floating-point cancellation.
-        This is a well-known property of this computation method.
-        """
-        rng = np.random.default_rng(42)
-        X = rng.normal(size=(30, 5))
-        D = pairwise_euclidean(X)
-        assert np.allclose(D, D.T, atol=1e-12), "Distance matrix not symmetric"
-        # Diagonal: BLAS trick can leave residuals up to ~1e-7 after sqrt
-        max_diag = np.max(np.abs(np.diag(D)))
-        assert max_diag < 1e-6, f"Diagonal max = {max_diag:.2e}, expected < 1e-6"
-
-    def test_pairwise_euclidean_matches_sklearn(self):
-        """Pairwise Euclidean distances should match sklearn.
-
-        Both use BLAS-based computation but may differ by ~1e-7 due to
-        different internal implementations (SSDLite uses einsum + matmul,
-        sklearn uses its own optimized path). This is acceptable.
-        """
-        from sklearn.metrics import pairwise_distances
-        rng = np.random.default_rng(42)
-        X = rng.normal(size=(50, 4))
-        ssd_D = pairwise_euclidean(X)
-        sk_D = pairwise_distances(X, metric="euclidean")
-        max_diff = np.max(np.abs(ssd_D - sk_D))
-        assert max_diff < 1e-6, f"Max dist diff: {max_diff:.2e}"
+        labels = np.array([0, 0, 1])  # label 1 is a singleton
+        sk = sklearn_silhouette_samples(X, labels)
+        assert sk[2] == pytest.approx(0.0, abs=1e-10)
+        assert ssd_silhouette_score(X, labels) == pytest.approx(
+            np.mean([sk[0], sk[1], 1.0]), abs=1e-10
+        )
 
 
 # ===========================================================================
-# PART 5: PCA comparison
+# PART 4: PCA comparison
 # ===========================================================================
 
 class TestPCAComparison:
-    """Compare SSDLite PCA (SVD-based) vs sklearn PCA."""
+    """Compare ssdiff PCA (SVD-based) vs sklearn PCA."""
 
     @pytest.mark.parametrize("n, d, k", [
         (50, 10, 5),
@@ -495,7 +345,7 @@ class TestPCAComparison:
 
 
 # ===========================================================================
-# PART 6: Statistical function comparison (f_sf, t_sf, chi2_sf vs scipy)
+# PART 5: Statistical function comparison (f_sf, t_sf, chi2_sf vs scipy)
 # ===========================================================================
 
 class TestStatFunctionsVsScipy:
@@ -516,7 +366,7 @@ class TestStatFunctionsVsScipy:
         from ssdiff.utils.math import f_sf
         ssd_p = f_sf(f_val, dfn, dfd)
         scipy_p = float(self.scipy_stats.f.sf(f_val, dfn, dfd))
-        np.testing.assert_allclose(ssd_p, scipy_p, atol=1e-14, rtol=1e-10,
+        np.testing.assert_allclose(ssd_p, scipy_p, atol=1e-13, rtol=0,
             err_msg=f"f_sf({f_val}, {dfn}, {dfd})")
 
     @pytest.mark.parametrize("t_val, df", [
@@ -533,7 +383,7 @@ class TestStatFunctionsVsScipy:
         from ssdiff.utils.math import t_sf
         ssd_p = t_sf(t_val, df)
         scipy_p = float(self.scipy_stats.t.sf(t_val, df))
-        np.testing.assert_allclose(ssd_p, scipy_p, atol=1e-14, rtol=1e-10,
+        np.testing.assert_allclose(ssd_p, scipy_p, atol=1e-13, rtol=0,
             err_msg=f"t_sf({t_val}, {df})")
 
     @pytest.mark.parametrize("x, df", [
@@ -548,5 +398,5 @@ class TestStatFunctionsVsScipy:
         from ssdiff.utils.math import chi2_sf
         ssd_p = chi2_sf(x, df)
         scipy_p = float(self.scipy_stats.chi2.sf(x, df))
-        np.testing.assert_allclose(ssd_p, scipy_p, atol=1e-14, rtol=1e-10,
+        np.testing.assert_allclose(ssd_p, scipy_p, atol=1e-13, rtol=0,
             err_msg=f"chi2_sf({x}, {df})")

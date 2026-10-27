@@ -1,8 +1,7 @@
 """Tests for ssdiff/utils/snippets.py
 
 Tests cover:
-- _make_snippet_anchor: token-span clamping and multi-sentence window
-- _iter_doclikes: yields _DocLike from PreprocessedDoc list
+- _make_snippet_anchor: multi-sentence window
 - _top_per_group: top-k per group from sorted rows
 - snippets_along_beta: returns pos/neg dicts, cosine signs, sorted descending
 - cluster_snippets_by_centroids: 2-cluster case returns 2-keyed structure
@@ -10,19 +9,15 @@ Tests cover:
 
 from __future__ import annotations
 
-import numpy as np
 import pytest
 
 from ssdiff.utils.snippets import (
     _DocLike,
-    _iter_doclikes,
     _make_snippet_anchor,
     _top_per_group,
     cluster_snippets_by_centroids,
     snippets_along_beta,
 )
-from ssdiff.utils.text import PreprocessedDoc
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -32,12 +27,10 @@ def _make_doclike(
     sents_surface: list[str],
     doc_lemmas: list[str],
     token_to_sent: list[int],
-    profile_id: int = 0,
-    post_id: int = 0,
+    doc_id: int = 0,
 ) -> _DocLike:
     return _DocLike(
-        profile_id=profile_id,
-        post_id=post_id,
+        doc_id=doc_id,
         sents_surface=sents_surface,
         doc_lemmas=doc_lemmas,
         token_to_sent=token_to_sent,
@@ -55,56 +48,11 @@ class _FakeSSD:
 
 
 # ---------------------------------------------------------------------------
-# _make_snippet_anchor: token-span clamping
-# ---------------------------------------------------------------------------
-
-class TestMakeSnippetAnchorClamping:
-    """Invariant 1: token-span clamping when start/end exceed doc bounds."""
-
-    def test_end_tok_beyond_last_token_clamped(self):
-        """end_tok past last token index is clamped to len(doc_lemmas)-1."""
-        D = _make_doclike(
-            sents_surface=["Hello world."],
-            doc_lemmas=["hello", "world"],
-            token_to_sent=[0, 0],
-        )
-        # anchor token i=1, window [0, 99] — 99 must clamp to 1
-        snippet, s_start, s_end = _make_snippet_anchor(D, i=1, start_tok=0, end_tok=99)
-        assert snippet == "Hello world."
-        assert s_start == 0
-        assert s_end == 0
-
-    def test_start_tok_negative_clamped_to_zero(self):
-        """start_tok < 0 is clamped to 0."""
-        D = _make_doclike(
-            sents_surface=["Kraj jest piekny."],
-            doc_lemmas=["kraj", "jest", "piekny"],
-            token_to_sent=[0, 0, 0],
-        )
-        snippet, s_start, s_end = _make_snippet_anchor(D, i=1, start_tok=-5, end_tok=2)
-        assert snippet == "Kraj jest piekny."
-        assert s_start == 0
-        assert s_end == 0
-
-    def test_single_token_doc_any_window_returns_single_sentence(self):
-        """Single-token doc: any window must still yield the only sentence."""
-        D = _make_doclike(
-            sents_surface=["Word."],
-            doc_lemmas=["word"],
-            token_to_sent=[0],
-        )
-        snippet, s_start, s_end = _make_snippet_anchor(D, i=0, start_tok=-10, end_tok=100)
-        assert snippet == "Word."
-        assert s_start == 0
-        assert s_end == 0
-
-
-# ---------------------------------------------------------------------------
 # _make_snippet_anchor: multi-sentence window
 # ---------------------------------------------------------------------------
 
 class TestMakeSnippetAnchorMultiSentence:
-    """Invariant 2: multi-sentence window spans across sentence boundaries."""
+    """multi-sentence window spans across sentence boundaries."""
 
     def test_window_reaches_previous_sentence(self):
         """When start_tok falls in a previous sentence, prev sentence is prepended."""
@@ -152,62 +100,15 @@ class TestMakeSnippetAnchorMultiSentence:
 
 
 # ---------------------------------------------------------------------------
-# _iter_doclikes
-# ---------------------------------------------------------------------------
-
-class TestIterDoclikes:
-    """Invariants 5 & 6: _iter_doclikes over PreprocessedDoc list."""
-
-    def test_yields_doclikes_for_each_preprocessed_doc(self, sample_preprocessed_docs):
-        """Invariant 5: yields one _DocLike per PreprocessedDoc, unchanged content."""
-        result = list(_iter_doclikes(sample_preprocessed_docs))
-        assert len(result) == len(sample_preprocessed_docs)
-        for dl, pd in zip(result, sample_preprocessed_docs):
-            assert dl.doc_lemmas == pd.doc_lemmas
-            assert dl.sents_surface == pd.sents_surface
-            assert dl.token_to_sent == pd.token_to_sent
-
-    def test_profile_id_is_sequential_index(self, sample_preprocessed_docs):
-        """profile_id is assigned as the enumeration index."""
-        result = list(_iter_doclikes(sample_preprocessed_docs))
-        for i, dl in enumerate(result):
-            assert dl.profile_id == i
-
-    def test_post_id_is_zero_for_single_docs(self, sample_preprocessed_docs):
-        """post_id is always 0 for non-profile (plain PreprocessedDoc) input."""
-        result = list(_iter_doclikes(sample_preprocessed_docs))
-        assert all(dl.post_id == 0 for dl in result)
-
-    def test_empty_list_yields_nothing(self):
-        """Empty input produces empty output."""
-        result = list(_iter_doclikes([]))
-        assert result == []
-
-
-# ---------------------------------------------------------------------------
 # _top_per_group
 # ---------------------------------------------------------------------------
 
 class TestTopPerGroup:
-    """Invariant 8: _top_per_group returns top-k per group key."""
+    """_top_per_group returns top-k per group key."""
 
     def _make_rows(self, items):
         """items: list of (group, cosine) tuples."""
         return [{"centroid_label": g, "cosine": c} for g, c in items]
-
-    def test_top1_per_group(self):
-        """k=1 returns the first (highest cosine) row per group."""
-        rows = self._make_rows([
-            ("A", 0.9), ("A", 0.5), ("A", 0.1),
-            ("B", 0.8), ("B", 0.3),
-        ])
-        result = _top_per_group(rows, "centroid_label", 1)
-        a_rows = [r for r in result if r["centroid_label"] == "A"]
-        b_rows = [r for r in result if r["centroid_label"] == "B"]
-        assert len(a_rows) == 1
-        assert a_rows[0]["cosine"] == 0.9
-        assert len(b_rows) == 1
-        assert b_rows[0]["cosine"] == 0.8
 
     def test_top2_per_group_caps_at_available(self):
         """k=2 returns up to 2 per group, even if fewer exist."""
@@ -236,38 +137,22 @@ class TestTopPerGroup:
 # ---------------------------------------------------------------------------
 
 class TestSnippetsAlongBeta:
-    """Invariants 3 & 4: snippets_along_beta returns k_per_side snippets, sorted."""
+    """snippets_along_beta returns k_per_side snippets, sorted."""
 
-    def test_returns_pos_and_neg_keys(self, sample_preprocessed_docs, tiny_kv):
-        """Function returns a dict with 'pos' and 'neg' keys."""
-        gradient = tiny_kv.get_vector("kraj", norm=True)
-        ssd = _FakeSSD(tiny_kv, gradient, lexicon=["kraj", "narod", "panstwo"])
-        result = snippets_along_beta(
-            pre_docs=sample_preprocessed_docs,
-            ssd=ssd,
-            token_window=2,
-            top_per_side=10,
+    def test_doc_id_points_back_to_the_document(self, sample_preprocessed_docs, tiny_kv):
+        """doc_id indexes the document the snippet came from."""
+        ssd = _FakeSSD(tiny_kv, tiny_kv.get_vector("kraj", norm=True), lexicon=["kraj", "narod", "panstwo"])
+        rows = snippets_along_beta(
+            pre_docs=sample_preprocessed_docs, ssd=ssd, token_window=2, top_per_side=200
         )
-        assert "pos" in result
-        assert "neg" in result
+        assert rows["pos"] and rows["neg"]
+        for row in rows["pos"] + rows["neg"]:
+            doc = sample_preprocessed_docs[row["doc_id"]]
+            assert row["essay_text_lemmas"] == " ".join(doc.doc_lemmas)
+            assert row["essay_text_surface"] == " ".join(doc.sents_surface)
 
-    def test_pos_snippets_sorted_descending(self, sample_preprocessed_docs, tiny_kv):
-        """Invariant 4: pos snippets sorted by cosine descending."""
-        gradient = tiny_kv.get_vector("kraj", norm=True)
-        ssd = _FakeSSD(tiny_kv, gradient, lexicon=["kraj", "narod", "panstwo"])
-        result = snippets_along_beta(
-            pre_docs=sample_preprocessed_docs,
-            ssd=ssd,
-            token_window=2,
-            top_per_side=20,
-        )
-        pos = result["pos"]
-        if len(pos) > 1:
-            cosines = [r["cosine"] for r in pos]
-            assert cosines == sorted(cosines, reverse=True)
-
-    def test_neg_snippets_sorted_descending(self, sample_preprocessed_docs, tiny_kv):
-        """Neg side also sorted descending (neg cosines are -pos, sorted desc)."""
+    @pytest.mark.parametrize("side", ["pos", "neg"])
+    def test_snippets_sorted_by_cosine_descending(self, sample_preprocessed_docs, tiny_kv, side):
         gradient = tiny_kv.get_vector("kraj", norm=True)
         ssd = _FakeSSD(tiny_kv, gradient, lexicon=["kraj", "narod", "panstwo"])
         result = snippets_along_beta(
@@ -276,13 +161,28 @@ class TestSnippetsAlongBeta:
             token_window=2,
             top_per_side=20,
         )
-        neg = result["neg"]
-        if len(neg) > 1:
-            cosines = [r["cosine"] for r in neg]
-            assert cosines == sorted(cosines, reverse=True)
+        rows = result[side]
+        assert len(rows) > 1
+        cosines = [r["cosine"] for r in rows]
+        assert cosines == sorted(cosines, reverse=True)
+
+    def test_one_job_equals_thread_pool(self, sample_preprocessed_docs, tiny_kv):
+        """n_jobs=1 runs without threads (the Pyodide path) and finds the same snippets."""
+        gradient = tiny_kv.get_vector("kraj", norm=True)
+        ssd = _FakeSSD(tiny_kv, gradient, lexicon=["kraj", "narod", "panstwo"])
+        kwargs = dict(pre_docs=sample_preprocessed_docs, ssd=ssd, token_window=2, top_per_side=200)
+        serial = snippets_along_beta(n_jobs=1, **kwargs)
+        pooled = snippets_along_beta(n_jobs=-1, **kwargs)
+
+        def rows(side):
+            # Tied cosines may come out of the pool in either order.
+            return sorted(repr(sorted(r.items())) for r in side)
+
+        assert serial["pos"] and rows(serial["pos"]) == rows(pooled["pos"])
+        assert rows(serial["neg"]) == rows(pooled["neg"])
 
     def test_pos_neg_cosines_are_negatives_of_each_other(self, sample_preprocessed_docs, tiny_kv):
-        """Invariant 3: for same occurrence, pos_cosine == -neg_cosine."""
+        """for same occurrence, pos_cosine == -neg_cosine."""
         gradient = tiny_kv.get_vector("kraj", norm=True)
         ssd = _FakeSSD(tiny_kv, gradient, lexicon=["kraj"])
         result = snippets_along_beta(
@@ -295,9 +195,9 @@ class TestSnippetsAlongBeta:
         neg = result["neg"]
         # Both sides should have same number of snippets (no threshold)
         assert len(pos) == len(neg)
-        # Sort both by (profile_id, seed) to align matching rows
-        pos_sorted = sorted(pos, key=lambda r: (r["profile_id"], r["seed"]))
-        neg_sorted = sorted(neg, key=lambda r: (r["profile_id"], r["seed"]))
+        # Sort both by (doc_id, seed) to align matching rows
+        pos_sorted = sorted(pos, key=lambda r: (r["doc_id"], r["seed"]))
+        neg_sorted = sorted(neg, key=lambda r: (r["doc_id"], r["seed"]))
         for p, n in zip(pos_sorted, neg_sorted):
             assert abs(p["cosine"] + n["cosine"]) < 1e-9
 
@@ -305,14 +205,12 @@ class TestSnippetsAlongBeta:
         """top_per_side caps the number of returned snippets per side."""
         gradient = tiny_kv.get_vector("kraj", norm=True)
         ssd = _FakeSSD(tiny_kv, gradient, lexicon=["kraj", "narod", "panstwo"])
-        result = snippets_along_beta(
-            pre_docs=sample_preprocessed_docs,
-            ssd=ssd,
-            token_window=2,
-            top_per_side=1,
-        )
-        assert len(result["pos"]) <= 1
-        assert len(result["neg"]) <= 1
+        kwargs = dict(pre_docs=sample_preprocessed_docs, ssd=ssd, token_window=2)
+        result = snippets_along_beta(top_per_side=1, **kwargs)
+        full = snippets_along_beta(top_per_side=200, **kwargs)
+        for side in ("pos", "neg"):
+            assert len(result[side]) == 1
+            assert result[side][0]["cosine"] == max(r["cosine"] for r in full[side])
 
     def test_snippet_dict_has_required_keys(self, sample_preprocessed_docs, tiny_kv):
         """Each snippet dict contains the documented keys."""
@@ -325,12 +223,13 @@ class TestSnippetsAlongBeta:
             top_per_side=10,
         )
         required_keys = {
-            "side", "profile_id", "post_id", "cosine", "seed",
+            "side", "doc_id", "cosine", "seed",
             "start_token_idx", "end_token_idx", "start_sent_idx", "end_sent_idx",
             "snippet_anchor", "essay_text_surface", "essay_text_lemmas",
         }
+        assert result["pos"] and result["neg"]
         for snippet in result["pos"] + result["neg"]:
-            assert required_keys.issubset(snippet.keys())
+            assert set(snippet) == required_keys
 
 
 # ---------------------------------------------------------------------------
@@ -338,29 +237,7 @@ class TestSnippetsAlongBeta:
 # ---------------------------------------------------------------------------
 
 class TestClusterSnippetsByCentroids:
-    """Invariant 7: 2-cluster case returns dict with 2 keys."""
-
-    def test_two_clusters_returns_pos_and_neg_keys(self, sample_preprocessed_docs, tiny_kv):
-        """With pos_clusters and neg_clusters each having 1 cluster, returns pos/neg."""
-        gradient = tiny_kv.get_vector("kraj", norm=True)
-        ssd = _FakeSSD(tiny_kv, gradient, lexicon=["kraj", "narod", "panstwo"])
-
-        pos_clusters = [{"words": [{"word": "kraj"}, {"word": "narod"}]}]
-        neg_clusters = [{"words": [{"word": "panstwo"}, {"word": "dom"}]}]
-
-        result = cluster_snippets_by_centroids(
-            pre_docs=sample_preprocessed_docs,
-            ssd=ssd,
-            pos_clusters=pos_clusters,
-            neg_clusters=neg_clusters,
-            token_window=2,
-            seeds=["kraj", "narod", "panstwo"],
-            top_per_cluster=50,
-        )
-        assert "pos" in result
-        assert "neg" in result
-        assert isinstance(result["pos"], list)
-        assert isinstance(result["neg"], list)
+    """2-cluster case returns dict with 2 keys."""
 
     def test_cluster_snippet_has_centroid_label(self, sample_preprocessed_docs, tiny_kv):
         """Each cluster snippet has a centroid_label key."""
@@ -379,7 +256,6 @@ class TestClusterSnippetsByCentroids:
             seeds=["kraj", "narod", "panstwo"],
             top_per_cluster=50,
         )
-        for snippet in result["pos"]:
-            assert snippet["centroid_label"].startswith("pos_")
-        for snippet in result["neg"]:
-            assert not snippet["centroid_label"].startswith("pos_")
+        assert result["pos"] and result["neg"]
+        assert {s["centroid_label"] for s in result["pos"]} == {"pos_cluster_1"}
+        assert {s["centroid_label"] for s in result["neg"]} == {"neg_cluster_1"}

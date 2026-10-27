@@ -16,6 +16,7 @@ from itertools import combinations
 import numpy as np
 
 from ssdiff.utils.math import unit_vector
+from ssdiff.utils.rng import Rng
 
 # ---------------------------------------------------------------------------
 # Median split
@@ -48,9 +49,8 @@ def median_split(y: np.ndarray, random_state: int = 2137) -> np.ndarray:
         n_below = int((y < med).sum())
         target = len(y) // 2
         n_low_needs = max(0, target - n_below)
-        rng = np.random.default_rng(random_state)
-        tied_indices = np.where(tied)[0]
-        rng.shuffle(tied_indices)
+        rng = Rng(random_state)
+        tied_indices = np.where(tied)[0][rng.permutation(n_tied)]
         labels[tied_indices[:n_low_needs]] = "low"
         labels[tied_indices[n_low_needs:]] = "high"
 
@@ -120,6 +120,14 @@ def _compute_centroids_matrix(
 _VALID_CORRECTIONS = ("holm", "bonferroni", "fdr_bh", "none")
 
 
+def _check_correction(method: str) -> None:
+    if method not in _VALID_CORRECTIONS:
+        raise ValueError(
+            f"Unknown correction {method!r}. "
+            f"Choose from {_VALID_CORRECTIONS}"
+        )
+
+
 def correct_pvalues(
     p_raw: np.ndarray, method: str = "holm",
 ) -> np.ndarray:
@@ -134,14 +142,10 @@ def correct_pvalues(
     -------
     1-D array of corrected p-values (capped at 1.0)
     """
-    if method not in _VALID_CORRECTIONS:
-        raise ValueError(
-            f"Unknown correction {method!r}. "
-            f"Choose from {_VALID_CORRECTIONS}"
-        )
+    _check_correction(method)
     p = np.asarray(p_raw, dtype=np.float64)
     m = len(p)
-    if m == 0 or method == "none":
+    if method == "none":
         return p.copy()
 
     if method == "bonferroni":
@@ -190,11 +194,13 @@ def unified_permutation_test(
     dict with keys:
         omnibus_T, omnibus_p,
         pairwise: dict[(g1,g2)] -> {
-            gradient, T, p_raw, p_corrected, cohens_d,
+            T, p_raw, p_corrected, cohens_d,
             n_g1, n_g2, contrast_norm
         },
-        group_labels, G, correction
+        G
     """
+    # Checked before the permutation loop, not first in correct_pvalues after it.
+    _check_correction(correction)
     G = len(group_labels)
     pairs = list(combinations(group_labels, 2))
     n_pairs = len(pairs)
@@ -218,26 +224,27 @@ def unified_permutation_test(
         T_pairwise_obs[k] = 1.0 - dot
 
     # Omnibus T = mean of pairwise distances
-    T_omnibus_obs = float(T_pairwise_obs.mean()) if n_pairs > 0 else 0.0
+    T_omnibus_obs = float(T_pairwise_obs.mean())
 
     # --- Permutation loop (single pass) ---
     from ssdiff.utils import _progress
 
-    rng = np.random.default_rng(random_state)
+    rng = Rng(random_state)
     null_omnibus = np.empty(n_perm, dtype=np.float64)
     null_pairwise = np.empty((n_perm, n_pairs), dtype=np.float64)
 
-    perm_group_idx = group_idx.copy()
     for p in _progress(range(n_perm), verbose=verbose, total=n_perm,
                        desc="Group permutation test"):
-        rng.shuffle(perm_group_idx)
+        # Each permutation is drawn fresh from the original labels (not by
+        # re-shuffling the previous one) so the R package (ssdiff) draws the same permutation sequence.
+        perm_group_idx = group_idx[rng.permutation(len(group_idx))]
         centroids_perm = _compute_centroids_matrix(x, perm_group_idx, G)
         for k, (ia, ib) in enumerate(pair_int):
             dot = float(np.clip(
                 np.dot(centroids_perm[ia], centroids_perm[ib]), -1, 1,
             ))
             null_pairwise[p, k] = 1.0 - dot
-        null_omnibus[p] = float(null_pairwise[p].mean()) if n_pairs > 0 else 0.0
+        null_omnibus[p] = float(null_pairwise[p].mean())
 
     # --- P-values ---
     from ssdiff.results.format import fmt_p
@@ -280,7 +287,6 @@ def unified_permutation_test(
         )
 
         pairwise[(g1, g2)] = {
-            "gradient": contrast_unit,
             "T": float(T_pairwise_obs[k]),
             "p_raw": float(p_raw_arr[k]),
             "p_corrected": float(p_corrected_arr[k]),
@@ -294,7 +300,5 @@ def unified_permutation_test(
         "omnibus_T": T_omnibus_obs,
         "omnibus_p": omnibus_p,
         "pairwise": pairwise,
-        "group_labels": group_labels,
         "G": G,
-        "correction": correction,
     }

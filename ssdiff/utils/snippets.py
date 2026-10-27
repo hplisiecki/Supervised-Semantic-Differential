@@ -2,11 +2,11 @@
 """
 Snippet extraction along beta and cluster centroids.
 
-Ported from ssdiff.snippets — all pandas usage replaced with plain Python types.
-Mathematical logic is identical.
+Plain Python types only; no pandas.
 """
 from __future__ import annotations
 
+import sys
 from collections.abc import Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
@@ -35,55 +35,37 @@ def _centroid_unit_from_cluster_words(words: list, embeddings) -> np.ndarray:
     return unit_vector(c)
 
 
-# a lightweight "doc-like" view used for both single-doc and per-post in profiles
 class _DocLike:
-    """Lightweight struct holding the fields needed by snippet helpers.
-
-    Used as a uniform interface for both single documents (from
-    ``PreprocessedDoc``) and individual posts within a profile.
-    """
+    """Lightweight struct holding the fields needed by snippet helpers."""
 
     __slots__ = (
+        "doc_id",
         "doc_lemmas",
-        "post_id",
-        "profile_id",
         "sents_surface",
         "token_to_sent",
     )
 
     def __init__(
         self,
-        profile_id: int,
-        post_id: int,
+        doc_id: int,
         sents_surface: list[str],
         doc_lemmas: list[str],
         token_to_sent: list[int],
     ) -> None:
         """Initialise all fields directly from caller-supplied values."""
-        self.profile_id = profile_id  # for PreprocessedDoc: equals doc_id
-        self.post_id = post_id  # for PreprocessedDoc: 0
+        self.doc_id = doc_id
         self.sents_surface = sents_surface
         self.doc_lemmas = doc_lemmas
         self.token_to_sent = token_to_sent
 
 
-def _iter_doclikes(
-    pre_docs: list[PreprocessedDoc],
-) -> Iterator[_DocLike]:
-    """
-    Iterate over all docs as _DocLike objects.
-    Yields _DocLike objects for each doc.
-    """
+def _iter_doclikes(pre_docs: list[PreprocessedDoc]) -> Iterator[_DocLike]:
+    """Yield one _DocLike per document."""
     if not pre_docs:
         return
     for di, P in enumerate(pre_docs):
-        yield _DocLike(
-            profile_id=di,
-            post_id=0,
-            sents_surface=P.sents_surface,
-            doc_lemmas=P.doc_lemmas,
-            token_to_sent=P.token_to_sent,
-        )
+        yield _DocLike(doc_id=di, sents_surface=P.sents_surface,
+                       doc_lemmas=P.doc_lemmas, token_to_sent=P.token_to_sent)
 
 
 def _build_global_sif(pre_docs) -> tuple[dict[str, int], int]:
@@ -100,8 +82,6 @@ def _make_snippet_anchor(
     Returns (snippet_anchor, start_sent_idx, end_sent_idx).
     """
     s_idx = D.token_to_sent[i] if i < len(D.token_to_sent) else 0
-    start_tok = max(0, min(start_tok, len(D.doc_lemmas) - 1))
-    end_tok = max(0, min(end_tok, len(D.doc_lemmas) - 1))
     start_sent = (
         D.token_to_sent[start_tok] if start_tok < len(D.token_to_sent) else s_idx
     )
@@ -151,12 +131,15 @@ def _precompute_doc_arrays(
     if N == 0:
         return dict(N=0)
 
-    # weights
-    w = np.fromiter(
-        (sif_a / (sif_a + global_wc.get(t, 0) / max(total_tokens, 1)) for t in toks),
-        dtype=np.float64,
-        count=N,
-    )
+    # weights (all 1 when SIF is off)
+    if sif_a is None:
+        w = np.ones(N, dtype=np.float64)
+    else:
+        w = np.fromiter(
+            (sif_a / (sif_a + global_wc.get(t, 0) / max(total_tokens, 1)) for t in toks),
+            dtype=np.float64,
+            count=N,
+        )
 
     # vectors (unit rows; zero if OOV)
     V = np.zeros((N, d), dtype=np.float64)
@@ -178,8 +161,7 @@ def _precompute_doc_arrays(
         hit=hit,
         token_to_sent=D.token_to_sent,
         sents_surface=D.sents_surface,
-        profile_id=D.profile_id,
-        post_id=D.post_id,
+        doc_id=D.doc_id,
     )
 
 
@@ -231,8 +213,7 @@ def _collect_occurrences_for_doc(
     essay_lemmas = " ".join(toks)
 
     return dict(
-        profile_id=DA["profile_id"],
-        post_id=DA["post_id"],
+        doc_id=DA["doc_id"],
         occ_mat=occ_mat,
         meta=meta,
         essay_surface=essay_surface,
@@ -250,14 +231,18 @@ class _DL_proxy(_DocLike):
 
     def __init__(self, DA: dict[str, Any]) -> None:
         """Build proxy from a precomputed doc-array dict returned by ``_precompute_doc_arrays``."""
-        self.profile_id = DA["profile_id"]
-        self.post_id = DA["post_id"]
+        self.doc_id = DA["doc_id"]
         self.sents_surface = DA["sents_surface"]
         self.doc_lemmas = DA["toks"]
         self.token_to_sent = DA["token_to_sent"]
 
 
 # ---------- parallel driver ----------
+def _serial(n_jobs) -> bool:
+    """Whether to run without a thread pool: asked for one job, or under Pyodide, which cannot start threads."""
+    return n_jobs == 1 or sys.platform == "emscripten"
+
+
 def _precompute_all_docs(
     pre_docs: list[PreprocessedDoc],
     embeddings,
@@ -271,6 +256,12 @@ def _precompute_all_docs(
     Returns list of per-doc dicts with precomputed arrays.
     """
     doclikes = list(_iter_doclikes(pre_docs))
+    if _serial(n_jobs):
+        results = [
+            _precompute_doc_arrays(embeddings, D, sif_a, global_wc, total_tokens)
+            for D in doclikes
+        ]
+        return [r for r in results if r.get("N", 0) > 0]
     # Threaded precompute (BLAS inside get_vector won't block; read-only embeddings is safe)
     results: list[dict[str, Any] | None] = [None] * len(doclikes)
     with ThreadPoolExecutor(
@@ -300,6 +291,8 @@ def _parallel_collect(
 
     iterator = _progress(items, verbose=verbose, total=len(items), desc=desc)
 
+    if _serial(n_jobs):
+        return [r for item in iterator if (r := worker(item)) is not None]
     with ThreadPoolExecutor(
         max_workers=(None if n_jobs in (-1, 0, None) else int(n_jobs))
     ) as ex:
@@ -386,8 +379,7 @@ def _collect_sentence_occurrences_for_doc(
     essay_lemmas = " ".join(toks)
 
     return dict(
-        profile_id=DA["profile_id"],
-        post_id=DA["post_id"],
+        doc_id=DA["doc_id"],
         occ_mat=occ_mat,
         meta=meta,
         essay_surface=essay_surface,
@@ -458,8 +450,7 @@ def _collect_doc_occurrences_for_doc(
     essay_lemmas = " ".join(toks)
 
     return dict(
-        profile_id=DA["profile_id"],
-        post_id=DA["post_id"],
+        doc_id=DA["doc_id"],
         occ_mat=occ_mat,
         meta=meta,
         essay_surface=essay_surface,
@@ -473,7 +464,7 @@ def _collect_doc_occurrences(
     verbose: bool = False,
     desc: str = "Snippets: docs",
 ) -> list[dict[str, Any]]:
-    """One occurrence per doc/post, based on *whole text*."""
+    """One occurrence per doc, based on *whole text*."""
     return _parallel_collect(
         _collect_doc_occurrences_for_doc,
         doc_arrays, n_jobs, verbose, desc,
@@ -483,7 +474,7 @@ def _collect_doc_occurrences(
 ############################
 
 
-# ---------- sorting / top-k helpers (replacing pandas) ----------
+# ---------- sorting / top-k helpers ----------
 def _sort_rows_by_cosine_desc(rows: list[dict]) -> list[dict]:
     """Sort list of dicts by 'cosine' key, descending."""
     return sorted(rows, key=lambda r: r["cosine"], reverse=True)
@@ -515,7 +506,7 @@ def cluster_snippets_by_centroids(
     neg_clusters: list[dict] | None,  # clusters from -beta
     token_window: int = 3,
     seeds: Iterable[str] | None = None,
-    sif_a: float = 1e-3,
+    sif_a: float | None = 1e-3,
     global_wc: dict[str, int] | None = None,
     total_tokens: int | None = None,
     top_per_cluster: int = 100,
@@ -527,7 +518,7 @@ def cluster_snippets_by_centroids(
 
     Returns dict with 'pos' and 'neg' keys, each a list of dicts.
     Each dict has keys:
-        centroid_label, profile_id, post_id, cosine, seed,
+        centroid_label, doc_id, cosine, seed,
         start_token_idx, end_token_idx, start_sent_idx, end_sent_idx,
         snippet_anchor, essay_text_surface, essay_text_lemmas
 
@@ -546,8 +537,9 @@ def cluster_snippets_by_centroids(
         Token window size around seed words for occurrence context (default is 3).
     seeds : Iterable[str] | None, optional
         Iterable of seed words to look for in documents. If None, uses ssd.lexicon.
-    sif_a : float, optional
-        SIF weighting parameter (default is 1e-3).
+    sif_a : float or None, optional
+        SIF weighting parameter (default is 1e-3). ``None`` weighs every
+        word 1.
     global_wc : dict[str, int] | None, optional
         Global word counts. If None, will be computed from pre_docs.
     total_tokens : int | None, optional
@@ -565,7 +557,7 @@ def cluster_snippets_by_centroids(
         Dictionary with 'pos' and 'neg' lists of snippet dicts.
     """
 
-    if global_wc is None or total_tokens is None:
+    if sif_a is not None and (global_wc is None or total_tokens is None):
         global_wc, total_tokens = _build_global_sif(pre_docs)
 
     embeddings = ssd.embeddings
@@ -597,7 +589,7 @@ def cluster_snippets_by_centroids(
     )
 
     # 2) collect occurrences:
-    #    - if we have seeds -> seed-based windows (old behavior)
+    #    - if we have seeds -> seed-based windows
     #    - if no seeds      -> fallback to *whole-text* occurrences
     if seeds_set:
         occs = _collect_all_occurrences(
@@ -626,8 +618,7 @@ def cluster_snippets_by_centroids(
                 rows.append(
                     dict(
                         centroid_label=lab,
-                        profile_id=occ["profile_id"],
-                        post_id=occ["post_id"],
+                        doc_id=occ["doc_id"],
                         cosine=float(cos_row[k]),
                         seed=seed,
                         start_token_idx=max(0, L),
@@ -658,7 +649,7 @@ def snippets_along_beta(
     ssd,  # fitted SSD (must expose gradient and embeddings)
     token_window: int = 3,
     seeds: Iterable[str] | None = None,
-    sif_a: float = 1e-3,
+    sif_a: float | None = 1e-3,
     global_wc: dict[str, int] | None = None,
     total_tokens: int | None = None,
     top_per_side: int = 200,
@@ -671,7 +662,7 @@ def snippets_along_beta(
 
     Returns dict with 'pos' and 'neg' keys, each a list of dicts.
     Each dict has keys:
-        side, profile_id, post_id, cosine, seed,
+        side, doc_id, cosine, seed,
         start_token_idx, end_token_idx, start_sent_idx, end_sent_idx,
         snippet_anchor, essay_text_surface, essay_text_lemmas
 
@@ -686,8 +677,9 @@ def snippets_along_beta(
         Token window size around seed occurrences, by default 3.
     seeds : Iterable[str] | None, optional
         Iterable of seed lemmas to focus on. If None, uses ssd.lexicon.
-    sif_a : float, optional
-        SIF weighting parameter, by default 1e-3.
+    sif_a : float or None, optional
+        SIF weighting parameter, by default 1e-3. ``None`` weighs every
+        word 1.
     global_wc : dict[str, int] | None, optional
         Global word counts. If None, computed from pre_docs.
     total_tokens : int | None, optional
@@ -707,7 +699,7 @@ def snippets_along_beta(
         Dictionary with 'pos' and 'neg' lists of snippet dicts.
     """
 
-    if global_wc is None or total_tokens is None:
+    if sif_a is not None and (global_wc is None or total_tokens is None):
         global_wc, total_tokens = _build_global_sif(pre_docs)
 
     embeddings = ssd.embeddings
@@ -745,8 +737,7 @@ def snippets_along_beta(
                 rows_pos.append(
                     dict(
                         side="pos",
-                        profile_id=occ["profile_id"],
-                        post_id=occ["post_id"],
+                        doc_id=occ["doc_id"],
                         cosine=cp,
                         seed=seed,
                         start_token_idx=max(0, L),
@@ -762,8 +753,7 @@ def snippets_along_beta(
                 rows_neg.append(
                     dict(
                         side="neg",
-                        profile_id=occ["profile_id"],
-                        post_id=occ["post_id"],
+                        doc_id=occ["doc_id"],
                         cosine=cn,
                         seed=seed,
                         start_token_idx=max(0, L),

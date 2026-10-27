@@ -1,8 +1,7 @@
 """Golden regression test: SSD.fit_pls() against frozen Warriner-valence results.
 
-Runs entirely from small committed fixtures (no large embeddings, no spaCy, no
-network), so it lives in the normal CI suite — unlike the original heavy
-local-only version it replaces. The fixtures are a thin slice of real English
+Runs entirely from small committed fixtures (no large embeddings, no
+network), so it lives in the normal CI suite. The fixtures are a thin slice of real English
 GloVe (PCA'd to a handful of dims), keyed on Warriner-rated words, with valence
 as the outcome in lexical-norm mode (``use_full_doc=True``). See
 ``tests/fixtures/golden_warriner/generate_fixtures.py`` to regenerate them.
@@ -22,7 +21,7 @@ import os
 import numpy as np
 import pytest
 
-from ssdiff import SSD, Corpus, Embeddings
+from ssdiff import SSD, Embeddings
 
 FIX_DIR = os.path.join(os.path.dirname(__file__), "..", "fixtures", "golden_warriner")
 EMB_PATH = os.path.join(FIX_DIR, "embedding.bin")
@@ -36,11 +35,10 @@ WORD_OVERLAP_MIN = 0.8  # fraction of top words that must match (rank-order is f
 def golden_run():
     """Reproduce the frozen PLS fit from committed fixtures."""
     for p in (EMB_PATH, CORPUS_PATH, GOLDEN_PATH):
-        if not os.path.exists(p):
-            pytest.skip(
-                f"golden-warriner fixture missing: {os.path.basename(p)} "
-                "(run tests/fixtures/golden_warriner/generate_fixtures.py)"
-            )
+        assert os.path.exists(p), (
+            f"golden-warriner fixture missing: {os.path.basename(p)} "
+            "(run tests/fixtures/golden_warriner/generate_fixtures.py)"
+        )
 
     with open(CORPUS_PATH, encoding="utf-8") as f:
         cdata = json.load(f)
@@ -48,11 +46,10 @@ def golden_run():
         golden = json.load(f)
 
     emb = Embeddings.load(EMB_PATH)
-    corpus = Corpus(cdata["docs"], pretokenized=True, lang="en")
     y = np.asarray(cdata["y"], dtype=float)
-    ssd = SSD(emb, corpus, y, use_full_doc=True)
+    ssd = SSD(cdata["docs"], embeddings=emb, use_full_doc=True)
     result = ssd.fit_pls(
-        k=golden["k"], n_splits=cdata["n_splits"], random_state=cdata["random_state"],
+        y, k=golden["k"], n_splits=cdata["n_splits"], random_state=cdata["random_state"],
     )
     return result, golden
 
