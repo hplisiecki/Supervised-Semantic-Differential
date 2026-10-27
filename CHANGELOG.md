@@ -22,6 +22,8 @@ A breaking release. `SSD` now holds one text and nothing about the outcome; each
 - Results carry `text` (the `SSD` they were fit on) in place of `corpus`, and no longer carry `lang`. A pickled result leaves out its text's embeddings and document vectors.
 - `result.predict(texts)` and `result.attach(texts=..., embeddings=...)` take texts in the form the fit used: strings for a fit on strings, token lists for a fit on token lists. `attach(corpus=...)` is gone.
 - Results from token-list texts have no snippets.
+- `.docx` tables take the layout of a paper's results section: an italic caption above the table, rules above and below the header and under the last row, no vertical lines, Times New Roman 11 pt. This holds for views, multi-key views and `report()`. `clusters.save("x.docx")` writes one table per side with the report's cluster columns (No., Size, the 10 closest words, a representative excerpt), captioned with the pole: "Positive semantic clusters (+β̂ → higher score)", or "toward A" for a group pair. New `fit_info.outcome` holds the outcome's column name (`"y"` when given as values).
+- A cluster table in `report()` drops its excerpt column when no cluster has a snippet, as with token-list texts.
 - The neighbour filter of embeddings other than a wordpack skips a word that contains a digit or starts with an uppercase letter, in every script. Uppercase Greek words are now skipped too.
 - The results page moves to report format 2. It shows each text the result uses, one unit per text term, the per-term and per-text tests, and the contrast page. Documents from token lists show their tokens.
 - `glmm` >= 0.6.2 is required.

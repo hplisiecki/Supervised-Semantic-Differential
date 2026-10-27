@@ -44,3 +44,7 @@ print(res.fvalue, res.f_pvalue, res.rsquared)
 
 # The text's own views: the words at each end of the gradient.
 print(res.words)
+
+# The word clusters at each end, as Word tables ready for a paper's results
+# section: one table per end, with a representative excerpt per cluster.
+res.clusters.save("clusters.docx")

@@ -16,7 +16,7 @@ import warnings
 from dataclasses import dataclass, field
 from typing import ClassVar, Literal
 
-from ssdiff.results.core import _require
+from ssdiff.results.core import _add_docx_table, _require
 from ssdiff.results.display import (
     DEFAULT_EXT,
     DEFAULT_FILENAMES,
@@ -61,14 +61,13 @@ def _build_cluster_section(
     ``snippet_provider`` is a no-arg callable returning a side-scoped snippets
     view (must expose ``_all_side_rows``) or ``None`` when snippets are
     unavailable (no text, or extraction failed). When ``n_snippets <= 0`` or
-    the provider returns ``None``, the "Representative Excerpt" column is
+    no cluster has a snippet, the "Representative Excerpt" column is
     omitted entirely.
     """
     words_by_cid: dict[int, list] = {}
     for cw in clusters_view._words_rows:
         words_by_cid.setdefault(cw.cluster_id, []).append(cw)
 
-    include_excerpt = False
     snips_by_cid: dict[int, list] = {}
     if n_snippets > 0:
         sn_view = snippet_provider()
@@ -77,7 +76,8 @@ def _build_cluster_section(
                 if sn.cluster_id is None:
                     continue
                 snips_by_cid.setdefault(sn.cluster_id, []).append(sn)
-            include_excerpt = True
+    # Token-list texts give a snippets view with no rows.
+    include_excerpt = bool(snips_by_cid)
 
     rows = []
     for i, c in enumerate(list(clusters_view)[:n_clusters], start=1):
@@ -158,6 +158,31 @@ class Section:
     rows: list = field(default_factory=list)
     headers: list[str] | None = None
     numeric: list[bool] | None = None
+
+
+def _docx_section(doc, s: Section) -> None:
+    """Append one Section to a python-docx Document.
+
+    A kv or table section is a table captioned with the section title; a list
+    section is a heading and bullets. In a table with both kinds of column,
+    numeric columns are narrow and centred and the others share the width.
+    """
+    if s.kind == "kv":
+        _add_docx_table(doc, None, [[str(k), str(v)] for k, v in s.rows], caption=s.title)
+    elif s.kind == "table":
+        numeric = s.numeric or []
+        n_num = sum(numeric)
+        widths = None
+        if 0 < n_num < len(numeric):
+            text_w = (1 - 0.1 * n_num) / (len(numeric) - n_num)
+            widths = [0.1 if num else text_w for num in numeric]
+        _add_docx_table(doc, s.headers or None, [[str(c) for c in r] for r in s.rows],
+                        caption=s.title, widths=widths,
+                        center=[j for j, num in enumerate(numeric) if num])
+    elif s.kind == "list":
+        doc.add_heading(s.title, level=2)
+        for item in s.rows:
+            doc.add_paragraph(str(item), style="List Bullet")
 
 
 @dataclass
@@ -269,8 +294,7 @@ class Report:
         if self.subtitle:
             doc.add_paragraph(self.subtitle)
         for s in self.sections:
-            doc.add_heading(s.title, level=2)
-            self._docx_section_body(doc, s)
+            _docx_section(doc, s)
         doc.save(path)
 
     # -------- unified save() --------------------------------------------
@@ -385,25 +409,6 @@ class Report:
             items = "\n".join(f"\\item {i}" for i in s.rows)
             return f"\\begin{{itemize}}\n{items}\n\\end{{itemize}}"
         return ""
-
-    def _docx_section_body(self, doc, s: Section) -> None:
-        """Append the body of one Section to a python-docx Document object."""
-        if s.kind == "kv":
-            t = doc.add_table(rows=len(s.rows), cols=2)
-            for i, (k, v) in enumerate(s.rows):
-                t.rows[i].cells[0].text = str(k)
-                t.rows[i].cells[1].text = str(v)
-        elif s.kind == "table":
-            headers = s.headers or []
-            t = doc.add_table(rows=1 + len(s.rows), cols=len(headers))
-            for j, h in enumerate(headers):
-                t.rows[0].cells[j].text = h
-            for i, r in enumerate(s.rows, start=1):
-                for j, c in enumerate(r):
-                    t.rows[i].cells[j].text = str(c)
-        elif s.kind == "list":
-            for item in s.rows:
-                doc.add_paragraph(str(item), style="List Bullet")
 
     @staticmethod
     def _warn_if_cols(cols) -> None:

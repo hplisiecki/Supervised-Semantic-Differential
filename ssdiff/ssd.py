@@ -577,6 +577,7 @@ def _fit_regression(
                     "family": fit.family,
                     "ssd_gradients": ssd_gradients,
                     "rotate": "words" if ssd_gradients > 1 else None,
+                    "outcome": y_name,
                 },
                 raw_diagnostics={
                     "sweep_result": sweep_result,
@@ -1284,6 +1285,7 @@ class SSD:
                 "formula": formula,
                 "ssd_gradients": ssd_gradients,
                 "rotate": rotate if ssd_gradients > 1 else None,
+                "outcome": rows.y_name,
             },
             raw_diagnostics=raw_diagnostics,
             test_name=test_name,

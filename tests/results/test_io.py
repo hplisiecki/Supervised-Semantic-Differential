@@ -268,3 +268,67 @@ def test_report_save_json_roundtrip(tmp_path):
     data = json.loads(out.read_text(encoding="utf-8"))
     assert data["title"] == report.title
     assert "sections" in data
+
+
+# ---------------------------------------------------------------------------
+# .docx tables: three-rule layout, clusters in a paper's layout
+# ---------------------------------------------------------------------------
+
+def _rules(cell) -> dict:
+    """``{edge: w:val}`` of one python-docx cell's borders."""
+    from docx.oxml.ns import qn
+    borders = cell._tc.tcPr.find(qn("w:tcBorders"))
+    return {el.tag.split("}")[1]: el.get(qn("w:val")) for el in borders}
+
+
+def test_docx_table_has_three_rules(pls_result, tmp_path):
+    """Rules above and below the header and under the last row; none between rows or columns."""
+    docx = pytest.importorskip("docx")
+    out = tmp_path / "words.docx"
+    pls_result.words.save(out)
+
+    rows = docx.Document(out).tables[0].rows
+    assert len(rows) > 2
+    for i, row in enumerate(rows):
+        top = "single" if i == 0 else "nil"
+        bottom = "single" if i in (0, len(rows) - 1) else "nil"
+        for cell in row.cells:
+            assert _rules(cell) == {"top": top, "left": "nil", "bottom": bottom, "right": "nil"}
+
+
+def _cluster_tables(result, path):
+    """Save ``result.clusters`` as .docx; return ``(captions, tables as lists of row texts)``."""
+    import docx
+    result.clusters.save(path)
+    doc = docx.Document(path)
+    captions = [p.text for p in doc.paragraphs if p.text]
+    tables = [[[c.text for c in row.cells] for row in t.rows] for t in doc.tables]
+    return captions, tables
+
+
+def test_clusters_docx_paper_layout(pls_result, tmp_path):
+    """One table per side, numbered from 1, ten words per cluster, a snippet, the outcome in the caption."""
+    pytest.importorskip("docx")
+    captions, tables = _cluster_tables(pls_result, tmp_path / "clusters.docx")
+
+    assert captions == ["Positive semantic clusters (+β̂ → higher y)",
+                        "Negative semantic clusters (−β̂ → lower y)"]
+    for side, table in zip(("pos", "neg"), tables):
+        view = getattr(pls_result.clusters, side)
+        assert table[0] == ["No.", "Size", "Top Words", "Representative Excerpt"]
+        assert len(table) == 1 + len(view)
+        for i, (line, c) in enumerate(zip(table[1:], view), start=1):
+            words = sorted(view(c.cluster_id).words, key=lambda w: w.cos_centroid, reverse=True)
+            assert line[:3] == [str(i), str(c.size), ", ".join(w.word for w in words[:10])]
+            assert line[3]
+
+
+def test_clusters_docx_group_pair_without_texts(group_result_2g, tmp_path):
+    """A pair's poles point toward its groups; token-list texts give no excerpt column."""
+    pytest.importorskip("docx")
+    pair = group_result_2g[group_result_2g.keys()[0]]
+    captions, tables = _cluster_tables(pair, tmp_path / "clusters.docx")
+
+    assert captions == [f"Positive semantic clusters (+β̂ → toward {pair.g1})",
+                        f"Negative semantic clusters (−β̂ → toward {pair.g2})"]
+    assert all(t[0] == ["No.", "Size", "Top Words"] for t in tables)

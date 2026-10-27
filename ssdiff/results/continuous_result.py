@@ -58,7 +58,7 @@ class FitInfoView(ScalarView):
     _columns = (
         "n_components", "p_at_k", "n_splits", "random_state",
         "k_min", "k_max", "k_step", "best_k", "pca_k_source",
-        "formula", "family", "ssd_gradients", "rotate",
+        "formula", "family", "ssd_gradients", "rotate", "outcome",
     )
 
     def __init__(self, info: FitInfo):
@@ -229,6 +229,34 @@ class ClusterWordsViewSided(ClusterWordsView):
         return ClusterWordsViewSided(self._side, rows, _no_trunc=True)
 
 
+def _write_docx_clusters(views, path, poles, *, cols=None, k=None) -> None:
+    """Write cluster tables as they go into a paper's results section.
+
+    One table per ``ClustersViewSided`` in *views*, the report's cluster
+    table (``_build_cluster_section``): No., Size, the 10 words closest to
+    the centroid, and the top snippet as the representative excerpt, a
+    column left out without texts. *k* caps each table's rows. *poles* is
+    the result's ``_pole_names()``, named in each caption. The layout is
+    fixed, so *cols* only draws a warning.
+    """
+    from ssdiff.results.core import _require, _warn
+    from ssdiff.results.report import _docx_section
+    if cols is not None:
+        _warn("The .docx clusters layout ignores `cols`.", stacklevel=4)
+    docx = _require("docx", extra="results")
+    doc = docx.Document()
+    for view in views:
+        name, sign = ("Positive", "+") if view._side == "pos" else ("Negative", "−")
+        caption = f"{name} semantic clusters"
+        if poles is not None:
+            caption += f" ({sign}β̂ → {poles[view._side != 'pos']})"
+        _docx_section(doc, _build_cluster_section(
+            caption, view, n_clusters=len(view) if k is None else k, n_words=10,
+            n_snippets=1, snippet_provider=view._cluster_snippets,
+        ))
+    doc.save(str(path))
+
+
 class ClustersViewSided(View[Cluster]):
     """Cluster summary view for one β pole.
 
@@ -259,29 +287,39 @@ class ClustersViewSided(View[Cluster]):
         self._top_snippet_filled = _top_snippet_filled
         self._top_snippets_n = _top_snippets_n
 
-    def _fill_top_snippets(self) -> None:
-        """Populate ``top_snippet`` on every row from the cluster-snippet cache.
+    def _cluster_snippets(self):
+        """This side's cluster snippets for this view's clustering, or ``None`` without them.
 
-        No-op if already filled, or if the parent has no text / embeddings.
-        On a cold cache this triggers full ``_cluster_snippets_for`` extraction
-        (SIF + cosine over all docs) — that's the documented cost of opting
-        ``top_snippet`` into a render or export.
+        ``None`` when the parent has no text or embeddings. On a cold cache
+        this runs the full ``_cluster_snippets_for`` extraction (SIF + cosine
+        over all docs).
         """
-        import dataclasses
-        if self._top_snippet_filled:
-            return
         if getattr(self._parent, "text", None) is None:
-            return
+            return None
         if getattr(self._parent, "embeddings", None) is None:
-            return
+            return None
         try:
-            snips_view = self._parent._cluster_snippets_for(
+            return self._parent._cluster_snippets_for(
                 self._side,
                 **{k: v for k, v in self._params.items() if k != "side"},
             )
         except Exception:
             # _require_resource may still raise even when attrs look attached
             # (e.g. lexicon missing). Treat as "no snippets available."
+            return None
+
+    def _fill_top_snippets(self) -> None:
+        """Populate ``top_snippet`` on every row from the cluster-snippet cache.
+
+        No-op if already filled, or without snippets (see ``_cluster_snippets``):
+        the extraction is the documented cost of opting ``top_snippet`` into a
+        render or export.
+        """
+        import dataclasses
+        if self._top_snippet_filled:
+            return
+        snips_view = self._cluster_snippets()
+        if snips_view is None:
             return
         best_per_cid: dict[int, tuple[float, str]] = {}
         for s in snips_view._all_side_rows:
@@ -389,7 +427,10 @@ class ClustersViewSided(View[Cluster]):
         return super().to_df(cols=cols)
 
     def save(self, path=None, *, cols=None, k=None):
-        from ssdiff.results.core import _validate_cols
+        from ssdiff.results.core import _get_ext, _validate_cols
+        if path is not None and _get_ext(str(path)) == "docx":
+            _write_docx_clusters([self], path, self._parent._pole_names(), cols=cols, k=k)
+            return
         keep, _ = _validate_cols(cols, self)
         self._ensure_filled_if_requested(keep)
         return super().save(path, cols=cols, k=k)
@@ -741,6 +782,24 @@ class ClustersView(View[Cluster]):
         return ("Save:  .save('clusters.csv')               # all rows (pos then neg)\n"
                 "       .pos.save('clusters_pos.csv')\n"
                 "       .neg.save('clusters_neg.csv')")
+
+    def save(self, path=None, *, cols=None, k=None):
+        """Write the view to ``path``, format from the extension (see ``View.save``).
+
+        ``.docx`` writes one table per side, laid out for a paper (see
+        ``_write_docx_clusters``); ``k`` caps each side's rows there.
+        """
+        from ssdiff.results.core import _get_ext
+        if path is None or _get_ext(str(path)) != "docx":
+            return super().save(path, cols=cols, k=k)
+        views = [self.pos, self.neg]
+        if self._rows_override is not None:
+            # A slice of this view keeps only its own rows of each side.
+            views = [ClustersViewSided(
+                parent=v._parent, side=v._side, rows=[r for r in self._rows_override if r.side == v._side],
+                words_rows=v._words_rows, params=v._params,
+            ) for v in views]
+        _write_docx_clusters(views, path, self._parent._pole_names(), cols=cols, k=k)
 
     def to_text(self, max_rows: int | None = None, cols=None) -> str:
         """Render combined pos + neg rows as a single table.
@@ -1917,6 +1976,12 @@ class ContinuousResult(_SingleResult):
     def _save_hint_html(self) -> str:
         return f"<pre class='ssd-save-hint'>{self._save_hint()}</pre>"
 
+    def _pole_names(self) -> tuple[str, str] | None:
+        # None when the fit recorded no outcome name, e.g. a result pickled
+        # before FitInfo had one.
+        y = self.fit_info.outcome
+        return None if y is None else (f"higher {y}", f"lower {y}")
+
     # -------- report --------------------------------------------------
     def report(self, *,
                clusters: bool | dict | None = True,
@@ -2004,22 +2069,13 @@ class ContinuousResult(_SingleResult):
             n_snippets = cl["n_snippets"]
             for side in ("pos", "neg"):
                 clusters_view = getattr(self.clusters, side)
-
-                def _snippet_provider(_side=side):
-                    if getattr(self, "text", None) is None:
-                        return None
-                    try:
-                        return self._cluster_snippets_for(_side)
-                    except Exception:
-                        return None
-
                 sections.append(_build_cluster_section(
                     title=f"Clusters ({side}, top {n_cl})",
                     clusters_view=clusters_view,
                     n_clusters=n_cl,
                     n_words=n_words,
                     n_snippets=n_snippets,
-                    snippet_provider=_snippet_provider,
+                    snippet_provider=clusters_view._cluster_snippets,
                 ))
 
         if tw and self.embeddings is not None:

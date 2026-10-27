@@ -65,6 +65,9 @@ class ContrastResult(_SingleResult):
     def alignment_scores(self):
         raise RuntimeError("A contrast has no documents, so it has no alignment scores.")
 
+    def _pole_names(self) -> tuple[str, str]:
+        return f"toward {self.labels[0]}", f"toward {self.labels[1]}"
+
     def _summary(self) -> str:
         from ssdiff.results.format import fmt_r
         s = self.stats._row

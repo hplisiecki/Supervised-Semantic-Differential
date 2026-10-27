@@ -218,7 +218,8 @@
     "formula",
     "family",
     "ssd_gradients",
-    "rotate"
+    "rotate",
+    "outcome"
    ],
    "rows": [
     [
@@ -234,7 +235,8 @@
      null,
      "gaussian",
      1,
-     null
+     null,
+     "y"
     ]
    ]
   },

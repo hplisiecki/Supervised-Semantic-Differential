@@ -64,6 +64,14 @@ class _SingleResult(Result):
     def x(self) -> np.ndarray:
         return self._x
 
+    def _pole_names(self) -> tuple[str, str] | None:
+        """What the gradient's positive and negative poles point toward, for captions.
+
+        ``None`` when there is nothing to name, e.g. a PLS3 dimension of
+        several outcomes.
+        """
+        return None
+
     @property
     def alignment_scores(self) -> np.ndarray:
         """Per-document cosine alignment ``d_i · gradient`` (shape ``(n,)``).

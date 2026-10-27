@@ -325,7 +325,7 @@
    ],
    "rows": [
     [
-     "PCA+GLMM",
+     "PCA+OLS",
      0.8114906827890891,
      0.7914179314194087,
      0.8351418295677313,
@@ -355,7 +355,8 @@
     "formula",
     "family",
     "ssd_gradients",
-    "rotate"
+    "rotate",
+    "outcome"
    ],
    "rows": [
     [
@@ -371,7 +372,8 @@
      "y ~ ssd(essay) + group*ssd(diary)",
      "gaussian",
      1,
-     null
+     null,
+     "y"
     ]
    ]
   },
@@ -501,7 +503,7 @@
      ],
      "rows": [
       [
-       "PCA+GLMM",
+       "PCA+OLS",
        0.8114906827890891,
        0.7914179314194087,
        0.8351418295677313,
@@ -531,7 +533,8 @@
       "formula",
       "family",
       "ssd_gradients",
-      "rotate"
+      "rotate",
+      "outcome"
      ],
      "rows": [
       [
@@ -547,7 +550,8 @@
        "y ~ ssd(essay) + group*ssd(diary)",
        "gaussian",
        1,
-       null
+       null,
+       "y"
       ]
      ]
     },
@@ -6736,7 +6740,7 @@
      ],
      "rows": [
       [
-       "PCA+GLMM",
+       "PCA+OLS",
        0.8114906827890891,
        0.7914179314194087,
        0.8351418295677313,
@@ -6766,7 +6770,8 @@
       "formula",
       "family",
       "ssd_gradients",
-      "rotate"
+      "rotate",
+      "outcome"
      ],
      "rows": [
       [
@@ -6782,7 +6787,8 @@
        "y ~ ssd(essay) + group*ssd(diary)",
        "gaussian",
        1,
-       null
+       null,
+       "y"
       ]
      ]
     },
@@ -11983,7 +11989,7 @@
      ],
      "rows": [
       [
-       "PCA+GLMM",
+       "PCA+OLS",
        0.8114906827890891,
        0.7914179314194087,
        0.8351418295677313,
@@ -12013,7 +12019,8 @@
       "formula",
       "family",
       "ssd_gradients",
-      "rotate"
+      "rotate",
+      "outcome"
      ],
      "rows": [
       [
@@ -12029,7 +12036,8 @@
        "y ~ ssd(essay) + group*ssd(diary)",
        "gaussian",
        1,
-       null
+       null,
+       "y"
       ]
      ]
     },
@@ -17150,7 +17158,7 @@
      ],
      "rows": [
       [
-       "PCA+GLMM",
+       "PCA+OLS",
        0.8114906827890891,
        0.7914179314194087,
        0.8351418295677313,
@@ -17180,7 +17188,8 @@
       "formula",
       "family",
       "ssd_gradients",
-      "rotate"
+      "rotate",
+      "outcome"
      ],
      "rows": [
       [
@@ -17196,7 +17205,8 @@
        "y ~ ssd(essay) + group*ssd(diary)",
        "gaussian",
        1,
-       null
+       null,
+       "y"
       ]
      ]
     },

@@ -134,6 +134,9 @@ class PairResult(_SingleResult):
         self._cache[key] = view
         return view
 
+    def _pole_names(self) -> tuple[str, str]:
+        return f"toward {self.g1}", f"toward {self.g2}"
+
     def __getstate__(self):
         state = super().__getstate__()
         state["_container"] = None
@@ -647,22 +650,13 @@ class GroupResult(_MultiContainer):
                 clusters_view = leaf.clusters
                 for side in ("pos", "neg"):
                     cl_view = getattr(clusters_view, side)
-
-                    def _snippet_provider(_leaf=leaf, _side=side):
-                        if getattr(_leaf, "text", None) is None:
-                            return None
-                        try:
-                            return _leaf._cluster_snippets_for(_side)
-                        except Exception:
-                            return None
-
                     sections.append(_build_cluster_section(
                         title=f"{pair_title} — {side}",
                         clusters_view=cl_view,
                         n_clusters=n_cl,
                         n_words=n_words,
                         n_snippets=n_snippets,
-                        snippet_provider=_snippet_provider,
+                        snippet_provider=cl_view._cluster_snippets,
                     ))
 
         # Top words — one table per pair

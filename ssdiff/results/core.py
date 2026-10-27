@@ -202,20 +202,84 @@ def _write_xlsx(rows: list[dict], cols: Sequence[str], path: str) -> None:
     df.to_excel(path, index=False)
 
 
+# A rule of a .docx table: 1.5 pt (w:sz is in eighths of a point), black.
+_DOCX_RULE = {"val": "single", "sz": "12", "space": "0", "color": "000000"}
+
+
+def _add_docx_table(doc, headers: Sequence[str] | None, rows: Sequence[Sequence[str]], *,
+                    caption: str | None = None, widths: Sequence[float] | None = None,
+                    center: Sequence[int] = ()) -> None:
+    """Append a captioned table in the layout of a paper's results section.
+
+    Three horizontal rules and no vertical ones: above and below the header
+    row and under the last row. Times New Roman 11 pt, bold header, an italic
+    caption paragraph above the table. Run-level formatting, not document
+    styles, so the table keeps its look when pasted into another document.
+
+    *headers* is ``None`` for a table without a header row (the first rule
+    then sits above the first row). *widths* are fractions of the page's text
+    width, one per column; equal when ``None``. Columns in *center* are
+    centred.
+    """
+    from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    from docx.shared import Pt
+
+    def add_run(par, text, *, bold=False, italic=False):
+        run = par.add_run(text)
+        run.bold, run.italic = bold, italic
+        run.font.name, run.font.size = "Times New Roman", Pt(11)
+
+    if caption:
+        par = doc.add_paragraph()
+        par.paragraph_format.space_before = Pt(12)
+        par.paragraph_format.space_after = Pt(3)
+        add_run(par, caption, italic=True)
+
+    lines = ([list(headers)] if headers is not None else []) + [list(r) for r in rows]
+    if not lines:
+        return
+    n_cols = len(lines[0])
+    section = doc.sections[-1]
+    text_width = section.page_width - section.left_margin - section.right_margin
+    col_widths = [int(text_width * w) for w in (widths or [1 / n_cols] * n_cols)]
+
+    table = doc.add_table(rows=len(lines), cols=n_cols)
+    table.autofit = False
+    for col, w in zip(table.columns, col_widths):
+        col.width = w
+    last = len(lines) - 1
+    for i, values in enumerate(lines):
+        is_header = headers is not None and i == 0
+        rules = {"top": i == 0, "left": False, "bottom": is_header or i == last, "right": False}
+        for j, (cell, text) in enumerate(zip(table.rows[i].cells, values)):
+            cell.width = col_widths[j]
+            borders = OxmlElement("w:tcBorders")
+            for edge, on in rules.items():
+                el = OxmlElement(f"w:{edge}")
+                for k, v in (_DOCX_RULE if on else {"val": "nil"}).items():
+                    el.set(qn(f"w:{k}"), v)
+                borders.append(el)
+            cell._tc.get_or_add_tcPr().append(borders)
+            cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+            par = cell.paragraphs[0]
+            par.paragraph_format.space_before = par.paragraph_format.space_after = Pt(0)
+            par.paragraph_format.line_spacing = 1.0
+            if j in center:
+                par.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            add_run(par, str(text), bold=is_header)
+
+
 def _write_docx_table(rows: list[dict], cols: Sequence[str], path: str,
                       *, title: str | None = None) -> None:
-    """Write rows as a .docx table, with an optional heading, using python-docx."""
+    """Write rows as a .docx table, captioned with *title*, using python-docx."""
     from ssdiff.results.format import fmt_cell
     docx = _require("docx", extra="results")
     doc = docx.Document()
-    if title:
-        doc.add_heading(title, level=1)
-    table = doc.add_table(rows=1 + len(rows), cols=len(cols))
-    for j, c in enumerate(cols):
-        table.rows[0].cells[j].text = str(c)
-    for i, r in enumerate(rows, start=1):
-        for j, c in enumerate(cols):
-            table.rows[i].cells[j].text = fmt_cell(r.get(c), c)
+    _add_docx_table(doc, [str(c) for c in cols],
+                    [[fmt_cell(r.get(c), c) for c in cols] for r in rows], caption=title)
     doc.save(path)
 
 

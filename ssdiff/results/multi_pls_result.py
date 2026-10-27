@@ -194,6 +194,16 @@ class _PLSComponentResult(_SingleResult):
         self._cache[cache_key] = view
         return view
 
+    def _pole_names(self) -> tuple[str, str] | None:
+        # pls1_rotate(rotate="words") signs each dimension to correlate
+        # positively with the one outcome. Unrotated NIPALS dimensions 2…N have
+        # no sign toward it, and a PLS3 dimension has several outcomes.
+        from ssdiff.results.continuous_result import ContinuousResult
+        c = self._container
+        if isinstance(c, ContinuousResult) and c.fit_info.rotate == "words":
+            return c._pole_names()
+        return None
+
     def __getstate__(self):
         state = super().__getstate__()
         state["_container"] = None
