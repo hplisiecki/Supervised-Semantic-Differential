@@ -107,3 +107,16 @@ def test_poisson_gives_wald_chisq_rows(essay, parity_df):
     rows = list(res.test)
     assert [r.name for r in rows] == ["lrt", "wald_chisq", "wald_chisq"]
     assert all(r.df_resid is None and np.isfinite(r.pvalue) for r in rows)
+
+
+def test_report_has_one_block_per_term_and_docs_once(essay, parity_df, tmp_path):
+    res = essay.fit_regression("y ~ cov + group*ssd()", data=parity_df, fixed_k=4)
+    rep = res.report()
+    by_title = {s.title: s for s in rep.sections}
+    assert [row[0] for row in by_title["Text terms"].rows] == res.keys()
+    for key in res.keys():
+        assert any(t.startswith(f"{key} — ") for t in by_title)
+    assert sum(t.startswith("Docs — pos") for t in by_title) == 1
+    for ext in ("md", "docx"):
+        rep.save(tmp_path / f"report.{ext}")
+        assert (tmp_path / f"report.{ext}").stat().st_size > 0

@@ -197,7 +197,7 @@ res.save_page("interaction.html")
 - A leaf is a `PCAOLSResult` with `.beta`, `.gradient`, `.words`, `.clusters`, `.snippets`, `.docs`, `.report()`. Its `beta` is the gradient of that term alone. The gradient of one level is the sum of the `beta` of the main text term and of that level's term.
 - `res.words`, `res.clusters`, `res.snippets`, `res.beta`, `res.gradient` fan out across the leaves, as on `GroupResult`.
 - `.model`, `.fit_info`, `.sweep` and `.covariates` are the same for every leaf, and so are the statsmodels names (`.params`, `.pvalues`, `.fvalue`, …) and `.summary()`.
-- The container has `.summary()`, `.save_page()` and `.attach()`, and no `.report()` or `.predict()`: call those on a leaf.
+- The container has `.summary()`, `.report()`, `.save_page()` and `.attach()`, and no `.predict()`: call that on a leaf.
 
 **`res.test`** has one row per test, with columns `label`, `name`, `pvalue`, `statistic`, `df`, `df_resid`, `r2_delta`:
 
@@ -535,7 +535,7 @@ result.report(misdiagnosed=False)
 result.report(top_words=False, extreme_docs=False, misdiagnosed=False)
 ```
 
-`RegressionResult` and `ContrastResult` have no `.report()`: use `res.summary()` and `save_page()`, or `.report()` on one leaf of a `RegressionResult`.
+`ContrastResult` has no `.report()`.
 
 A `fit_pls(ssd_gradients=N)` result with N > 1 adds, after these sections, a Rotation block, a Dimensions table (`cov_share`, `score_corr` per gradient) and each gradient's top words; `top_words` sets those too.
 

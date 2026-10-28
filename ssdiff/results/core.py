@@ -221,6 +221,7 @@ def _add_docx_table(doc, headers: Sequence[str] | None, rows: Sequence[Sequence[
     width, one per column; equal when ``None``. Columns in *center* are
     centred.
     """
+    # Mirrors toDOCXTable in page_template.html — change together.
     from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.oxml import OxmlElement

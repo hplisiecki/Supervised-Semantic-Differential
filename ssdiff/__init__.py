@@ -58,4 +58,4 @@ from importlib.metadata import version as _version
 try:
     __version__ = _version("ssdiff")
 except PackageNotFoundError:
-    __version__ = "4.0.0"
+    __version__ = "4.0.1"

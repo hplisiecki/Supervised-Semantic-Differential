@@ -2046,6 +2046,24 @@ class ContinuousResult(_SingleResult):
             stat_rows.append(provenance)
         sections.append(Section(title="Stats", kind="kv", rows=stat_rows))
 
+        fit_rows = self._fit_info_rows()
+        if fit_rows:
+            sections.append(Section(title="Fit info", kind="kv", rows=fit_rows))
+        sections += self._word_sections(cl, tw)
+        sections += self._doc_sections(ed, md)
+
+        if self._leaves:
+            from ssdiff.results.multi_pls_result import _dimension_sections
+            sections += _dimension_sections(self, tw["n"] if tw else None)
+
+        return Report(
+            title=f"{type(self).__name__} — r² = {fmt_r(s.r2)}",
+            subtitle=f"(n = {fmt_count(s.n_kept)})",
+            sections=sections,
+        )
+
+    def _fit_info_rows(self) -> list:
+        """Rows of the report's "Fit info" section: the fit settings that were set."""
         fi = self.fit_info
         fit_rows = []
         if fi.n_components is not None:
@@ -2060,9 +2078,11 @@ class ContinuousResult(_SingleResult):
             fit_rows.append(("ssd_gradients", fi.ssd_gradients))
         if fi.rotate is not None:
             fit_rows.append(("rotate", fi.rotate))
-        if fit_rows:
-            sections.append(Section(title="Fit info", kind="kv", rows=fit_rows))
+        return fit_rows
 
+    def _word_sections(self, cl: dict | None, tw: dict | None) -> list[Section]:
+        """The report's cluster tables (one per side) and top-words table."""
+        sections = []
         if cl and self.embeddings is not None:
             n_cl = cl["n"]
             n_words = cl["n_words"]
@@ -2090,7 +2110,11 @@ class ContinuousResult(_SingleResult):
                                     headers=["Side", "Rank", "Word", "cos_β"],
                                     rows=rows,
                                     numeric=[False, True, False, True]))
+        return sections
 
+    def _doc_sections(self, ed: dict | None, md: dict | None) -> list[Section]:
+        """The report's extreme-document and misdiagnosed tables, with a snippet per document."""
+        sections = []
         doc_snip_idx: dict[int, str] | None = None
         pre_docs = None
         if (ed or md) and getattr(self, "text", None) is not None:
@@ -2153,16 +2177,7 @@ class ContinuousResult(_SingleResult):
                     f"Misdiagnosed — {direction}-predicted {n_md}",
                     self.docs.misdiagnosed(n_md, direction=direction),
                 ))
-
-        if self._leaves:
-            from ssdiff.results.multi_pls_result import _dimension_sections
-            sections += _dimension_sections(self, tw["n"] if tw else None)
-
-        return Report(
-            title=f"{type(self).__name__} — r² = {fmt_r(s.r2)}",
-            subtitle=f"(n = {fmt_count(s.n_kept)})",
-            sections=sections,
-        )
+        return sections
 
 
 # ---------- PLSResult ----------
@@ -2419,7 +2434,8 @@ class RegressionResult(_RegressionModelView, _MultiContainer):
     _access = (
         "stats", "fit_info", "sweep", "covariates", "params", "pvalues", "test", "model",
         "words", "clusters", "snippets",
-        "beta", "gradient", "beta_norm", "alignment_scores", "conf_int(...)", "attach(...)",
+        "beta", "gradient", "beta_norm", "alignment_scores", "conf_int(...)", "report()",
+        "attach(...)",
     )
 
     def __init__(
@@ -2482,6 +2498,106 @@ class RegressionResult(_RegressionModelView, _MultiContainer):
     def covariates(self) -> CovariatesView:
         """The formula's coefficients with the text terms held fixed; see ``PCAOLSResult.covariates``."""
         return self._first_leaf().covariates
+
+    def report(self, *,
+               clusters: bool | dict | None = True,
+               top_words: bool | dict | None = True,
+               extreme_docs: bool | dict | None = True,
+               misdiagnosed: bool | dict | None = True) -> Report:
+        """Build a multi-section narrative Report for this regression.
+
+        The model, its fit settings, the text-term tests, the joint tests
+        (with several terms) and the covariates come first. Then each term's
+        clusters and top words, and each text's extreme and misdiagnosed
+        documents. The keywords and their defaults are those of
+        ``PCAOLSResult.report()``.
+        """
+        from ssdiff.results.page import _regression_leaves
+
+        tw = _resolve_section(top_words, {"n": 5}, name="top_words")
+        cl = _resolve_section(
+            clusters,
+            {"n": 10, "n_words": 5, "n_snippets": 1},
+            name="clusters",
+        )
+        ed = _resolve_section(extreme_docs, {"n": 5}, name="extreme_docs")
+        md = _resolve_section(misdiagnosed, {"n": 5}, name="misdiagnosed")
+
+        leaves = _regression_leaves(self)
+        # Every term of a text shares the text's settings and the model's y_hat,
+        # so the text-level sections come from its first leaf.
+        first_of_text = {}
+        for name, _, leaf in leaves:
+            first_of_text.setdefault(name, leaf)
+
+        s = self.stats
+        model_rows = [("formula", self._formula_shown), ("r²", fmt_r(s.r2))]
+        if "r2_adj" in s.columns:
+            model_rows.append(("r²_adj", fmt_r(s.r2_adj)))
+        p_model = self.f_pvalue if np.isfinite(self.f_pvalue) else self.llr_pvalue
+        model_rows += [("n_raw", fmt_count(s.n_raw)), ("n_kept", fmt_count(s.n_kept)),
+                       ("p (model vs. outcome ~ 1)", fmt_p(p_model))]
+        sections = [Section(title="Model", kind="kv", rows=model_rows)]
+
+        for name, leaf in first_of_text.items():
+            fit_rows = leaf._fit_info_rows()
+            provenance = _embeddings_row(leaf.embeddings)
+            if provenance is not None:
+                fit_rows.append(provenance)
+            if fit_rows:
+                title = f"Fit info — {name}" if self._by_text else "Fit info"
+                sections.append(Section(title=title, kind="kv", rows=fit_rows))
+
+        terms = self._term_tests
+        by_key = {key: leaf for _, key, leaf in leaves}
+        sections.append(Section(
+            title="Text terms", kind="table",
+            headers=["term", "df", "F" if terms[0].name == "wald_f" else "χ²", "p",
+                     "β norm", "Δ (Q4−Q1)"],
+            rows=[[t.label, f"{t.df:g}", fmt_d(t.statistic), fmt_p(t.pvalue),
+                   fmt_d(by_key[t.label].stats.beta_norm),
+                   fmt_d(by_key[t.label].stats.iqr_effect)] for t in terms],
+            numeric=[False, True, True, True, True, True],
+        ))
+        if len(terms) > 1:
+            # Mirrors the "Joint tests" block of summary().
+            joint = self._joint_tests
+            has_r2 = any(t.r2_delta is not None and np.isfinite(t.r2_delta) for t in joint)
+            stat = "F" if joint[0].name == "f_test" else "χ²"
+            sections.append(Section(
+                title="Joint tests", kind="table",
+                headers=["test", *(["ΔR²"] if has_r2 else []), stat, "p"],
+                rows=[[t.label or "all text terms",
+                       *([fmt_r(t.r2_delta, digits=3)] if has_r2 else []),
+                       fmt_d(t.statistic), fmt_p(t.pvalue)] for t in joint],
+                numeric=[False, *([True] if has_r2 else []), True, True],
+            ))
+        if len(self.covariates):
+            sections.append(Section(
+                title="Covariates", kind="table",
+                headers=["term", "estimate", "SE", "statistic", "p",
+                         "95% CI low", "95% CI high"],
+                rows=[[c.term, fmt_d(c.estimate), fmt_d(c.se), fmt_d(c.statistic),
+                       fmt_p(c.p_value), fmt_d(c.ci_low), fmt_d(c.ci_high)]
+                      for c in self.covariates],
+                numeric=[False] + [True] * 6,
+            ))
+
+        for _, key, leaf in leaves:
+            for sec in leaf._word_sections(cl, tw):
+                sec.title = f"{key} — {sec.title}"
+                sections.append(sec)
+        for name, leaf in first_of_text.items():
+            for sec in leaf._doc_sections(ed, md):
+                if self._by_text:
+                    sec.title = f"{name} — {sec.title}"
+                sections.append(sec)
+
+        return Report(
+            title=f"RegressionResult — {self._formula_shown}",
+            subtitle=f"(n = {fmt_count(s.n_kept)}, r² = {fmt_r(s.r2)})",
+            sections=sections,
+        )
 
     def _summary(self) -> str:
         return (f"RegressionResult  {self._formula_shown}\n"

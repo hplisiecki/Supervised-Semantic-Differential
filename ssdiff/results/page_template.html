@@ -404,7 +404,7 @@ const html = htm.bind(h);
 // When a host page embeds this file in a frame, it sets data-embedded on <html>,
 // shows its own Export button and calls window.ssdReport.export(ext).
 const EMBEDDED = document.documentElement.hasAttribute("data-embedded");
-const REPORT_EXTS = ["html", "md", "txt", "tex", "json"];
+const REPORT_EXTS = ["html", "docx", "md", "txt", "tex", "json"];
 // The page as loaded, before rendering: the .html export writes this file again.
 const PAGE = (() => {
   const root = document.documentElement.cloneNode(true);
@@ -482,6 +482,101 @@ function toTEX(cols, rows) {
   const spec = cols.map(c => isNumFmt(c.fmt) ? "r" : (c.wide ? "p{8cm}" : "l")).join("");
   return [`\\begin{tabular}{${spec}}`, "\\toprule", cols.map(c => tex(c.label)).join(" & ") + " \\\\", "\\midrule",
     ...rows.map(r => cols.map(c => tex(cellText(c, r))).join(" & ") + " \\\\"), "\\bottomrule", "\\end{tabular}"].join("\n") + "\n";
+}
+
+// .docx: WordprocessingML parts in a stored (uncompressed) ZIP, so the page needs no library.
+// Characters XML 1.0 does not allow (control characters, lone surrogates) are dropped.
+const xmlText = s => String(s).replace(/[^\t\n\r\x20-\uD7FF\uE000-\uFFFD\u{10000}-\u{10FFFF}]/gu, "")
+  .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const wText = s => xmlText(s).split(/\r?\n/).map(t => `<w:t xml:space="preserve">${t}</w:t>`).join("<w:br/>");
+const wPara = (s, style) => `<w:p>${style ? `<w:pPr><w:pStyle w:val="${style}"/></w:pPr>` : ""}<w:r>${wText(s)}</w:r></w:p>`;
+// Mirrors _add_docx_table (ssdiff/results/core.py) and _docx_section (ssdiff/results/report.py) — change together.
+const DOCX_TEXT_W = 8640;  // twips: python-docx's default page, 12240 wide with 1800 side margins
+const DOCX_RULE = 'w:val="single" w:sz="12" w:space="0" w:color="000000"';
+const wRun = (s, b, i) => '<w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/>' +
+  (b ? "<w:b/>" : "") + (i ? "<w:i/>" : "") + `<w:sz w:val="22"/></w:rPr>${wText(s)}</w:r>`;
+function toDOCXTable(cols, rows, caption) {
+  const num = cols.map(c => isNumFmt(c.fmt)), nNum = num.filter(Boolean).length;
+  const textW = (1 - 0.1 * nNum) / (cols.length - nNum);
+  const w = num.map(n => Math.floor(DOCX_TEXT_W * (nNum > 0 && nNum < cols.length ? (n ? 0.1 : textW) : 1 / cols.length)));
+  const lines = [cols.map(c => c.label), ...rows.map(r => cols.map(c => cellText(c, r)))];
+  const tr = (cells, i) => "<w:tr>" + cells.map((s, j) => {
+    const on = { top: i === 0, left: false, bottom: i === 0 || i === lines.length - 1, right: false };
+    const borders = Object.entries(on).map(([e, r]) => `<w:${e} ${r ? DOCX_RULE : 'w:val="nil"'}/>`).join("");
+    return `<w:tc><w:tcPr><w:tcW w:w="${w[j]}" w:type="dxa"/><w:tcBorders>${borders}</w:tcBorders><w:vAlign w:val="center"/></w:tcPr>` +
+      `<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/>${num[j] ? '<w:jc w:val="center"/>' : ""}</w:pPr>` +
+      `${wRun(s, i === 0, false)}</w:p></w:tc>`;
+  }).join("") + "</w:tr>";
+  return (caption ? `<w:p><w:pPr><w:spacing w:before="240" w:after="60"/></w:pPr>${wRun(caption, false, true)}</w:p>` : "") +
+    `<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/><w:tblLayout w:type="fixed"/></w:tblPr>` +
+    `<w:tblGrid>${w.map(x => `<w:gridCol w:w="${x}"/>`).join("")}</w:tblGrid>${lines.map(tr).join("")}</w:tbl>`;
+}
+const W_NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
+const XML_HEAD = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
+// Heading styles as in python-docx's default template: Word's navigation pane lists them by outlineLvl.
+const DOCX_STYLES = XML_HEAD + `<w:styles ${W_NS}><w:docDefaults><w:rPrDefault><w:rPr>` +
+  '<w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:sz w:val="22"/></w:rPr></w:rPrDefault>' +
+  '<w:pPrDefault><w:pPr><w:spacing w:after="200" w:line="276" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults>' +
+  '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style>' +
+  [[480, "365F91", 28], [200, "4F81BD", 26], [200, "4F81BD", 22]].map(([before, color, sz], i) =>
+    `<w:style w:type="paragraph" w:styleId="Heading${i + 1}"><w:name w:val="heading ${i + 1}"/><w:basedOn w:val="Normal"/>` +
+    `<w:next w:val="Normal"/><w:qFormat/><w:pPr><w:keepNext/><w:keepLines/><w:spacing w:before="${before}" w:after="0"/>` +
+    `<w:outlineLvl w:val="${i}"/></w:pPr><w:rPr><w:rFonts w:ascii="Cambria" w:hAnsi="Cambria"/><w:b/>` +
+    `<w:color w:val="${color}"/><w:sz w:val="${sz}"/></w:rPr></w:style>`).join("") + "</w:styles>";
+const PKG_RELS = 'xmlns="http://schemas.openxmlformats.org/package/2006/relationships"';
+const OFFICE_RELS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+const WML = "application/vnd.openxmlformats-officedocument.wordprocessingml";
+function toDOCX(body) {
+  const doc = XML_HEAD + `<w:document ${W_NS}><w:body>${body}<w:p/>` +
+    '<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800" ' +
+    'w:header="720" w:footer="720" w:gutter="0"/></w:sectPr></w:body></w:document>';
+  return zipStored([
+    ["[Content_Types].xml", XML_HEAD + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+      '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+      '<Default Extension="xml" ContentType="application/xml"/>' +
+      `<Override PartName="/word/document.xml" ContentType="${WML}.document.main+xml"/>` +
+      `<Override PartName="/word/styles.xml" ContentType="${WML}.styles+xml"/></Types>`],
+    ["_rels/.rels", XML_HEAD + `<Relationships ${PKG_RELS}><Relationship Id="rId1" ` +
+      `Type="${OFFICE_RELS}/officeDocument" Target="word/document.xml"/></Relationships>`],
+    ["word/document.xml", doc],
+    ["word/styles.xml", DOCX_STYLES],
+    ["word/_rels/document.xml.rels", XML_HEAD + `<Relationships ${PKG_RELS}><Relationship Id="rId1" ` +
+      `Type="${OFFICE_RELS}/styles" Target="styles.xml"/></Relationships>`],
+  ]);
+}
+const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
+  for (let k = 0; k < 8; k++) n = n & 1 ? 0xEDB88320 ^ (n >>> 1) : n >>> 1;
+  return n >>> 0;
+});
+const crc32 = bytes => { let c = ~0; for (const b of bytes) c = CRC_TABLE[(c ^ b) & 255] ^ (c >>> 8); return ~c >>> 0; };
+// files: [name, text] pairs -> Uint8Array. Each file is a 30-byte local header, its name and its data;
+// then one 46-byte central-directory entry per file and the 22-byte end record.
+// Every entry is stored (method 0), dated 1980-01-01 (DOS date 33).
+function zipStored(files) {
+  const enc = new TextEncoder(), local = [], central = [];
+  const rec = (sig, n) => { const v = new DataView(new ArrayBuffer(n)); v.setUint32(0, sig, true); return v; };
+  let offset = 0;
+  for (const [name, text] of files) {
+    const nm = enc.encode(name), data = enc.encode(text), crc = crc32(data);
+    const h = rec(0x04034b50, 30);
+    h.setUint16(4, 20, true); h.setUint16(12, 33, true); h.setUint32(14, crc, true);
+    h.setUint32(18, data.length, true); h.setUint32(22, data.length, true); h.setUint16(26, nm.length, true);
+    const c = rec(0x02014b50, 46);
+    c.setUint16(4, 20, true); c.setUint16(6, 20, true); c.setUint16(14, 33, true); c.setUint32(16, crc, true);
+    c.setUint32(20, data.length, true); c.setUint32(24, data.length, true); c.setUint16(28, nm.length, true);
+    c.setUint32(42, offset, true);
+    local.push(h, nm, data); central.push(c, nm);
+    offset += 30 + nm.length + data.length;
+  }
+  const cdSize = central.reduce((s, p) => s + p.byteLength, 0);
+  const end = rec(0x06054b50, 22);
+  end.setUint16(8, files.length, true); end.setUint16(10, files.length, true);
+  end.setUint32(12, cdSize, true); end.setUint32(16, offset, true);
+  const parts = [...local, ...central, end].map(p => p instanceof DataView ? new Uint8Array(p.buffer) : p);
+  const out = new Uint8Array(offset + cdSize + 22);
+  let at = 0;
+  for (const p of parts) { out.set(p, at); at += p.length; }
+  return out;
 }
 
 // ---------------------------------------------------------------- shared UI state
@@ -594,7 +689,8 @@ function tableFile(spec, view, ext) {
 }
 
 function download(file) {
-  const url = URL.createObjectURL(new Blob([file.text], { type: file.mime + ";charset=utf-8" }));
+  const blob = file.bytes ? new Blob([file.bytes], { type: file.mime }) : new Blob([file.text], { type: file.mime + ";charset=utf-8" });
+  const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url; a.download = file.name;
   document.body.appendChild(a); a.click(); a.remove();
@@ -786,6 +882,14 @@ function reportFile(store, ext) {
   const p = reportParts(store), view = id => store.views[id] || DEFAULT_VIEW;
   const cardCols = p.cards.map(([n], i) => C(String(i), n, "text"));
   const cardRow = Object.fromEntries(p.cards.map(([, v], i) => [String(i), v]));
+  if (ext === "docx") {
+    const body = [wPara(p.title, "Heading1"), ...p.meta.map(([k, v]) => wPara(`${k}: ${v}`)), toDOCXTable(cardCols, [cardRow])];
+    for (const s of p.sections) {
+      body.push(wPara(s.label, "Heading2"));
+      for (const t of s.tables) body.push(toDOCXTable(t.cols, shownRows(t, view(t.id)), t.title));
+    }
+    return { name: "ssd_report.docx", mime: WML + ".document", bytes: toDOCX(body.join("")) };
+  }
   const fn = { md: toMD, txt: toTXT, tex: toTEX }[ext];
   const out = [];
   if (ext === "md") {

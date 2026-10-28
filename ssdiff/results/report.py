@@ -167,6 +167,7 @@ def _docx_section(doc, s: Section) -> None:
     section is a heading and bullets. In a table with both kinds of column,
     numeric columns are narrow and centred and the others share the width.
     """
+    # Mirrors toDOCXTable in page_template.html — change together.
     if s.kind == "kv":
         _add_docx_table(doc, None, [[str(k), str(v)] for k, v in s.rows], caption=s.title)
     elif s.kind == "table":

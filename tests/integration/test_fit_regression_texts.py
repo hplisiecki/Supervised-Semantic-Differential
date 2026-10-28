@@ -176,3 +176,11 @@ def test_doc_detail_of_a_token_list_text_says_so(two, parity_df):
     diary = two[1]
     res = diary.fit_regression(parity_df["y"], fixed_k=3)
     assert "token lists" in res.docs.id(0).to_text()
+
+
+def test_report_has_fit_info_per_text(two, parity_df):
+    essay, diary = two
+    res = ssdiff.fit_regression("y ~ cov + ssd(essay) + group*ssd(diary)", parity_df,
+                                essay=essay, diary=diary, fixed_k=3)
+    titles = [s.title for s in res.report().sections]
+    assert [t for t in titles if t.startswith("Fit info")] == ["Fit info — essay", "Fit info — diary"]

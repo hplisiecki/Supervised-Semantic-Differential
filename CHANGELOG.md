@@ -1,5 +1,10 @@
 # Changelog
 
+## 4.0.1
+
+- New `RegressionResult.report()`, with the keywords of `PCAOLSResult.report()`. It lists the model, the fit settings (one block per text), the text-term tests, the joint tests, the covariates, each term's clusters and top words, and each text's extreme and misdiagnosed documents.
+- The results page's **Export report** menu offers `.docx`. The page writes the file itself, with the table layout of `report().save("x.docx")`.
+
 ## 4.0.0
 
 A breaking release. `SSD` now holds one text and nothing about the outcome; each fit names its outcome.
