@@ -192,10 +192,10 @@ def test_single_column_2d_y_asks_for_1d(tiny_kv, sample_docs, lexicon, method):
     lambda s, y: s.fit_pls(y, k=2, n_splits=20, random_state=42),
     lambda s, y: s.fit_regression(y, fixed_k=3),
 ], ids=["pls", "ols"])
-def test_predict_training_text_reproduces_fit(ssd_instance, parity_df, fit):
+def test_predict_training_text_reproduces_fit(ssd_instance, pack_df, fit):
     """predict() on the training text gives docs.y_hat, and its R² is stats.r2."""
-    res = fit(ssd_instance, parity_df["y"])
-    pred = res.predict(parity_df["text"])
+    res = fit(ssd_instance, pack_df["y"])
+    pred = res.predict(pack_df["text"])
     assert pred.shape == (len(ssd_instance),)
 
     y_hat = np.array([d.y_hat for d in res.docs])
@@ -203,7 +203,7 @@ def test_predict_training_text_reproduces_fit(ssd_instance, parity_df, fit):
     # A subset must reuse the training SIF counts, not recount on the new batch.
     sub = np.flatnonzero(res._keep_mask)[:4]
     np.testing.assert_allclose(
-        res.predict(list(parity_df["text"].iloc[sub])), pred[sub], rtol=1e-10)
+        res.predict(list(pack_df["text"].iloc[sub])), pred[sub], rtol=1e-10)
     # Fitted values of a centered least-squares-type fit average to mean(y).
     assert y_hat.mean() == pytest.approx(res.y.mean())
 
@@ -237,11 +237,11 @@ def test_predict_without_sif(tiny_kv, sample_docs, sample_y, lexicon):
 
 
 @pytest.mark.parametrize("k", [2, "auto"])
-def test_fit_pls_test_false_skips_test(ssd_instance, parity_df, k):
+def test_fit_pls_test_false_skips_test(ssd_instance, pack_df, k):
     """test=False: NaN p-value, test left not run, same beta as test=True."""
     kw = dict(k=k, k_max=3, n_splits=5, random_state=0)
-    tested = ssd_instance.fit_pls(parity_df["y"], **kw)
-    untested = ssd_instance.fit_pls(parity_df["y"], test=False, **kw)
+    tested = ssd_instance.fit_pls(pack_df["y"], **kw)
+    untested = ssd_instance.fit_pls(pack_df["y"], test=False, **kw)
 
     np.testing.assert_array_equal(untested.beta, tested.beta)
     assert np.isnan(untested.stats.pvalue)

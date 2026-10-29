@@ -1,7 +1,7 @@
 """Loading a wordpack by tag or full name: hosts, cache, checks and errors.
 
 A host is a temporary directory holding two copies of the fixture pack, listed
-as en-fixture-1 and en-fixture-2. It is read through a file:// URL, or served
+as test-1 and test-2. It is read through a file:// URL, or served
 on 127.0.0.1 where a test needs the request headers.
 """
 
@@ -30,7 +30,7 @@ def make_host(directory: Path, pack: str, **changes) -> str:
     data = Path(pack).read_bytes()
     versions = {}
     for version in ("1", "2"):
-        file = f"en-fixture-{version}.wordpack"
+        file = f"test-{version}.wordpack"
         (directory / file).write_bytes(data)
         versions[version] = {
             "file": file,
@@ -40,7 +40,7 @@ def make_host(directory: Path, pack: str, **changes) -> str:
             **changes,
         }
     pack_entry = {"language": "en", "description": "Synthetic test pack.", "license": "CC0-1.0", "versions": versions}
-    index = {"index_version": 1, "packs": {"en-fixture": pack_entry}}
+    index = {"index_version": 1, "packs": {"test": pack_entry}}
     (directory / "index.json").write_text(json.dumps(index), "utf-8")
     return directory.as_uri()
 
@@ -53,10 +53,10 @@ def cache(tmp_path, monkeypatch) -> Path:
 
 @pytest.fixture
 def host(tmp_path, monkeypatch, wordpack_path, cache) -> Path:
-    """A reachable host, with the tags `default` and `en` standing for en-fixture-1."""
+    """A reachable host, with the tags `default` and `en` standing for test-1."""
     monkeypatch.setattr(fetch, "HOSTS", [make_host(tmp_path / "host", wordpack_path)])
-    monkeypatch.setitem(WORDPACK_TAGS, "default", ("en-fixture-1.wordpack", "the default is en-fixture-1"))
-    monkeypatch.setitem(WORDPACK_TAGS, "en", ("en-fixture-1.wordpack", "en is en-fixture-1"))
+    monkeypatch.setitem(WORDPACK_TAGS, "default", ("test-1.wordpack", "the default is test-1"))
+    monkeypatch.setitem(WORDPACK_TAGS, "en", ("test-1.wordpack", "en is test-1"))
     return tmp_path / "host"
 
 
@@ -112,35 +112,35 @@ def dropping(directory: Path, file: str, drops: int, cut: str) -> tuple[type, li
 def test_a_cached_full_name_resolves_without_a_host(tmp_path, monkeypatch, wordpack_path, cache):
     monkeypatch.setattr(fetch, "HOSTS", [unreachable(tmp_path)])
     cache.mkdir()
-    cached = cache / "en-fixture-1.wordpack"
+    cached = cache / "test-1.wordpack"
     cached.write_bytes(Path(wordpack_path).read_bytes())
-    assert fetch.resolve("en-fixture-1") == str(cached)
+    assert fetch.resolve("test-1") == str(cached)
 
 
 def test_a_full_name_that_is_not_cached_is_downloaded(host, cache, wordpack_path):
-    path = fetch.resolve("en-fixture-2")
-    assert path == str(cache / "en-fixture-2.wordpack")
+    path = fetch.resolve("test-2")
+    assert path == str(cache / "test-2.wordpack")
     assert Path(path).read_bytes() == Path(wordpack_path).read_bytes()
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Windows has no permission bits for group and others")
 def test_the_cached_files_are_readable_by_other_users(host, cache):
-    fetch.resolve("en-fixture-1")
+    fetch.resolve("test-1")
     assert all(p.stat().st_mode & 0o044 == 0o044 for p in cache.iterdir())
 
 
 def test_no_host_and_an_empty_cache_names_every_host(tmp_path, monkeypatch, cache):
     hosts = [(tmp_path / "gone-a").as_uri(), (tmp_path / "gone-b").as_uri()]
     monkeypatch.setattr(fetch, "HOSTS", hosts)
-    with pytest.raises(OSError, match=r"'en-fixture-1' is not in the cache .* cannot be downloaded") as e:
-        fetch.resolve("en-fixture-1")
+    with pytest.raises(OSError, match=r"'test-1' is not in the cache .* cannot be downloaded") as e:
+        fetch.resolve("test-1")
     assert all(h in str(e.value) for h in hosts)
 
 
 def test_a_format_version_this_reader_does_not_read_asks_for_an_upgrade(tmp_path, monkeypatch, wordpack_path, cache):
     monkeypatch.setattr(fetch, "HOSTS", [make_host(tmp_path / "host", wordpack_path, format_version=2)])
     with pytest.raises(ValueError, match="Upgrade ssdiff"):
-        fetch.resolve("en-fixture-1")
+        fetch.resolve("test-1")
     assert not cache.exists() or not list(cache.iterdir())
 
 
@@ -150,7 +150,7 @@ def test_a_download_that_fails_its_check_leaves_nothing_in_the_cache(
 ):
     monkeypatch.setattr(fetch, "HOSTS", [make_host(tmp_path / "host", wordpack_path, **changes)])
     with pytest.raises(OSError, match="SHA-256"):
-        fetch.resolve("en-fixture-1")
+        fetch.resolve("test-1")
     assert list(cache.iterdir()) == []
 
 
@@ -164,13 +164,13 @@ def test_a_host_that_is_missing_or_answers_with_something_else_is_skipped(
     (portal / "index.json").write_text(answer, "utf-8")
     good = make_host(tmp_path / "host", wordpack_path)
     monkeypatch.setattr(fetch, "HOSTS", [unreachable(tmp_path), portal.as_uri(), good])
-    assert fetch.resolve("en-fixture-1") == str(cache / "en-fixture-1.wordpack")
+    assert fetch.resolve("test-1") == str(cache / "test-1.wordpack")
 
 
 @pytest.mark.parametrize(
     "full, lists",
     [
-        ("en-fixture-7", r"'en-fixture-7'.*Versions of en-fixture: 1, 2\."),
+        ("test-7", r"'test-7'.*Versions of test: 1, 2\."),
         ("pl-nothing-1", r"'pl-nothing-1'.*Tags: .*\ben\b"),
     ],
 )
@@ -189,18 +189,18 @@ def test_every_request_names_ssdiff_as_the_user_agent(tmp_path, wordpack_path, c
 
     make_host(tmp_path / "host", wordpack_path)
     serve(tmp_path / "host", Handler)
-    fetch.resolve("en-fixture-1")
+    fetch.resolve("test-1")
     # index.json and the pack file
     assert seen == [f"ssdiff/{ssdiff.__version__}"] * 2
 
 
 @pytest.mark.parametrize("cut", ["before the answer", "in the middle of the answer"])
-@pytest.mark.parametrize("file", ["index.json", "en-fixture-1.wordpack"])
+@pytest.mark.parametrize("file", ["index.json", "test-1.wordpack"])
 def test_a_request_that_fails_twice_is_sent_a_third_time(tmp_path, wordpack_path, cache, serve, capsys, file, cut):
     make_host(tmp_path / "host", wordpack_path)
     handler, seen = dropping(tmp_path / "host", file, 2, cut)
     serve(tmp_path / "host", handler)
-    assert fetch.resolve("en-fixture-1") == str(cache / "en-fixture-1.wordpack")
+    assert fetch.resolve("test-1") == str(cache / "test-1.wordpack")
     assert len(seen) == 3
     assert capsys.readouterr().err.count("trying again") == 2
 
@@ -210,7 +210,7 @@ def test_a_host_that_keeps_failing_is_asked_three_times(tmp_path, wordpack_path,
     handler, seen = dropping(tmp_path / "host", "index.json", 10, "before the answer")
     serve(tmp_path / "host", handler)
     with pytest.raises(OSError, match="3 tries"):
-        fetch.resolve("en-fixture-1")
+        fetch.resolve("test-1")
     assert len(seen) == 3
 
 
@@ -238,21 +238,21 @@ def test_the_cache_directory_is_in_home_on_every_platform(tmp_path, monkeypatch,
 
 def test_load_takes_a_tag_and_a_full_name(host, cache):
     by_tag = Embeddings.load("en")
-    by_name = Embeddings.load("en-fixture-1")
-    assert (by_tag.name, by_tag.version) == (by_name.name, by_name.version) == ("en-fixture", "1")
-    assert by_name._source_path == str(cache / "en-fixture-1.wordpack")
+    by_name = Embeddings.load("test-1")
+    assert (by_tag.name, by_tag.version) == (by_name.name, by_name.version) == ("test", "1")
+    assert by_name._source_path == str(cache / "test-1.wordpack")
 
 
 def test_load_with_no_argument_loads_the_tag_default(host, cache, capsys):
     emb = Embeddings.load()
-    assert emb._source_path == str(cache / "en-fixture-1.wordpack")
-    assert "the default is en-fixture-1" in capsys.readouterr().err
+    assert emb._source_path == str(cache / "test-1.wordpack")
+    assert "the default is test-1" in capsys.readouterr().err
 
 
 def test_a_tag_prints_its_message_on_every_load(host, capsys):
     Embeddings.load("en")
     Embeddings.load("en")
-    assert capsys.readouterr().err.count("en is en-fixture-1") == 2
+    assert capsys.readouterr().err.count("en is test-1") == 2
 
 
 def test_a_tag_whose_pack_is_cached_loads_without_a_host(host, tmp_path, monkeypatch):
@@ -284,7 +284,7 @@ def test_a_tag_wins_over_a_file_of_the_same_name(host, cache, tmp_path, monkeypa
     work.mkdir()
     (work / "en").write_bytes(b"not an embedding")
     monkeypatch.chdir(work)
-    assert Embeddings.load("en").name == "en-fixture"
+    assert Embeddings.load("en").name == "test"
     # A string with a dot is read as a path, so the file is opened and fails to parse.
     with pytest.raises(pickle.UnpicklingError, match="invalid load key"):
         Embeddings.load("./en")
@@ -294,7 +294,7 @@ def test_a_directory_named_like_a_tag_does_not_block_the_lookup(host, tmp_path, 
     work = tmp_path / "work"
     (work / "en").mkdir(parents=True)
     monkeypatch.chdir(work)
-    assert Embeddings.load("en").name == "en-fixture"
+    assert Embeddings.load("en").name == "test"
 
 
 def test_every_shipped_tag_names_a_pack_file():

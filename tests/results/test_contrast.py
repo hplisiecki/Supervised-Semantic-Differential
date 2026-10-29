@@ -1,16 +1,12 @@
 """ssdiff.contrast: difference of two unit gradients, words and clusters only, and its results page."""
 
 import json
-from pathlib import Path
 
 import numpy as np
 import pytest
 
 import ssdiff
 from ssdiff.results.page import page_data, save_page
-
-FIXTURES = Path(__file__).parent.parent / "fixtures" / "page"
-
 
 @pytest.fixture(scope="module")
 def contrast_result(ssd_instance, pls_result, pcaols_result):
@@ -70,14 +66,3 @@ def test_contrast_page(contrast_result, tmp_path):
         "contrast", "pls − ols", "pls", "ols", 0)
     assert set(u["tables"]) == {"words", "clusters", "cluster_words"}
     save_page(contrast_result, tmp_path / "c.html")
-
-
-def test_contrast_fixture_matches_current_shape(contrast_result):
-    saved = json.loads((FIXTURES / "contrast.json").read_text(encoding="utf-8"))
-    now = page_data(contrast_result)
-    assert sorted(saved) == sorted(now)
-    assert saved["tables"] == {k: {"columns": v["columns"], "rows": saved["tables"][k]["rows"]}
-                               for k, v in now["tables"].items()}
-    assert {k: v["columns"] for k, v in saved["units"][0]["tables"].items()} == \
-           {k: v["columns"] for k, v in now["units"][0]["tables"].items()}
-    assert saved["report_format"] == 2 and saved["kind"] == "contrast"

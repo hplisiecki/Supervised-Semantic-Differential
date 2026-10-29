@@ -174,13 +174,13 @@ def test_attach_texts_count_must_match(pls_result):
 # result.words before attach raises RuntimeError mentioning "attach"
 # ---------------------------------------------------------------------------
 
-def test_words_without_embeddings_raises_runtime_error(ssd_instance, parity_df):
+def test_words_without_embeddings_raises_runtime_error(ssd_instance, pack_df):
     """Accessing .words when embeddings=None raises RuntimeError with 'attach'.
 
     Note: Result.attach(embeddings=None) is a no-op (guarded by `if embeddings is not None`).
     To simulate the un-attached state we directly set the attribute and clear the cache.
     """
-    result = ssd_instance.fit_pls(parity_df["y"], k=1, n_splits=20, random_state=0)
+    result = ssd_instance.fit_pls(pack_df["y"], k=1, n_splits=20, random_state=0)
 
     # Directly strip embeddings to simulate un-attached state
     result.embeddings = None
@@ -322,18 +322,18 @@ def test_seeded_lexicon_report_has_seed_and_cos_columns():
 # docs view and counts when documents are dropped
 # ---------------------------------------------------------------------------
 
-def _parity_text_with_empty_last(parity_emb, parity_df, parity_lexicon, n=12):
-    """First ``n`` parity texts plus one whose words are all out of vocabulary."""
-    texts = list(parity_df["text"][:n]) + ["zzzqqq"]
-    return SSD(texts, embeddings=parity_emb, lexicon=parity_lexicon), texts
+def _pack_text_with_empty_last(pack_emb, pack_df, pack_lexicon, n=12):
+    """First ``n`` test-pack texts plus one whose words are all out of vocabulary."""
+    texts = list(pack_df["text"][:n]) + ["zzzqqq"]
+    return SSD(texts, embeddings=pack_emb, lexicon=pack_lexicon), texts
 
 
 def test_docs_doc_id_and_text_match_text_row_with_nan_y(
-    parity_emb, parity_df, parity_lexicon
+    pack_emb, pack_df, pack_lexicon
 ):
     """A missing y and a document without a vector both leave later doc_ids on their text rows."""
-    ssd, texts = _parity_text_with_empty_last(parity_emb, parity_df, parity_lexicon)
-    y = np.append(parity_df["y"].to_numpy()[:12], 1.0)
+    ssd, texts = _pack_text_with_empty_last(pack_emb, pack_df, pack_lexicon)
+    y = np.append(pack_df["y"].to_numpy()[:12], 1.0)
     y[3] = np.nan
     res = ssd.fit_pls(y, k=2, n_splits=20, random_state=42)
 

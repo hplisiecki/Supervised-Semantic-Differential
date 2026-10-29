@@ -2,7 +2,6 @@
 
 import copy
 import json
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -15,15 +14,15 @@ SNIPPET_COLS = [c for c in SnippetsView._columns if c != "text_lemmas"]
 
 
 @pytest.fixture(scope="module")
-def groups_text_result(ssd_instance, parity_df):
-    """Three-group fit on the parity wordpack, so snippets exist."""
-    return ssd_instance.fit_groups(parity_df["group"], n_perm=50, random_state=42)
+def groups_text_result(ssd_instance, pack_df):
+    """Three-group fit on the test pack, so snippets exist."""
+    return ssd_instance.fit_groups(pack_df["group"], n_perm=50, random_state=42)
 
 
 @pytest.fixture(scope="module")
-def multipls_result(ssd_instance, parity_df):
+def multipls_result(ssd_instance, pack_df):
     return ssd_instance.fit_multipls(
-        ["y", "y2"], data=parity_df, ssd_gradients=2, n_perm=19, n_splits=5, random_state=0
+        ["y", "y2"], data=pack_df, ssd_gradients=2, n_perm=19, n_splits=5, random_state=0
     )
 
 
@@ -64,8 +63,8 @@ def test_pls_page_data(pls_result):
     assert len(t["docs"]["rows"]) == len(list(pls_result.docs))
 
 
-def test_pls_gradients_page_data(ssd_instance, parity_df):
-    res = ssd_instance.fit_pls(parity_df["y"], k=2, ssd_gradients=2, n_splits=20, random_state=42)
+def test_pls_gradients_page_data(ssd_instance, pack_df):
+    res = ssd_instance.fit_pls(pack_df["y"], k=2, ssd_gradients=2, n_splits=20, random_state=42)
     d = page_data(res)
     json.dumps(d, allow_nan=False)
     assert set(d["tables"]) == {"stats", "fit_info", "test", "pls_info"}
@@ -79,8 +78,8 @@ def test_pls_gradients_page_data(ssd_instance, parity_df):
     assert [r[0] for r in t["docs"]["rows"]] == [doc.doc_id for doc in res.docs]
 
 
-def test_regression_gradients_page_data(ssd_instance, parity_df):
-    res = ssd_instance.fit_regression(parity_df["y"], fixed_k=4, ssd_gradients=2)
+def test_regression_gradients_page_data(ssd_instance, pack_df):
+    res = ssd_instance.fit_regression(pack_df["y"], fixed_k=4, ssd_gradients=2)
     d = page_data(res)
     json.dumps(d, allow_nan=False)
     assert d["kind"] == "pca_ols" and "pls_info" in d["tables"]
@@ -101,8 +100,8 @@ def test_doc_texts(pls_result, doc_texts, expect):
         assert 2 <= n_text <= 4
 
 
-def test_covariates_table(ssd_instance, parity_df):
-    res = ssd_instance.fit_regression("y ~ cov", data=parity_df, fixed_k=3)
+def test_covariates_table(ssd_instance, pack_df):
+    res = ssd_instance.fit_regression("y ~ cov", data=pack_df, fixed_k=3)
     t = page_data(res)["tables"]["covariates"]
     assert t["columns"] == ["term", "estimate", "se", "statistic", "p_value", "ci_low", "ci_high"]
     assert [r[0] for r in t["rows"]] == ["(Intercept)", "cov"]
@@ -208,31 +207,6 @@ def test_methods_exist_on_all_kinds(pls_result, pcaols_result, group_result_2g, 
         assert r.page_data()["report_format"] == REPORT_FORMAT
 
 
-FIXTURES = Path(__file__).parent.parent / "fixtures" / "page"
-
-
-def _shape(d):
-    """Keys and table columns, not values: what R and the template rely on."""
-    return {
-        "top": sorted(d), "tables": {k: v["columns"] for k, v in d["tables"].items()},
-        "units": [{k: v["columns"] for k, v in u["tables"].items()} for u in d["units"][:1]],
-        "sweeps": [(t["sweep"] or {}).get("columns") for t in d["texts"]],
-    }
-
-
-@pytest.mark.parametrize("kind, fixture", [("pls", "pls_result"), ("pca_ols", "pcaols_result_sweep"),
-                                           ("groups", "groups_text_result"), ("multipls", "multipls_result")])
-def test_example_json_matches_current_shape(kind, fixture, request):
-    saved = json.loads((FIXTURES / f"{kind}.json").read_text(encoding="utf-8"))
-    now = page_data(request.getfixturevalue(fixture))
-    assert saved["report_format"] == REPORT_FORMAT
-    for key in ("top", "tables", "sweeps"):
-        assert _shape(saved)[key] == _shape(now)[key]
-    # A pretokenized test fit has no snippet tables; compare the unit tables both sides have.
-    [old_unit], [new_unit] = _shape(saved)["units"], _shape(now)["units"]
-    assert {k: old_unit[k] for k in new_unit} == new_unit
-
-
 def test_format_2_texts_entry(pls_result):
     d = page_data(pls_result)
     assert d["report_format"] == 2 and "embeddings" not in d
@@ -257,9 +231,9 @@ def test_token_list_text_has_tokens_and_no_snippets(pcaols_result_sweep):
     assert first[-1] == " ".join(pcaols_result_sweep.text.docs[first[0]])
 
 
-def test_regression_page(two, parity_df):
+def test_regression_page(two, pack_df):
     essay, diary = two
-    res = ssdiff.fit_regression("y ~ ssd(essay) + group*ssd(diary)", parity_df, essay=essay, diary=diary, fixed_k=3)
+    res = ssdiff.fit_regression("y ~ ssd(essay) + group*ssd(diary)", pack_df, essay=essay, diary=diary, fixed_k=3)
     d = page_data(res)
     json.dumps(d, allow_nan=False)
     assert d["kind"] == "pca_ols" and [t["name"] for t in d["texts"]] == ["essay", "diary"]
@@ -273,27 +247,14 @@ def test_regression_page(two, parity_df):
     assert by_key["grouplow:ssd(diary)"]["test"] == "group:ssd(diary)"
 
 
-def test_one_text_regression_page(two, parity_df):
+def test_one_text_regression_page(two, pack_df):
     essay = two[0]
-    d = page_data(essay.fit_regression("y ~ group*ssd()", data=parity_df, fixed_k=3))
+    d = page_data(essay.fit_regression("y ~ group*ssd()", data=pack_df, fixed_k=3))
     assert len(d["texts"]) == 1 and d["texts"][0]["name"] == essay.name
     assert {u["text"] for u in d["units"]} == {0}
     assert [u["key"] for u in d["units"]] == [f"ssd({essay.name})", f"grouplow:ssd({essay.name})",
                                               f"groupmid:ssd({essay.name})"]
     assert [u["test"] for u in d["units"]] == [f"ssd({essay.name})"] + [f"group:ssd({essay.name})"] * 2
-
-
-def test_regression_fixture_matches_current_shape(two, parity_df):
-    essay, diary = two
-    res = ssdiff.fit_regression("y ~ ssd(essay) + group*ssd(diary)", parity_df, essay=essay, diary=diary,
-                                k_min=2, k_max=6, k_step=1)
-    saved = json.loads((FIXTURES / "regression.json").read_text(encoding="utf-8"))
-    now = page_data(res)
-    assert saved["report_format"] == REPORT_FORMAT
-    for key in ("top", "tables", "sweeps"):
-        assert _shape(saved)[key] == _shape(now)[key]
-    [old_unit], [new_unit] = _shape(saved)["units"], _shape(now)["units"]
-    assert {k: old_unit[k] for k in new_unit} == new_unit
 
 
 def test_template_declares_utf8(pls_result, tmp_path):

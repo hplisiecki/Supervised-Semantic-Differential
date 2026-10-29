@@ -6,8 +6,8 @@ network access, or spaCy downloads needed.
 
 from __future__ import annotations
 
-import json
 import os
+import re
 
 import matplotlib
 
@@ -218,31 +218,31 @@ def sample_preprocessed_docs() -> list[PreprocessedDoc]:
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="session")
-def ssd_instance(parity_emb, parity_df, parity_lexicon):
-    """SSD text on the parity wordpack: strings, so ``pre_docs`` (snippets) exist."""
+def ssd_instance(pack_emb, pack_df, pack_lexicon):
+    """SSD text on the test pack: strings, so ``pre_docs`` (snippets) exist."""
     from ssdiff.ssd import SSD
-    return SSD(parity_df["text"], embeddings=parity_emb, lexicon=parity_lexicon)
+    return SSD(pack_df["text"], embeddings=pack_emb, lexicon=pack_lexicon)
 
 
 @pytest.fixture
-def two(parity_emb, parity_df, parity_lexicon):
-    """Two texts over the parity rows: ``essay`` from strings, ``diary`` from token lists."""
+def two(pack_emb, pack_df, pack_lexicon):
+    """Two texts over the same rows: ``essay`` from strings, ``diary`` from token lists."""
     from ssdiff.ssd import SSD
-    essay = SSD(parity_df["text"], embeddings=parity_emb, lexicon=parity_lexicon)
-    diary = SSD(essay.docs[::-1], embeddings=parity_emb, lexicon=parity_lexicon)
+    essay = SSD(pack_df["text"], embeddings=pack_emb, lexicon=pack_lexicon)
+    diary = SSD(essay.docs[::-1], embeddings=pack_emb, lexicon=pack_lexicon)
     return essay, diary
 
 
 @pytest.fixture(scope="session")
-def pls_result(ssd_instance, parity_df):
+def pls_result(ssd_instance, pack_df):
     """Fitted PLSResult from SSD.fit_pls()."""
-    return ssd_instance.fit_pls(parity_df["y"], k=2, n_splits=20, random_state=42)
+    return ssd_instance.fit_pls(pack_df["y"], k=2, n_splits=20, random_state=42)
 
 
 @pytest.fixture(scope="session")
-def pcaols_result(ssd_instance, parity_df):
+def pcaols_result(ssd_instance, pack_df):
     """Fitted PCAOLSResult from SSD.fit_regression()."""
-    return ssd_instance.fit_regression(parity_df["y"], fixed_k=3)
+    return ssd_instance.fit_regression(pack_df["y"], fixed_k=3)
 
 
 @pytest.fixture(scope="session")
@@ -273,34 +273,60 @@ def group_result_3g(tiny_kv, large_docs_3x20, large_groups_3x20, lexicon):
 # Wordpack fixture
 # ---------------------------------------------------------------------------
 
-PARITY_DIR = os.path.join(os.path.dirname(__file__), "fixtures", "r_parity")
+TEST_PACK = os.path.join(os.path.dirname(__file__), "fixtures", "wordpack", "test.wordpack")
 
-WORDPACK_FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "wordpack", "fixture.wordpack")
+PACK_LEXICON = ["dog", "cat", "people"]
 
 
 @pytest.fixture(scope="session")
 def wordpack_path() -> str:
-    """Synthetic wordpack: 48 keys, D = 16, name ``en-fixture`` version ``1``."""
-    return WORDPACK_FIXTURE
+    """Synthetic wordpack: 48 keys, D = 16, name ``test`` version ``1``."""
+    return TEST_PACK
 
 
 @pytest.fixture(scope="session")
-def parity_emb() -> Embeddings:
-    """English wordpack (10,000 words, 100 dims) shared with the R parity fixtures."""
-    return Embeddings.load(os.path.join(PARITY_DIR, "parity.wordpack"))
-
-
-def _parity_texts() -> dict:
-    with open(os.path.join(PARITY_DIR, "texts.json")) as f:
-        return json.load(f)
+def pack_emb() -> Embeddings:
+    return Embeddings.load(TEST_PACK)
 
 
 @pytest.fixture(scope="session")
-def parity_df() -> pd.DataFrame:
-    """240 texts with columns ``text``, ``y``, ``y2``, ``group``, ``cov``."""
-    return pd.DataFrame({k: v for k, v in _parity_texts().items() if k != "lexicon"})
+def pack_df(pack_emb) -> pd.DataFrame:
+    """240 texts over the test pack's words, with columns ``text``, ``y``, ``y2``, ``group``, ``cov``.
+
+    ``y`` and ``y2`` tilt each text's word draws along the pack's ``blue - green``
+    and ``swim - like`` directions, so the fits have a signal to find.
+    """
+    rng = np.random.default_rng(2137)
+    stop = set(pack_emb.stopwords)
+    vocab = [w for w in pack_emb.index_to_key
+             if re.fullmatch(r"[a-z]+", w) and w not in stop and w not in PACK_LEXICON]
+    V = np.vstack([pack_emb[w] for w in vocab]).astype(np.float64)
+
+    def projection(a, b):
+        p = V @ (pack_emb[a] - pack_emb[b])
+        return (p - p.mean()) / p.std()
+
+    p = np.column_stack([projection("blue", "green"), projection("swim", "like")])
+    z = rng.standard_normal((240, 2))
+    texts = []
+    for zi in z:
+        logits = 0.3 * (p @ zi)
+        prob = np.exp(logits - logits.max())
+        prob /= prob.sum()
+        sentences = []
+        for _ in range(rng.integers(3, 7)):
+            sent = list(rng.choice(vocab, size=rng.integers(6, 11), p=prob))
+            if rng.random() < 0.8:
+                sent.insert(int(rng.integers(0, len(sent) + 1)), str(rng.choice(PACK_LEXICON)))
+            sentences.append(" ".join(sent).capitalize() + ".")
+        texts.append(" ".join(sentences))
+    y, y2 = z[:, 0], z[:, 1]
+    cut = np.quantile(y + 0.5 * rng.standard_normal(len(y)), [1 / 3, 2 / 3])
+    group = np.where(y < cut[0], "low", np.where(y < cut[1], "mid", "high"))
+    cov = 0.3 * y + rng.standard_normal(len(y))
+    return pd.DataFrame({"text": texts, "y": y, "y2": y2, "group": group, "cov": cov})
 
 
 @pytest.fixture(scope="session")
-def parity_lexicon() -> list[str]:
-    return _parity_texts()["lexicon"]
+def pack_lexicon() -> list[str]:
+    return list(PACK_LEXICON)

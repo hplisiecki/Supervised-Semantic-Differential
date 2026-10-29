@@ -1,6 +1,6 @@
 """Wordpack embeddings: loading, lookup, normalize, tokenizing, fitting, predict.
 
-All tests use ``tests/fixtures/wordpack/fixture.wordpack``: a synthetic pack
+All tests use ``tests/fixtures/wordpack/test.wordpack``: a synthetic pack
 of 48 keys (``KEYS``, in row order) at D = 16.
 """
 
@@ -36,7 +36,7 @@ KEYS = [
     "like", "swim", "happens", "with", "in", "are", "they", "x", "b",
 ]
 
-def test_fixture_pack_opens_and_passes_its_selftest(wordpack_path):
+def test_the_test_pack_opens_and_passes_its_selftest(wordpack_path):
     with WordPack(wordpack_path) as pack:
         assert (pack.n, pack.dims) == (48, 16)
         assert list(pack.keys) == KEYS
@@ -67,7 +67,7 @@ def _direct_rows(path, m: int) -> np.ndarray:
 def test_wordpack_loads_at_abtt_1_with_its_metadata(wordpack_path):
     emb = Embeddings.load(wordpack_path)
     assert (emb.abtt, emb.l2_normalized) == (1, True)
-    assert (emb.name, emb.version, emb.lang) == ("en-fixture", "1", "en")
+    assert (emb.name, emb.version, emb.lang) == ("test", "1", "en")
     assert emb.stopwords == ["the", "a", "is", "i", "and", "or"]
     assert emb.neighbor_filter.pattern == r".*\d"
     assert emb.vectors.dtype == np.float32
@@ -101,7 +101,7 @@ def test_failing_selftest_raises_naming_pack_and_reader_version(wordpack_path, t
     data[off] = (data[off] + 64) % 256  # one int8 component of row 0, which the self-test checks
     bad = tmp_path / "bad.wordpack"
     bad.write_bytes(bytes(data))
-    with pytest.raises(WordPackError, match=r"en-fixture-1 .*self-test failed \(reader format version 1\)"):
+    with pytest.raises(WordPackError, match=r"test-1 .*self-test failed \(reader format version 1\)"):
         Embeddings.load(str(bad))
 
 
@@ -301,7 +301,7 @@ def test_wordpack_text_fills_preprocessed_doc_consistently(wordpack_path):
         sent_keys = [k for k, s in zip(t.keys, t.sent) if s == si]
         assert [sent_keys[j] for j in idx] == d.sents_lemmas[si]
     assert ssd.docs == [d.doc_lemmas]
-    assert ssd.tokenizer == "wordpack:en-fixture-1"
+    assert ssd.tokenizer == "wordpack:test-1"
 
 
 def test_wordpack_text_empty_none_and_nan_inputs(wordpack_path):
@@ -376,12 +376,14 @@ def test_predict_token_lists_on_a_wordpack_fit_asks_for_strings(wordpack_path):
         res.predict([["dog", "swim"]])
 
 
-def test_attach_refuses_a_wordpack_other_than_the_one_tokenized_for(wordpack_path, parity_emb):
+def test_attach_refuses_a_wordpack_other_than_the_one_tokenized_for(wordpack_path):
     texts, y = _texts(40, seed=2)
     res = SSD(texts, embeddings=Embeddings.load(wordpack_path), use_full_doc=True).fit_regression(y, fixed_k=2)
-    assert parity_emb.abtt == res.embeddings.abtt == 1
-    with pytest.raises(ValueError, match=r"wordpack:en-fixture-1"):
-        res.attach(embeddings=parity_emb)
+    other = Embeddings.load(wordpack_path)
+    other.name = "en-other"
+    assert other.abtt == res.embeddings.abtt == 1
+    with pytest.raises(ValueError, match=r"wordpack:test-1"):
+        res.attach(embeddings=other)
 
 
 def test_attach_refuses_embeddings_that_are_not_a_wordpack(wordpack_path):
@@ -421,7 +423,7 @@ def test_report_names_the_wordpack(wordpack_path):
     emb = Embeddings.load(wordpack_path)
     texts, y = _texts(40, seed=5)
     res = SSD(texts, embeddings=emb, use_full_doc=True).fit_regression(y, fixed_k=2)
-    assert "en-fixture-1" in _plain_report(res)
+    assert "test-1" in _plain_report(res)
 
 
 def test_deepcopy_of_a_wordpack_result_keeps_its_embeddings(wordpack_path):
@@ -468,7 +470,7 @@ def test_group_and_multipls_reports_name_the_wordpack(wordpack_path):
     ssd = SSD(texts, embeddings=emb, use_full_doc=True)
     groups = np.where(y > np.median(y), "high", "low")
     gr = ssd.fit_groups(groups, n_perm=49)
-    assert "en-fixture-1" in gr.report(clusters=False, top_words=False).to_text()
+    assert "test-1" in gr.report(clusters=False, top_words=False).to_text()
     y2 = np.column_stack([y, np.random.default_rng(0).normal(size=len(y))])
     mp = ssd.fit_multipls(y2, ssd_gradients=1, n_perm=19, n_splits=5)
-    assert "en-fixture-1" in mp.report(top_words=False).to_text()
+    assert "test-1" in mp.report(top_words=False).to_text()

@@ -21,15 +21,15 @@ def test_strings_need_a_wordpack(tiny_kv):
         SSD(["kraj dobry"], embeddings=tiny_kv)
 
 
-def test_wordpack_strings_and_name(parity_emb, parity_df, parity_lexicon):
-    t = SSD(parity_df["text"], embeddings=parity_emb, lexicon=parity_lexicon)
+def test_wordpack_strings_and_name(pack_emb, pack_df, pack_lexicon):
+    t = SSD(pack_df["text"], embeddings=pack_emb, lexicon=pack_lexicon)
     assert t.name == "text" and t.pre_docs is not None
-    assert t.tokenizer == f"wordpack:{parity_emb.name}-{parity_emb.version}"
+    assert t.tokenizer == f"wordpack:{pack_emb.name}-{pack_emb.version}"
 
 
-def test_a_list_among_strings_is_refused(parity_emb):
+def test_a_list_among_strings_is_refused(pack_emb):
     with pytest.raises(TypeError, match="join each participant's posts"):
-        SSD(["people work.", ["people", "work"]], embeddings=parity_emb)
+        SSD(["people work.", ["people", "work"]], embeddings=pack_emb)
 
 
 def test_with_lexicon_shares_tokens(tiny_kv, sample_docs, lexicon):
@@ -53,14 +53,14 @@ def test_use_full_doc_follows_the_lexicon(tiny_kv, sample_docs, lexicon):
     assert both.use_full_doc is True and both.lexicon == set(lexicon)
 
 
-def test_default_embeddings_load_the_default_tag(monkeypatch, parity_emb, parity_df):
+def test_default_embeddings_load_the_default_tag(monkeypatch, pack_emb, pack_df):
     from ssdiff.embeddings import Embeddings
 
     calls = []
-    monkeypatch.setattr(Embeddings, "load", classmethod(lambda cls, *a, **k: calls.append(a) or parity_emb))
-    t = SSD(parity_df["text"])
+    monkeypatch.setattr(Embeddings, "load", classmethod(lambda cls, *a, **k: calls.append(a) or pack_emb))
+    t = SSD(pack_df["text"])
     assert calls == [()] and t.use_full_doc is True
-    assert t.tokenizer == f"wordpack:{parity_emb.name}-{parity_emb.version}"
+    assert t.tokenizer == f"wordpack:{pack_emb.name}-{pack_emb.version}"
     assert t.n_kept > 0
 
 
@@ -71,9 +71,9 @@ def test_sif_counts_use_all_documents(tiny_kv, sample_docs, lexicon):
     assert counts != compute_global_sif(sample_docs)
 
 
-def test_empty_cells_get_no_vector(parity_emb, parity_lexicon):
-    texts = pd.Series(["", None, float("nan"), "people work every day."], name="t")
-    t = SSD(texts, embeddings=parity_emb, lexicon=parity_lexicon)
+def test_empty_cells_get_no_vector(pack_emb, pack_lexicon):
+    texts = pd.Series(["", None, float("nan"), "people like to swim."], name="t")
+    t = SSD(texts, embeddings=pack_emb, lexicon=pack_lexicon)
     assert t._vectors()[1].tolist() == [False, False, False, True]
 
 
