@@ -297,7 +297,8 @@ def _parallel_collect(
         max_workers=(None if n_jobs in (-1, 0, None) else int(n_jobs))
     ) as ex:
         futs = [ex.submit(worker, item) for item in iterator]
-        return [r for f in as_completed(futs) if (r := f.result()) is not None]
+        # Submission order, so ties in cosine come out as in a serial run.
+        return [r for f in futs if (r := f.result()) is not None]
 
 
 def _collect_all_occurrences(

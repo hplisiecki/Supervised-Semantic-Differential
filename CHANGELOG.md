@@ -1,5 +1,20 @@
 # Changelog
 
+## 4.1.0
+
+- `fit_pls(ssd_gradients=N)` and `fit_regression(ssd_gradients=N)` return leaves that sum to `beta`: `sum(res[k].beta for k in res.keys())` equals `res.beta`. Both build them with `plskit.profiles`.
+- `ssdiff.fit_regression(formula, data, **texts)` takes `ssd_gradients` and `gradients`, as `SSD.fit_regression` does.
+- New `gradients="profiles" | "factors"` on `fit_pls` and `fit_regression`. `"profiles"`, the default, rotates the parts by varimax on the document scores, recorded as `"docs"` in `fit_info.rotate` and `pls_info.rotate`. `"factors"` keeps the unrotated blocks, with `rotate` `None`.
+- New `gradients="components" | "components_raw"` on `fit_pls` only. Both split `beta` along the fit's k PLS weights, so `ssd_gradients` must equal k: part i is `beta` projected on weight i, and the parts sum to `beta`. `"components"` rotates the weights by varimax against the vocabulary, recorded as `"words"`, and orders the parts by size. `"components_raw"` keeps the unrotated weights in PLS order, with `rotate` `None`.
+- `fit_regression`'s block cuts change: blocks now hold about equal shares of the squared coefficients, not equal counts of components.
+- Leaves are ordered by size in standardized space and keep the model's sign, so `score_corr` can be negative. `leaf.beta_norm` is now a leaf's real raw norm, not that of a unit vector.
+- A block of components with no weight now raises `plskit.PlsKitError`, which is not a `ValueError`. On `fit_regression`, so can a K above the rank of the document vectors, or a component whose singular value is close to zero.
+- `fit_pls` loses `rotate`. Passing it raises `TypeError`.
+- `pls_info.order` and `pls_info.signs` are `None` for `fit_pls` and `fit_regression`. `fit_multipls` keeps both.
+- `fit_regression` raises `ValueError` when a text term's coefficients cannot all be estimated (aliased), for example a factor level with fewer documents than components. Before, the NaN filled that term's `beta`.
+- Snippets come out in the same order with `n_jobs` above 1 as in a serial run, so documents tied in cosine no longer change places between runs.
+- Needs `plskit>=0.8.0,<0.9.0`.
+
 ## 4.0.1
 
 - New `RegressionResult.report()`, with the keywords of `PCAOLSResult.report()`. It lists the model, the fit settings (one block per text), the text-term tests, the joint tests, the covariates, each term's clusters and top words, and each text's extreme and misdiagnosed documents.

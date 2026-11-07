@@ -11,7 +11,8 @@ Access patterns (canonical):
 - ``res["dim-1"]`` → ``_PLSComponentResult`` for one (rotated) dimension
 - ``res["dim-1"].outcomes`` → outcome loadings on that dimension
 - ``res.test(...)`` → rerun the LV1 test at the container level
-- ``res.pls_info`` → ``{ssd_gradients, rotate, order, signs, rotation diagnostics}``
+- ``res.pls_info`` → ``{ssd_gradients, rotate, order, signs, rotation diagnostics}``;
+  ``order`` and ``signs`` hold values for ``fit_multipls`` only
 
 Power-user shortcuts (same data, different angle):
 - ``res.words["dim-1"]`` → same as ``res["dim-1"].words``; returned by
@@ -141,9 +142,10 @@ class _PLSComponentResult(_SingleResult):
 
     ``key`` is ``"dim-1"`` / ``"dim-2"`` / …. The container computes the
     leaf's ``beta``, ``stats`` and, for PLS3 only, ``outcomes`` rows.
-    ``beta`` is the dimension's rotated weight column divided by
-    ``X_scale``: the raw doc-vector space that the standard fit's ``beta``
-    and the ``"words"`` rotation target use.
+    ``beta`` is in the raw doc-vector space of the standard fit's ``beta``.
+    For ``fit_pls`` and ``fit_regression`` it is one part of that fit's beta,
+    and the leaves sum to it. For ``fit_multipls`` it is a rotated weight
+    column divided by ``X_scale``.
 
     Has no independent ``.test`` and no p-value — use ``container.test(...)``.
     """
@@ -195,12 +197,13 @@ class _PLSComponentResult(_SingleResult):
         return view
 
     def _pole_names(self) -> tuple[str, str] | None:
-        # pls1_rotate(rotate="words") signs each dimension to correlate
-        # positively with the one outcome. Unrotated NIPALS dimensions 2…N have
-        # no sign toward it, and a PLS3 dimension has several outcomes.
+        # A leaf of one fit is a part of that fit's beta, so in standardized
+        # space its positive pole is the way that raises the prediction
+        # (F_i' coef = size_i² ≥ 0). A PLS3 dimension has several
+        # outcomes, so it has no such pole.
         from ssdiff.results.continuous_result import ContinuousResult
         c = self._container
-        if isinstance(c, ContinuousResult) and c.fit_info.rotate == "words":
+        if isinstance(c, ContinuousResult):
             return c._pole_names()
         return None
 
@@ -213,7 +216,11 @@ class _PLSComponentResult(_SingleResult):
 # ---------- PLSInfoView ----------
 
 class PLSInfoView(ScalarView):
-    """Scalar view exposing the rotation diagnostics of a fit's gradients (count, rotation, order, signs)."""
+    """Scalar view exposing the rotation diagnostics of a fit's gradients (count, rotation, order, signs).
+
+    ``order`` and ``signs`` are ``None`` for ``fit_pls`` and ``fit_regression``: those
+    leaves are parts of one beta, with no reordering or sign flip to record.
+    """
 
     _name = "pls_info"
     _columns = (
@@ -225,17 +232,17 @@ class PLSInfoView(ScalarView):
         self, *,
         ssd_gradients: int,
         rotate: str | None,
-        order: np.ndarray,
-        signs: np.ndarray,
         rotation_meta: dict,
         random_state: int | None,
+        order: np.ndarray | None = None,
+        signs: np.ndarray | None = None,
     ):
         super().__init__()
         self._row = {
             "ssd_gradients": int(ssd_gradients),
             "rotate": rotate,
-            "order": tuple(int(i) for i in order),
-            "signs": tuple(float(s) for s in signs),
+            "order": None if order is None else tuple(int(i) for i in order),
+            "signs": None if signs is None else tuple(float(s) for s in signs),
             "kaiser_normalized": rotation_meta["kaiser_normalized"],
             "sweeps": rotation_meta["sweeps"],
             "V_converged": rotation_meta["V_converged"],

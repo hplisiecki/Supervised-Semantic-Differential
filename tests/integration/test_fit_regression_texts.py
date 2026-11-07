@@ -92,6 +92,18 @@ def test_container_views_are_keyed_by_text(two, pack_df):
         res.attach(texts=list(pack_df["text"]))
 
 
+def test_container_word_views_are_keyed_by_term(two, pack_df, tmp_path):
+    essay, diary = two
+    res = ssdiff.fit_regression("y ~ ssd(essay) + group*ssd(diary)", pack_df,
+                                essay=essay, diary=diary, fixed_k=3)
+    terms = ["ssd(essay)", *res["diary"].keys()]
+    assert res.words.keys() == terms
+    assert res.clusters[terms[2]] is res["diary"][terms[2]].clusters
+    assert "none" not in repr(res.words)
+    res.snippets.save(tmp_path / "snippets.json")
+    assert (tmp_path / "snippets.json").exists()
+
+
 def test_two_texts_in_one_term_raises(two, pack_df):
     essay, diary = two
     with pytest.raises(ValueError, match="two texts"):

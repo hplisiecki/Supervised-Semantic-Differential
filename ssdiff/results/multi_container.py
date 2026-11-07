@@ -198,23 +198,27 @@ class _MultiContainer(Result):
     def alignment_scores(self) -> dict:
         return {k: leaf.alignment_scores for k, leaf in self._leaves.items()}
 
+    def _view_leaves(self) -> dict:
+        """The single results the shim views wrap, by key: ``_leaves`` unless a subclass nests."""
+        return self._leaves
+
     @property
     def words(self) -> _ShimView:
         return _ShimView(
-            leaves={k: leaf.words for k, leaf in self._leaves.items()},
+            leaves={k: leaf.words for k, leaf in self._view_leaves().items()},
             view_name="words", container=self,
         )
 
     @property
     def clusters(self) -> _ShimView:
         return _ShimView(
-            leaves={k: leaf.clusters for k, leaf in self._leaves.items()},
+            leaves={k: leaf.clusters for k, leaf in self._view_leaves().items()},
             view_name="clusters", container=self,
         )
 
     @property
     def snippets(self) -> _ShimView:
         return _ShimView(
-            leaves={k: leaf.snippets for k, leaf in self._leaves.items()},
+            leaves={k: leaf.snippets for k, leaf in self._view_leaves().items()},
             view_name="snippets", container=self,
         )

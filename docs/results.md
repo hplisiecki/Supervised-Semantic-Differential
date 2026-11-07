@@ -127,7 +127,7 @@ result.docs.id(42)                           # full detail view; needs the text 
 
 ### Gradient leaves — `ssd_gradients=N`
 
-With `ssd_gradients=N > 1`, a `PLSResult` (from `fit_pls`) or a `PCAOLSResult` (from `fit_regression`) also holds N leaves keyed `"dim-1"`, …, `"dim-N"`, one per rotated gradient. Everything above describes the standard fit and stays the same as with `ssd_gradients=1`. `fit_pls` takes the gradients from a separate N-component PLS1 fit; `fit_regression` splits the K components of its own model into N consecutive blocks, and each block's part of the model's beta is one gradient, always rotated by words.
+With `ssd_gradients=N > 1`, a `PLSResult` (from `fit_pls`) or a `PCAOLSResult` (from `fit_regression`) also holds N leaves keyed `"dim-1"`, …, `"dim-N"`, one per rotated part of its `beta`. Everything above describes the standard fit and stays the same as with `ssd_gradients=1`. Both fits cut their beta into N parts with about equal shares of the squared coefficients and rotate the parts on the document scores, through `plskit.profiles`: `fit_pls` along all document PCs, and `fit_regression` along its K components. `gradients="factors"` skips the rotation and keeps the blocks in order. On `fit_pls` only, `gradients="components"` splits beta along the fit's k PLS weights instead, rotated by varimax against the vocabulary, with N equal to k, and `"components_raw"` keeps those weights unrotated, in PLS order.
 
 ```python
 res = ssd.fit_pls("score", data=df, ssd_gradients=3)
@@ -135,11 +135,12 @@ res = ssd.fit_pls("score", data=df, ssd_gradients=3)
 res.keys()                 # ['dim-1', 'dim-2', 'dim-3']
 res["dim-1"].stats         # score_corr, cov_share
 res["dim-1"].words         # top neighbors along gradient 1
-res["dim-1"].beta          # the gradient's direction in doc-vector space
-res.pls_info               # ssd_gradients, rotate, order, signs, rotation diagnostics
+res["dim-1"].beta          # this part of res.beta, in doc-vector space
+res["dim-1"].beta_norm     # its raw norm
+res.pls_info               # ssd_gradients, rotate, rotation diagnostics
 ```
 
-Leaves are the same `_PLSComponentResult` class as `MultiPLSResult` leaves, without `.outcomes`. They have `.stats`, `.words`, `.clusters`, `.snippets`, `.beta`, `.gradient`, `.alignment_scores`, and no p-value. `report()` adds the rotation, a row per gradient and each gradient's words after the standard sections; the results page lists the gradients in its "Dimension" menu after β.
+Leaves are the same `_PLSComponentResult` class as `MultiPLSResult` leaves, without `.outcomes`. They have `.stats`, `.words`, `.clusters`, `.snippets`, `.beta`, `.beta_norm`, `.gradient`, `.alignment_scores`, and no p-value. The leaves' `.beta` sum to `res.beta`, and the `.gradient` of each is a unit vector, so `sum(leaf.gradient * leaf.beta_norm)` is `res.beta`. Leaves are ordered by size in standardized space, largest first, so `.beta_norm`, a raw norm, need not descend. Each keeps the sign the model gives it: in standardized space it points the way that raises the prediction, and its `score_corr` can be negative. `report()` adds the rotation, a row per gradient and each gradient's words after the standard sections; the results page lists the gradients in its "Dimension" menu after β.
 
 ---
 
@@ -537,7 +538,7 @@ result.report(top_words=False, extreme_docs=False, misdiagnosed=False)
 
 `ContrastResult` has no `.report()`.
 
-A `fit_pls(ssd_gradients=N)` result with N > 1 adds, after these sections, a Rotation block, a Dimensions table (`cov_share`, `score_corr` per gradient) and each gradient's top words; `top_words` sets those too.
+A `fit_pls` or `fit_regression` result with `ssd_gradients=N`, N > 1, adds, after these sections, a Rotation block, a Dimensions table (`cov_share`, `score_corr` per gradient) and each gradient's top words; `top_words` sets those too.
 
 **Groups:**
 ```python

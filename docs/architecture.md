@@ -50,7 +50,7 @@ ssdiff/
 ├── lang_config.py     — wordpack tags
 ├── py.typed           — PEP 561 marker
 ├── backends/
-│   ├── pls.py         — pls1_rotate, pls3_rotate, word_target — varimax rotation of PLS1 / PLS3 weights, dimension reordering, sign convention
+│   ├── pls.py         — gradient_dims, pls3_rotate, word_target — gradient leaves of one beta, varimax rotation of PLS3 weights, dimension reordering, sign convention
 │   ├── pca_sweep.py   — PCA + OLS; joint interpretability/stability sweep
 │   ├── _sweep_math.py — sweep scoring primitives
 │   ├── regression.py  — ssd(...) formula terms: placeholders, null formulas, coefficient grouping
@@ -130,17 +130,21 @@ X (n_kept × D), outcome y (n_kept)
         │      deflate X and y
         ├─ β = W (P'W)⁻¹ Q
         ├─ unscale: β / X_scale
-        ├─ orient β: flip if corr(ŷ, y) < 0
         ├─ p-value: plskit.pls1_confirmatory_test(auto) at the fitted k
         │    (k="auto": at k=1)
-        └─ ssd_gradients = N > 1 → N gradients, independent of everything above:
-             plskit.pls1_fit(Xs, ys, k=N) → W (D × N, orthonormal)
-             backends.pls.pls1_rotate(W, Xs, ys, rotate, L):
-               rotate="words" → varimax against L = projection of the leading
-                                50,000 vocabulary rows onto W; reorder by
-                                |corr(Xs W_rot_i, ys)|, descending; flip so it is positive
-               rotate=None    → W in NIPALS order and signs
-             leaves "dim-1", …, "dim-N": β_i = W_rot[:, i] / X_scale
+        └─ ssd_gradients = N > 1 → N parts of this β:
+             backends.pls.split_beta(m, Xs, N, gradients) on the pls1_fit above:
+             plskit.profiles(m, Xs, N), or plskit.factors(m, Xs, N) with gradients="factors";
+               cut the document PCs into N consecutive blocks with about equal
+               shares of the squared coefficients; F_j = this β's part in block j
+               varimax on L = Xs W; order by size, descending
+             gradients="components" | "components_raw", N = k:
+             backends.pls.split_components(W, coef, L): F_j = w_j (w_j' coef),
+               which sum to coef (W orthonormal, coef in its span);
+               "components": W varimax against L = word_target, order by size;
+               "components_raw": W unrotated, PLS order
+             backends.pls.gradient_dims(f, Xs, ys, X_scale):
+               leaves "dim-1", …, "dim-N": β_i = F[:, i] / X_scale, which sum to β
                                 │
                                 ▼
                           PLSResult
@@ -177,12 +181,12 @@ X (n_kept × D) per text, y (n_kept), data
         ├─ group coefficient names by text term; per term:
         │      w_K = the term's component coefficients  (÷ sd(y) for Gaussian identity link)
         │      β = V_K w_K / X_scale    (back-project; no sign flip)
-        ├─ ssd_gradients = N > 1 (one text, one plain ssd() term) → N gradients:
-        │      split the K components into N consecutive blocks (np.array_split)
-        │      piece_j = V_K[block_j]' w_K[block_j]   (pieces sum to V_K' w_K, orthogonal)
-        │      W = pieces / ‖pieces‖ (D × N, orthonormal)
-        │      backends.pls.pls1_rotate(W, Xs, ys, rotate="words", L) as in fit_pls
-        │      leaves "dim-1", …, "dim-N": β_i = W_rot[:, i] / X_scale
+        ├─ ssd_gradients = N > 1 (one text, one plain ssd() term) → N parts of β:
+        │      Xk = Xs V_K V_K': Xs reduced to the K components, whose PCA basis is V_K
+        │      backends.pls.split_beta(V_K w_K, Xk, N, gradients): the same split as in fit_pls, on the K components
+        │      with "profiles", plskit rotates on Xk f.W = Xs f.W, the same rotation as in fit_pls
+        │      backends.pls.gradient_dims(f, Xs, ys, X_scale)
+        │      leaves "dim-1", …, "dim-N": β_i = F[:, i] / X_scale, which sum to β
         └─ one term → PCAOLSResult; several terms → RegressionResult of PCAOLSResult leaves;
            several texts → RegressionResult keyed by text
 ```

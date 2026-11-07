@@ -80,6 +80,24 @@ def test_top_snippet_filled_lazy(fresh_clusters):
         assert r["top_snippet"] == best.text_window
 
 
+def test_both_sides_view_fills_top_snippet(fresh_clusters, tmp_path):
+    """clusters.to_dict / save / a slice with cols='all' carry each side's top_snippet."""
+    sided = {(r["side"], r["cluster_id"]): r["top_snippet"]
+             for v in (fresh_clusters.clusters.pos, fresh_clusters.clusters.neg)
+             for r in v.to_dict(cols="all")}
+    fresh_clusters.clear_cache("clusters")
+    flat = fresh_clusters.clusters.to_dict(cols="all")
+    assert {(r["side"], r["cluster_id"]): r["top_snippet"] for r in flat} == sided
+    assert any(sided.values())
+    fresh_clusters.clear_cache("clusters")
+    assert fresh_clusters.clusters[:2].to_dict(cols="all") == flat[:2]
+    fresh_clusters.clear_cache("clusters")
+    p = tmp_path / "clusters.csv"
+    fresh_clusters.clusters.save(p, cols="all")
+    with open(p, newline="", encoding="utf-8") as fh:
+        assert [r["top_snippet"] for r in csv.DictReader(fh)] == [r["top_snippet"] for r in flat]
+
+
 def test_top_snippet_in_exports(fresh_clusters, tmp_path):
     """to_records keeps the default width; a cols='all' CSV carries top_words and top_snippet."""
     records = fresh_clusters.clusters.pos.to_records()

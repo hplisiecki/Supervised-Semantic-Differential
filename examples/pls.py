@@ -49,10 +49,11 @@ pls_cov.summary()
 print(pls_cov.words)
 
 # ---- Several gradients ----
-# The gradient above is one direction. ssd_gradients=3 also fits three
-# components and rotates them (rotate="words", the default) so that each reads
-# as its own group of words. They are result["dim-1"] ... result["dim-3"]; the
-# headline fit and its p-value are the same as with one gradient.
+# The gradient above is one direction. ssd_gradients=3 also splits its beta
+# into three parts and rotates them on the document scores so that each reads
+# as its own group of words. They are result["dim-1"] ... result["dim-3"],
+# ordered by standardized size, and they sum to beta; the headline fit and its
+# p-value are the same as with one gradient.
 pls3 = ssd.fit_pls("valence", data=df, ssd_gradients=3, n_splits=20)
 for key in pls3.keys():
     print(key)

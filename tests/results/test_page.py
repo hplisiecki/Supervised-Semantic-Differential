@@ -28,7 +28,8 @@ def multipls_result(ssd_instance, pack_df):
 
 def test_fit_args_recorded(pls_result, pcaols_result, group_result_2g, multipls_result):
     assert pls_result.fit_args == {"formula": None, "k": 2, "k_max": 5, "ssd_gradients": 1,
-                                   "rotate": "words", "n_splits": 20, "random_state": 42,
+                                   "gradients": "profiles",
+                                   "n_splits": 20, "random_state": 42,
                                    "test": True}
     assert pcaols_result.fit_args["fixed_k"] == 3
     assert group_result_2g.fit_args == {"median_split": False, "n_perm": 50,

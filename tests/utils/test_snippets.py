@@ -259,3 +259,16 @@ class TestClusterSnippetsByCentroids:
         assert result["pos"] and result["neg"]
         assert {s["centroid_label"] for s in result["pos"]} == {"pos_cluster_1"}
         assert {s["centroid_label"] for s in result["neg"]} == {"neg_cluster_1"}
+
+
+def test_parallel_collect_keeps_submission_order():
+    """Threaded collection returns results in item order, as the serial path does."""
+    import time
+
+    from ssdiff.utils.snippets import _parallel_collect
+
+    def worker(i):
+        time.sleep(0.002 * (8 - i))  # later items finish first
+        return None if i == 3 else {"i": i}
+
+    assert [r["i"] for r in _parallel_collect(worker, list(range(8)), n_jobs=8)] == [0, 1, 2, 4, 5, 6, 7]

@@ -63,12 +63,13 @@ print(res_cov.covariates)
 print(res_cov.words)
 
 # ---- Several gradients ----
-# The gradient above is one direction. ssd_gradients=3 splits the K components
-# into three consecutive blocks (block 1 holds the highest-variance ones), takes
-# each block's part of the model's beta as one gradient, and rotates the three
-# by words so that each reads as its own group of words. They are
-# result["dim-1"] ... result["dim-3"] and have no p-value; the headline fit and
-# its p-value are the same as with one gradient.
+# The gradient above is one direction. ssd_gradients=3 cuts the K components
+# into three consecutive blocks with about equal shares of the squared
+# coefficients (block 1 holds the highest-variance ones), and rotates the three
+# parts of beta on the document scores so that each reads as its own group of
+# words. They are result["dim-1"] ... result["dim-3"], ordered by standardized
+# size; they sum to beta and have no p-value. The headline fit and its p-value
+# are the same as with one gradient.
 res3 = ssd.fit_regression("valence ~ ssd()", data=df, ssd_gradients=3)
 for key in res3.keys():
     print(key)

@@ -17,7 +17,7 @@ learns a **semantic gradient (beta)** that best predicts the outcome, and then p
 - **Cross-group comparisons** with permutation inference
 
 The method has been presented in the following preprint:
-https://doi.org/10.31234/osf.io/gvrsb_v3
+https://doi.org/10.31234/osf.io/gvrsb_v1
 
 > **No-code option:** a GUI desktop application for SSD is available at [hplisiecki/SSD_APP](https://github.com/hplisiecki/SSD_APP). It wraps this package into a point-and-click interface with a guided three-stage workflow, interactive lexicon builder, and APA-formatted export — pre-built binaries for Windows, Linux, and macOS are available with no Python installation required.
 
@@ -94,7 +94,7 @@ result.report().save("report.md")
 
 The outcome can also be given as values: `ssd.fit_pls(df["score"])` or `ssd.fit_pls(scores_array)`.
 
-With every part at its default, a regression is one line: `ssdiff.fit_regression("score ~ ssd(text)", df)` builds the text from the column `text` with the default wordpack and full-document vectors (see [Several texts](#several-texts)).
+With every part at its default, a regression is one line: `fit_regression("score ~ ssd(text)", df)` (`from ssdiff import fit_regression`) builds the text from the column `text` with the default wordpack and full-document vectors (see [Several texts](#several-texts)).
 
 Every result attribute is a view: print it, slice with `(n)`, dispatch
 to one side with `.pos` / `.neg`, or export with `.to_df()` / `.save(...)`.
@@ -209,7 +209,7 @@ Lemmatize or tokenize with any tool you like and pass the tokens. `examples/cust
 | `sif_a` | `1e-3` | SIF smoothing. `None` turns SIF off (plain mean). |
 | `use_full_doc` | `None` | `True`: the whole document; `False`: seed contexts. `None` means `True` without a lexicon and `False` with one. |
 
-`ssd.with_lexicon(other_lexicon)` returns a new `SSD` on the same tokens with another lexicon (and optionally other `window`, `sif_a`, `use_full_doc`). The texts are not tokenized again.
+`ssd.with_lexicon(other_lexicon)` returns a new `SSD` on the same tokens with another lexicon (and optionally other `window`, `sif_a`, `use_full_doc`). Options you leave out take their defaults (`window=3`, `sif_a=1e-3`, `use_full_doc=False`), not the values of `ssd`. The texts are not tokenized again.
 
 `ssd.docs` holds the tokens of each document, `ssd.tokenizer` is `"wordpack:<name>-<version>"` for strings and `None` for token lists, `len(ssd)` is the document count and `ssd.n_kept` counts the documents that have a vector.
 
@@ -318,7 +318,8 @@ result = ssd.fit_regression(
     k_min=2,
     k_max=120,
     k_step=2,
-    ssd_gradients=1,      # N > 1 also returns N rotated gradients from this model
+    ssd_gradients=1,      # N > 1 also returns N rotated parts of beta
+    gradients="profiles",
     verbose=False,
     pca_sweep_args=None,  # extra sweep settings; ignored when fixed_k is set
 )
@@ -335,12 +336,13 @@ result = ssd.fit_regression(
 | `k_max` | `int` | `120` | Maximum PCA-K for sweep |
 | `k_step` | `int` | `2` | Step size |
 | `ssd_gradients` | `int` | `1` | Number of gradients returned, in `[1, K]`. At 1 the result is the standard fit alone. See [Several gradients](#several-gradients). |
+| `gradients` | `"profiles" \| "factors"` | `"profiles"` | How the N parts are made at `ssd_gradients > 1`. `"profiles"` rotates them by varimax on the document scores and orders them by size. `"factors"` keeps the plain split into consecutive blocks along the principal components, unrotated, in block order. Both sum to `beta`. |
 | `verbose` | `bool` | `False` | Print progress |
 | `pca_sweep_args` | `dict \| None` | `None` | Extra keyword arguments for the PCA-K sweep (e.g. `cluster_topn`, `auck_radius`, `save_tables`, `out_dir`). Ignored when `fixed_k` is set. A key that `fit_regression` sets itself (`Xs`, `X_scale`, `x`, `ys`, `embeddings`, `pca_k_values`, `verbose`) raises `ValueError`. |
 
 `fit_ols` is a deprecated alias of `fit_regression` and gives a `FutureWarning`.
 
-`ssd_gradients=N` with N > 1 also returns N gradients, `result["dim-1"]` … `result["dim-N"]`, built from this regression's own model: the K components are split into N consecutive blocks, each block's part of the model's beta is one gradient, and the N gradients are rotated by words as in [Several gradients](#several-gradients). The standard fit does not change. It needs the text as one plain `ssd()` term; with covariates, another family or random effects, the gradients' `score_corr` and `cov_share` are descriptive.
+`ssd_gradients=N` with N > 1 also returns N rotated parts of this regression's beta, `result["dim-1"]` … `result["dim-N"]`, that sum to it: the K components are cut into N consecutive blocks with about equal shares of the squared coefficients, and the parts are rotated on the document scores, as in [Several gradients](#several-gradients). `gradients="factors"` skips the rotation and keeps the blocks in order. The standard fit does not change. It needs the text as one plain `ssd()` term; with covariates, another family or random effects, the gradients' `score_corr` and `cov_share` are descriptive, and for a non-Gaussian family the leaves are on the link scale.
 
 #### Formulas: covariates, random effects and the text term
 
@@ -380,7 +382,7 @@ The key of a term is the formula term with `ssd()` shown as `ssd(<text name>)` (
 
 `res.test` has one row per test. The row with an empty label tests all the text terms together (the formula without them against the full formula). Each other row is one Wald test of one term, which tests that term's coefficients together, so lower-order terms such as `ssd(essay)` have a row too. A formula with a single text term gives a plain regression result, not a container.
 
-`res.report()` is not defined on the container: use `res.summary()`, `res.save_page(...)`, or `res["sexM:ssd(essay)"].report()` for one term.
+`res.report()` covers the model, the tests and every term; `res["sexM:ssd(essay)"].report()` covers one term.
 
 #### Several texts
 
@@ -441,8 +443,8 @@ result = ssd.fit_pls(
     data=df,
     k="auto",             # int, or "auto" for find_k_optimal
     k_max=5,              # cap for "auto"
-    ssd_gradients=1,      # >1 also returns that many rotated gradients
-    rotate="words",       # rotation of those gradients: "words" or None
+    ssd_gradients=1,      # >1 also returns that many rotated parts of beta
+    gradients="profiles",
     n_splits=50,          # split-half iterations
     random_state=2137,
     test=True,            # False skips the confirmatory test; pvalue is NaN
@@ -457,7 +459,7 @@ result = ssd.fit_pls(
 | `k` | `int \| "auto"` | `"auto"` | Number of PLS components. `int` fits at exactly that k. `"auto"` calls `plskit.pls1_find_k_optimal` (selector `r2_se`, diagnostic `split_nb`). The p-value is plskit's default split-half test (`test_method="auto"`: `split_exact` or `split_nb`, chosen from X alone; `result.test.name` says which ran) at the fitted `k`; with `k="auto"` it is the k=1 test. |
 | `k_max` | `int` | `5` | Cap for `k="auto"`, clamped to `min(k_max, n-1, D)`. Ignored when `k` is an int. |
 | `ssd_gradients` | `int` | `1` | Number of gradients returned, in `[1, min(n-1, D)]`. At 1 the result is the standard fit alone. See [Several gradients](#several-gradients). |
-| `rotate` | `"words" \| None` | `"words"` | Rotation of the gradients when `ssd_gradients > 1`; ignored at 1. |
+| `gradients` | `"profiles" \| "factors" \| "components" \| "components_raw"` | `"profiles"` | How the N parts are made at `ssd_gradients > 1`. `"profiles"` rotates them by varimax on the document scores and orders them by size. `"factors"` keeps the plain split into consecutive blocks along the principal components, unrotated, in block order. `"components"` and `"components_raw"` split `beta` along the fit's k PLS weights instead, so `ssd_gradients` must equal k: part i is `beta` projected on weight i. `"components"` first rotates the weights by varimax against the vocabulary and orders the parts by size. `"components_raw"` keeps the unrotated weights, in PLS order. All four sum to `beta`. |
 | `n_splits` | `int` | `50` | Random splits for the split-half tests. |
 | `random_state` | `int` | `2137` | Random seed. |
 | `test` | `bool` | `True` | Run the confirmatory test. `False` skips it: `pvalue` is NaN, and k selection for `k="auto"` still runs. `result.test(n_splits=..., seed=...)` runs it later; with no arguments it uses 50 splits and no seed. |
@@ -467,7 +469,7 @@ To re-run the test with different settings, call `result.test(n_splits=200)` —
 
 #### Several gradients
 
-`ssd_gradients=N` with N > 1 also returns N gradients from one outcome. The standard fit does not change: the p-value, `beta`, `r2`, `docs` and `predict()` are the same as with `ssd_gradients=1`. The N gradients come from a separate N-component PLS1 fit on the same data, one leaf each.
+`ssd_gradients=N` with N > 1 also splits the fit's `beta` into N parts, one leaf each, and the leaves sum to `beta`. The standard fit does not change: the p-value, `beta`, `r2`, `docs` and `predict()` are the same as with `ssd_gradients=1`.
 
 ```python
 result = ssd.fit_pls("score", data=df, ssd_gradients=3)   # works with a formula too
@@ -477,7 +479,7 @@ result["dim-1"].stats                       # score_corr, cov_share
 result.pls_info                             # rotation diagnostics
 ```
 
-With `rotate="words"` (default) the N weight vectors are varimax-rotated against the projection of the leading vocabulary rows. The gradients are then ordered by the correlation of their scores with the outcome, highest first, and each is flipped so that correlation is positive. With `rotate=None` they stay in NIPALS order: gradient 1 is the first PLS weight vector, and gradients 2…N have zero covariance with the outcome, so their `score_corr` and `cov_share` are 0.
+`plskit.profiles` cuts `beta` along the document PCs into N blocks with about equal shares of the squared coefficients, then rotates the parts by varimax on the document scores. `gradients="factors"` skips the rotation and keeps the blocks in order. `gradients="components"` splits `beta` along the fit's k PLS weights instead, rotated by varimax against the vocabulary, and needs `ssd_gradients` equal to k; `"components_raw"` keeps the weights unrotated, in PLS order. `sum(result[k].beta for k in result.keys())` equals `result.beta`. The leaves are ordered by size in standardized space, largest first. `leaf.beta_norm` is a leaf's raw norm, so it need not descend. A leaf keeps the sign the model gives it: in standardized space its direction raises the prediction, while its `score_corr` can be negative. N does not depend on `k`, except with the two `components` modes.
 
 Each leaf has `.stats` (`score_corr`: correlation of its scores with the outcome; `cov_share`: its share of the squared covariance with it), `.words`, `.clusters`, `.snippets`, `.beta` and `.gradient`. Leaves have no p-value. `result.fit_info.n_components` stays the standard fit's k, which `k="auto"` may set to a value other than N. `report()` and `save_page()` show the gradients after the standard fit.
 
@@ -786,7 +788,7 @@ result.alignment_scores              # ndarray of shape (n_kept,)
 
 ## API Summary
 
-The `ssdiff` top-level package exports two primary classes and one function, plus result and view classes:
+The `ssdiff` top-level package exports two primary classes and two functions, plus result and view classes:
 
 ```python
 from ssdiff import Embeddings, SSD, fit_regression, contrast
@@ -816,9 +818,9 @@ from ssdiff.results.multi_pls_result import MultiPLSResult
 - `SSD(texts, *, embeddings=None, lexicon=None, window=3, sif_a=1e-3, use_full_doc=None)` — `texts`: strings (wordpack) or token lists; `embeddings=None` loads the default wordpack
 - `.with_lexicon(lexicon, *, window=3, sif_a=1e-3, use_full_doc=False)` -> `SSD` — same tokens, another lexicon
 - `.docs` — tokens per document; `.name`, `.tokenizer`, `.lexicon`, `.window`, `.sif_a`, `.use_full_doc`, `.n_kept`, `len(ssd)`
-- `.fit_pls(outcome, *, data=None, k="auto", k_max=5, ssd_gradients=1, rotate="words", n_splits=50, random_state=2137, test=True, verbose=False)` -> `PLSResult`
+- `.fit_pls(outcome, *, data=None, k="auto", k_max=5, ssd_gradients=1, gradients="profiles", n_splits=50, random_state=2137, test=True, verbose=False)` -> `PLSResult`
 - `.fit_multipls(outcome, *, data=None, ssd_gradients=None, rotate=None, outcome_groups=None, n_splits=50, n_perm=1000, random_state=2137, verbose=False)` -> `MultiPLSResult`
-- `.fit_regression(outcome, *, data=None, family="gaussian", link=None, fixed_k=None, k_min=2, k_max=120, k_step=2, ssd_gradients=1, verbose=False, pca_sweep_args=None)` -> `PCAOLSResult` (`RegressionResult` when the text has several terms)
+- `.fit_regression(outcome, *, data=None, family="gaussian", link=None, fixed_k=None, k_min=2, k_max=120, k_step=2, ssd_gradients=1, gradients="profiles", verbose=False, pca_sweep_args=None)` -> `PCAOLSResult` (`RegressionResult` when the text has several terms)
 - `.fit_groups(outcome, *, data=None, median_split=False, n_perm=5000, correction="holm", random_state=2137, verbose=False)` -> `GroupResult`
 - `.suggest_lexicon(outcome=None, *, data=None, seeds=None, top_k=30, min_docs=5, n_bins=4, corr_cap=0.30, var_type="continuous")` -> `LexiconResult` — data-driven seed word selection; with `seeds`, the tokens closest to the seeds
 - `.evaluate_lexicon(outcome, lexicon, *, data=None, n_bins=4, corr_cap=0.30, var_type="continuous")` -> `LexiconResult` — score an existing lexicon (per-token + aggregate)
@@ -835,10 +837,10 @@ from ssdiff.results.multi_pls_result import MultiPLSResult
 
 **Scalar views** (all expose `.r2`, `.pvalue`, … as attributes; print to read, export with `.to_df()` / `.save(...)`):
 - `.stats` — `backend`, `r2`, `r2_adj` (OLS only), `pvalue`, `n_raw`, `n_kept`, `n_dropped`, `y_mean`, `y_std`, `beta_norm`, `delta`, `iqr_effect`, `y_corr_pred`
-- `.fit_info` — `n_components`, `p_at_k`, `n_splits`, `random_state`, `ssd_gradients` and `rotate` (PLS), plus PCA-K sweep info for OLS
-- `.pls_info` — PLS with `ssd_gradients > 1` only: `ssd_gradients`, `rotate`, `order`, `signs`, `sweeps`, `V_converged`, `kaiser_normalized`, `random_state`
+- `.fit_info` — `n_components`, `p_at_k`, `n_splits`, `random_state`, `ssd_gradients` and `rotate` (`"docs"`, `"words"` with `gradients="components"`, or `None` with `"factors"` and `"components_raw"`), plus PCA-K sweep info for OLS
+- `.pls_info` — with `ssd_gradients > 1` only: `ssd_gradients`, `rotate` (`"docs"`, `"words"` with `gradients="components"`, or `None` with `"factors"` and `"components_raw"`), `sweeps`, `V_converged`, `kaiser_normalized`, `random_state`; `order` and `signs` are `None` here
 
-**Gradient leaves** (PLS with `ssd_gradients > 1`): `result.keys()` lists `"dim-1"` … `"dim-N"`; `result["dim-1"]` has `.stats`, `.words`, `.clusters`, `.snippets`, `.beta`, `.gradient`.
+**Gradient leaves** (`ssd_gradients > 1`): `result.keys()` lists `"dim-1"` … `"dim-N"`, and their `.beta` sum to `result.beta`; `result["dim-1"]` has `.stats`, `.words`, `.clusters`, `.snippets`, `.beta`, `.gradient`, `.beta_norm`.
 
 **Tabular views**:
 - `.words` → `WordsView` (with `.pos` / `.neg` → `WordsViewSided`, callable `(n)` to resize)
@@ -858,7 +860,7 @@ from ssdiff.results.multi_pls_result import MultiPLSResult
 
 ### `RegressionResult`
 
-From a formula with several text terms (`group*ssd()`), or from `ssdiff.fit_regression`. `res.keys()` lists the terms (`'ssd(essay)'`, `'sexM:ssd(essay)'`); with several texts it lists the text names, and `res["name"]` is that text's result. `res[term]` is a `PCAOLSResult` with `.beta`, `.gradient`, `.words`, `.clusters`, `.snippets`. `.test` lists the all-text test, the per-text tests (several texts) and the per-term Wald tests. `.model`, `.covariates`, `.summary()`, `.save_page(...)` and `.attach(...)` work on the container.
+From a formula with several text terms (`group*ssd()`), or from `ssdiff.fit_regression`. `res.keys()` lists the terms (`'ssd(essay)'`, `'sexM:ssd(essay)'`); with several texts it lists the text names, and `res["name"]` is that text's result. `res[term]` is a `PCAOLSResult` with `.beta`, `.gradient`, `.words`, `.clusters`, `.snippets`. `.test` lists the all-text test, the per-text tests (several texts) and the per-term Wald tests. `.model`, `.covariates`, `.summary()`, `.report()`, `.save_page(...)` and `.attach(...)` work on the container.
 
 ### `GroupResult`
 

@@ -57,6 +57,14 @@ def test_no_formula_matches_pca_ols(tiny_kv, large_docs, large_y, lexicon):
     assert res.pca_k == 4
 
 
+def test_aliased_text_coefficient_raises(pack_emb, pack_df, pack_lexicon):
+    # 40 documents, 5 distinct: K = 6 is above the rank of the vectors.
+    ssd = SSD(list(pack_df["text"][:5]) * 8, embeddings=pack_emb, lexicon=pack_lexicon)
+    y = np.random.default_rng(0).standard_normal(40)
+    with pytest.raises(ValueError, match=r"coefficients of 'ssd\(\)' cannot all be estimated \(aliased\)"):
+        ssd.fit_regression(y, fixed_k=6)
+
+
 def test_sweep_k_used(tiny_kv, large_docs, large_y, lexicon):
     ssd = _ssd(tiny_kv, large_docs, lexicon)
     res = ssd.fit_regression(large_y, k_min=2, k_max=6, k_step=1)

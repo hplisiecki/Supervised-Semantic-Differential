@@ -257,7 +257,29 @@ def _write_docx_clusters(views, path, poles, *, cols=None, k=None) -> None:
     doc.save(str(path))
 
 
-class ClustersViewSided(View[Cluster]):
+class _FillsTopSnippet:
+    """``to_dict`` / ``to_records`` / ``to_df`` that fill ``top_snippet`` first when asked for it.
+
+    The class provides ``_ensure_filled_if_requested(keep)``.
+    """
+
+    def to_dict(self, cols=None):
+        from ssdiff.results.core import _validate_cols
+        self._ensure_filled_if_requested(_validate_cols(cols, self)[0])
+        return super().to_dict(cols=cols)
+
+    def to_records(self, cols=None):
+        from ssdiff.results.core import _validate_cols
+        self._ensure_filled_if_requested(_validate_cols(cols, self)[0])
+        return super().to_records(cols=cols)
+
+    def to_df(self, cols=None):
+        from ssdiff.results.core import _validate_cols
+        self._ensure_filled_if_requested(_validate_cols(cols, self)[0])
+        return super().to_df(cols=cols)
+
+
+class ClustersViewSided(_FillsTopSnippet, View[Cluster]):
     """Cluster summary view for one β pole.
 
     Callable with a positional ``cluster_id`` to zoom into one cluster;
@@ -407,24 +429,6 @@ class ClustersViewSided(View[Cluster]):
             _top_snippet_filled=self._top_snippet_filled,
             _top_snippets_n=top_snippets,
         )
-
-    def to_dict(self, cols=None):
-        from ssdiff.results.core import _validate_cols
-        keep, _ = _validate_cols(cols, self)
-        self._ensure_filled_if_requested(keep)
-        return super().to_dict(cols=cols)
-
-    def to_records(self, cols=None):
-        from ssdiff.results.core import _validate_cols
-        keep, _ = _validate_cols(cols, self)
-        self._ensure_filled_if_requested(keep)
-        return super().to_records(cols=cols)
-
-    def to_df(self, cols=None):
-        from ssdiff.results.core import _validate_cols
-        keep, _ = _validate_cols(cols, self)
-        self._ensure_filled_if_requested(keep)
-        return super().to_df(cols=cols)
 
     def save(self, path=None, *, cols=None, k=None):
         from ssdiff.results.core import _get_ext, _validate_cols
@@ -711,7 +715,7 @@ class ClustersViewSided(View[Cluster]):
         )
 
 
-class ClustersView(View[Cluster]):
+class ClustersView(_FillsTopSnippet, View[Cluster]):
     """Flat-iterable cluster view — pos rows, then neg rows.
 
     Exposes ``.pos`` / ``.neg`` for per-side access and ``.words`` for the
@@ -764,6 +768,22 @@ class ClustersView(View[Cluster]):
     def neg(self) -> ClustersViewSided:
         return self._parent._clusters_for("neg")
 
+    def _ensure_filled_if_requested(self, keep) -> None:
+        """Fill ``top_snippet`` on both side views when asked for (see ``ClustersViewSided``)."""
+        if "top_snippet" not in tuple(keep):
+            return
+        import dataclasses
+        sides = (self.pos, self.neg)
+        for v in sides:
+            v._fill_top_snippets()
+        if self._rows_override is not None:
+            # A slice holds copies of the rows from before the fill.
+            best = {(r.side, r.cluster_id): r.top_snippet for v in sides for r in v._rows}
+            self._rows_override = [
+                dataclasses.replace(r, top_snippet=best.get((r.side, r.cluster_id), r.top_snippet))
+                for r in self._rows_override
+            ]
+
     @property
     def words(self) -> ClusterWordsView:
         """Combined cluster-words across both sides."""
@@ -789,8 +809,9 @@ class ClustersView(View[Cluster]):
         ``.docx`` writes one table per side, laid out for a paper (see
         ``_write_docx_clusters``); ``k`` caps each side's rows there.
         """
-        from ssdiff.results.core import _get_ext
+        from ssdiff.results.core import _get_ext, _validate_cols
         if path is None or _get_ext(str(path)) != "docx":
+            self._ensure_filled_if_requested(_validate_cols(cols, self)[0])
             return super().save(path, cols=cols, k=k)
         views = [self.pos, self.neg]
         if self._rows_override is not None:
@@ -825,10 +846,13 @@ class ClustersView(View[Cluster]):
             if block is not None:
                 return f"{header}\n{body}\n\n{block}"
             return f"{header}\n{body}"
+        self._ensure_filled_if_requested(_validate_cols(cols, self)[0])
         body = View.to_text(self, max_rows=max_rows, cols=cols)
         return f"{header}\n{body}"
 
     def to_html(self, cols=None) -> str:
+        from ssdiff.results.core import _validate_cols
+        self._ensure_filled_if_requested(_validate_cols(cols, self)[0])
         rows = self._rows
         n_pos = sum(1 for r in rows if r.side == "pos")
         n_neg = sum(1 for r in rows if r.side == "neg")
@@ -1680,11 +1704,11 @@ class ContinuousResult(_SingleResult):
             the model's fit; ``stats.y_corr_pred`` is then ``|corr(y, y_hat)|``.
             ``None`` predicts from ``beta``.
         dims : dict or None
-            The rotated gradients of ``ssd_gradients=N``, N > 1, from
+            The rotated parts of beta of ``ssd_gradients=N``, N > 1, from
             ``fit_pls`` or ``fit_regression``: ``"beta"`` (D, N) in raw
             doc-vector space, ``"score_corr"`` and ``"cov_share"`` (N,), and
-            ``"rotate"``, ``"order"``, ``"signs"``, ``"rotation_meta"`` as in
-            ``PLSInfoView``. ``None`` for one gradient.
+            ``"rotate"``, ``"rotation_meta"`` as in ``PLSInfoView``. ``None``
+            for one gradient.
         """
         super().__init__(
             x=x, beta=beta,
@@ -1766,8 +1790,8 @@ class ContinuousResult(_SingleResult):
         if dims is not None:
             n_dims = dims["beta"].shape[1]
             self.pls_info = PLSInfoView(
-                ssd_gradients=n_dims, rotate=dims["rotate"], order=dims["order"],
-                signs=dims["signs"], rotation_meta=dims["rotation_meta"],
+                ssd_gradients=n_dims, rotate=dims["rotate"],
+                rotation_meta=dims["rotation_meta"],
                 random_state=self.fit_info.random_state,
             )
             for i in range(n_dims):
@@ -2429,6 +2453,7 @@ class RegressionResult(_RegressionModelView, _MultiContainer):
     text name; each entry is a ``RegressionResult`` keyed by term, or a
     ``PCAOLSResult`` for a text with one term. ``text`` is ``None``, and
     ``fit_info``, ``sweep`` and ``n_no_vector`` are dicts keyed by text name.
+    ``words``, ``clusters`` and ``snippets`` are keyed by term, across texts.
     """
 
     _access = (
@@ -2472,6 +2497,11 @@ class RegressionResult(_RegressionModelView, _MultiContainer):
             self.fit_info = first.fit_info
             self.sweep = first.sweep
             self.n_no_vector = first.n_no_vector
+
+    def _view_leaves(self) -> dict:
+        """One leaf per term, keyed by term label, also when a text's entry holds several terms."""
+        from ssdiff.results.page import _regression_leaves
+        return {key: leaf for _, key, leaf in _regression_leaves(self)}
 
     def _first_leaf(self) -> PCAOLSResult:
         first = next(iter(self._leaves.values()))

@@ -282,41 +282,27 @@ def _whole_model_test(cols, f_ph: str, labels: list[str], text_labels: set[str],
     return out
 
 
-def _regression_gradients(p, w_reg: np.ndarray, n: int, embeddings) -> dict:
-    """The *n* rotated gradients of one text term from its fitted component weights.
+def _regression_gradients(p, w_reg: np.ndarray, n: int, gradients: str) -> dict:
+    """The *n* parts of one text term's beta, from its fitted component weights.
 
-    The K components (``p.components``, orthonormal rows in standardized
-    space) are split into *n* consecutive blocks, the first blocks one
-    component longer when *n* does not divide K. Block j's piece
-    ``components[j].T @ w_reg[j]`` is the model's beta restricted to those
-    components; the pieces sum to the term's beta and are mutually
-    orthogonal, so their unit vectors are orthonormal weights W. W is then
-    rotated by words, as in ``fit_pls(ssd_gradients=n)``.
+    ``split_beta`` cuts the K components (``p.components``, orthonormal rows in
+    standardized space) into *n* consecutive blocks with about equal shares of
+    the squared coefficients. plskit takes its basis from ``X``, so ``X`` is
+    ``Xs`` reduced to the K components, whose PCA basis is those components in
+    order. With ``"profiles"`` the parts are rotated on ``X W``, which equals
+    ``Xs W`` because every column of ``W`` lies in the span of the components.
     """
-    from ssdiff.backends.pls import pls1_rotate, word_target
+    from ssdiff.backends.pls import gradient_dims, split_beta
 
-    blocks = np.array_split(np.arange(len(w_reg)), n)
-    pieces = np.column_stack([p.components[b].T @ w_reg[b] for b in blocks])
-    total = float(np.linalg.norm(pieces.sum(axis=1)))
-    norms = np.linalg.norm(pieces, axis=0)
-    for j, (b, norm) in enumerate(zip(blocks, norms), 1):
-        comps = f"components {b[0] + 1}-{b[-1] + 1}" if len(b) > 1 else f"component {b[0] + 1}"
-        if not np.all(np.isfinite(pieces[:, j - 1])):
-            raise ValueError(
-                f"ssd_gradients: gradient {j} ({comps}) has a coefficient glmm could "
-                "not estimate (aliased)."
-            )
-        if norm <= 1e-12 * total:
-            raise ValueError(
-                f"ssd_gradients: gradient {j} ({comps}) is zero: the model gives those "
-                "components no weight. Use a smaller ssd_gradients."
-            )
-    W = pieces / norms
-    L = word_target(embeddings.vectors, W, p.X_mean, p.X_scale)
-    dims = pls1_rotate(W, p.Xs, p.ys, rotate="words", L=L)
-    dims["beta"] = dims["W_rot"] / p.X_scale[:, None]
-    dims["rotate"] = "words"
-    return dims
+    bad = np.flatnonzero(~np.isfinite(w_reg))
+    if bad.size:
+        raise ValueError(
+            f"ssd_gradients: component {bad[0] + 1} has a coefficient glmm could "
+            "not estimate (aliased)."
+        )
+    V = p.components.T
+    f = split_beta(V @ w_reg, p.Xs @ V @ V.T, n, gradients)
+    return gradient_dims(f, p.Xs, p.ys, p.X_scale)
 
 
 def _fit_regression(
@@ -336,6 +322,7 @@ def _fit_regression(
     pca_sweep_args: dict | None,
     fit_args: dict,
     ssd_gradients: int = 1,
+    gradients: str = "profiles",
 ):
     """Fit *formula*, whose ``ssd(...)`` terms stand for the *texts*, with glmm.
 
@@ -346,10 +333,15 @@ def _fit_regression(
     term (the term's coefficients back-projected to document space), or the
     leaf alone when there is one term. With several texts the result is keyed
     by text, then by term. With ``ssd_gradients > 1`` (one text, the plain
-    ``ssd()`` term only) the leaf also holds that many rotated gradients
+    ``ssd()`` term only) the leaf also holds that many parts of its beta
     (``_regression_gradients``).
     """
     import glmm
+
+    if not isinstance(ssd_gradients, int) or ssd_gradients < 1:
+        raise ValueError(f"ssd_gradients must be an int >= 1; got {ssd_gradients!r}")
+    if gradients not in ("profiles", "factors"):
+        raise ValueError(f"gradients must be 'profiles' or 'factors'; got {gradients!r}")
 
     from ssdiff.results.continuous_result import PCAOLSResult, RegressionResult
 
@@ -549,17 +541,23 @@ def _fit_regression(
         leaves = {}
         for key, members in p.groups.items():
             w_reg = np.array([fit.beta[pos] for _, pos in members])
+            if np.isnan(w_reg).any():
+                # glmm reports an aliased coefficient as NaN, which would fill all of beta.
+                raise ValueError(
+                    f"The coefficients of '{key}' cannot all be estimated (aliased), e.g. a "
+                    "factor level with fewer documents than components. Merge or drop that "
+                    "level, or set a smaller fixed_k."
+                )
             if linear:
                 w_reg = w_reg / _y_scale[0]
-            # Back-project to doc space. No sign flip (_orient_beta): beta must
-            # keep the sign of the model's coefficients. Without covariates an
-            # OLS fit already correlates positively with y.
+            # Back-project to doc space, keeping the sign of the model's
+            # coefficients. Without covariates an OLS fit already correlates
+            # positively with y.
             beta = (p.components.T @ w_reg) / scale
             # score_corr and cov_share use the raw standardized x and y, the
             # covariates not removed: SSD._residualize covers fixed effects
             # only, not GLM families or random effects.
-            dims = (_regression_gradients(p, w_reg, ssd_gradients, text.embeddings)
-                    if ssd_gradients > 1 else None)
+            dims = _regression_gradients(p, w_reg, ssd_gradients, gradients) if ssd_gradients > 1 else None
             leaf = PCAOLSResult(
                 backend="PCA+OLS" if linear and not fit.re_groups else "PCA+GLMM",
                 beta=beta,
@@ -576,7 +574,7 @@ def _fit_regression(
                     "formula": fit_args["formula"],
                     "family": fit.family,
                     "ssd_gradients": ssd_gradients,
-                    "rotate": "words" if ssd_gradients > 1 else None,
+                    "rotate": dims["rotate"] if dims is not None else None,
                     "outcome": y_name,
                 },
                 raw_diagnostics={
@@ -886,7 +884,10 @@ class SSD:
     def _data_with(rows: _Rows, **cols):
         """``rows.data`` with *cols* added; only *cols* when there is no data."""
         if hasattr(rows.data, "iloc"):
-            return rows.data.assign(**cols)
+            import pandas as pd
+            # One concat: assign() inserts column by column, and pandas warns on wide fits.
+            new = pd.DataFrame(cols, index=rows.data.index)
+            return pd.concat([rows.data.drop(columns=new.columns, errors="ignore"), new], axis=1)
         if rows.data is not None:
             return {**rows.data, **cols}
         return cols
@@ -928,19 +929,6 @@ class SSD:
         ])
         return x_res, y_res
 
-    @staticmethod
-    def _orient_beta(beta: np.ndarray, ys: np.ndarray, x: np.ndarray) -> np.ndarray:
-        """Orient beta so higher alignment → higher outcome (alignment on *x*)."""
-        yhat_std = (x @ beta).ravel()
-        if float(np.std(yhat_std)) > 0:
-            c = float(np.corrcoef(ys, yhat_std)[0, 1])
-            corr = c if np.isfinite(c) else 0.0
-        else:
-            corr = 0.0
-        if corr < 0:
-            beta = -beta
-        return beta
-
     def _base_result_kwargs(self, rows: _Rows) -> dict:
         """Common kwargs for result object construction.
 
@@ -973,7 +961,7 @@ class SSD:
         k: int | Literal["auto"] = "auto",
         k_max: int = 5,
         ssd_gradients: int = 1,
-        rotate: Literal["words"] | None = "words",
+        gradients: Literal["profiles", "factors", "components", "components_raw"] = "profiles",
         n_splits: int = 50,
         random_state: int = 2137,
         test: bool = True,
@@ -983,9 +971,8 @@ class SSD:
 
         The standard fit (k selection, the test, ``beta``, ``r2``, ``docs``,
         ``predict()``) is the same for every ``ssd_gradients``. With
-        ``ssd_gradients=N > 1`` the result also holds N rotated gradients,
-        ``result["dim-1"]`` … ``result["dim-N"]``, from a separate N-component
-        PLS1 fit on the same standardized data.
+        ``ssd_gradients=N > 1`` the result also holds N parts of that
+        beta, ``result["dim-1"]`` … ``result["dim-N"]``, which sum to it.
 
         Significance is tested with plskit's default ``test_method="auto"``
         (Lenartowicz & Plisiecki, 2026, "Cheap and Powerful Tests for
@@ -1034,22 +1021,33 @@ class SSD:
             Ignored when ``k`` is an int.
         ssd_gradients : int, default 1
             Number of gradients returned, in ``[1, min(n - 1, D)]``. At 1
-            the result is the standard fit alone and ``rotate`` is ignored.
-            At N > 1, ``plskit.pls1_fit(k=N)`` gives N orthonormal weight
-            vectors W; each leaf ``"dim-i"`` has ``beta = W_rot[:, i] /
-            X_scale``, its ``stats`` (``score_corr``, ``cov_share``),
-            ``words``, ``clusters`` and ``snippets``, and no p-value.
+            the result is the standard fit alone. At N > 1, ``plskit.profiles``
+            cuts this fit's beta into N parts along the document PCs, with
+            about equal shares of the squared coefficients, and, with
+            ``gradients="profiles"``, rotates the parts by varimax on the
+            document scores. Each leaf ``"dim-i"`` has
+            its part as ``beta``, its ``stats`` (``score_corr``, ``cov_share``),
+            ``words``, ``clusters`` and ``snippets``, and no p-value. The
+            leaves sum to ``beta``; profiles are ordered by size in
+            standardized space, largest first. ``leaf.beta_norm`` is a leaf's raw norm, so
+            it need not descend. A leaf keeps the sign the model gives it, so
+            ``score_corr`` can be negative. N does not depend on ``k``, except
+            with ``gradients="components"`` or ``"components_raw"``, and
             ``fit_info.n_components`` stays the standard fit's k.
-        rotate : {"words", None}, default "words"
-            Rotation of the N gradients.
-
-            - ``"words"`` — varimax against the projection of the leading
-              vocabulary rows onto W, then dimensions ordered by
-              ``|corr(score, y)|``, descending, each flipped so that
-              correlation is positive.
-            - ``None`` — W in NIPALS order and signs. Dimensions 2…N then
-              have zero covariance with y (NIPALS gives ``w_1 ∝ X'y``), so
-              their ``score_corr`` and ``cov_share`` are 0.
+        gradients : {"profiles", "factors"}, default "profiles"
+            How the N parts are made, at ``ssd_gradients > 1``.
+            ``"profiles"`` (``plskit.profiles``) rotates them by varimax on
+            the document scores and orders them by size, largest first.
+            ``"factors"`` (``plskit.factors``) keeps the plain split: N
+            consecutive blocks along the document PCs, unrotated, in block
+            order, with ``fit_info.rotate`` and ``pls_info.rotate`` ``None``.
+            ``"components"`` splits beta along this fit's k PLS weights
+            instead of the document PCs, so ``ssd_gradients`` must equal k:
+            the weights are rotated by varimax against the vocabulary
+            (``fit_info.rotate`` ``"words"``), part i is beta projected on
+            weight i, and the parts are ordered by size, largest first.
+            ``"components_raw"`` is the same projection on the unrotated
+            weights, in PLS order. All four sum to ``beta``.
         n_splits : int, default 50
             Random splits for the split-half tests.
         random_state : int, default 2137
@@ -1069,14 +1067,17 @@ class SSD:
         Raises
         ------
         ValueError
-            On 2-D or categorical y, constant y, an invalid ``k`` or
-            ``ssd_gradients``, a ``rotate`` other than ``"words"`` or
-            ``None`` with ``ssd_gradients > 1``, or when plskit returns
-            fewer than ``ssd_gradients`` weight vectors.
+            On 2-D or categorical y, constant y, an invalid ``k``,
+            ``ssd_gradients`` or ``gradients``, ``ssd_gradients`` other than
+            k with ``gradients="components"`` or ``"components_raw"``, or a
+            gradient that is zero.
+        plskit.PlsKitError
+            When ``ssd_gradients`` exceeds the rank of the fitted vectors, or
+            a block of components has no weight.
         """
         import plskit
 
-        from ssdiff.backends.pls import pls1_rotate, word_target
+        from ssdiff.backends.pls import gradient_dims, split_beta, split_components, word_target
         from ssdiff.results.continuous_result import PLSResult
 
         if isinstance(outcome, str) and text_names(outcome):
@@ -1087,7 +1088,7 @@ class SSD:
         rows = self._rows(outcome, data, "fit_pls", formula_ok=True)
         formula = rows.formula
         fit_args = {"formula": formula, "k": k, "k_max": k_max,
-                    "ssd_gradients": ssd_gradients, "rotate": rotate,
+                    "ssd_gradients": ssd_gradients, "gradients": gradients,
                     "n_splits": n_splits, "random_state": random_state, "test": test}
         _require_1d_y(rows.y, "fit_pls")
         _require_numeric(rows.is_numeric, "fit_pls")
@@ -1098,10 +1099,10 @@ class SSD:
                 f"ssd_gradients must be an int in [1, {g_max}] (min(n - 1, D) = "
                 f"min({n_kept - 1}, {D})); got {ssd_gradients!r}"
             )
-        if ssd_gradients > 1 and rotate not in (None, "words"):
+        if gradients not in ("profiles", "factors", "components", "components_raw"):
             raise ValueError(
-                f"fit_pls() rotate must be 'words' or None; got {rotate!r}. "
-                "One outcome gives no outcome loadings to rotate against."
+                "gradients must be 'profiles', 'factors', 'components' or "
+                f"'components_raw'; got {gradients!r}"
             )
 
         y_std = float(np.std(rows.y))
@@ -1212,6 +1213,11 @@ class SSD:
             p_at_k = n_comp
         else:
             raise ValueError(f"k must be int or 'auto', got {k!r}")
+        if gradients in ("components", "components_raw") and ssd_gradients != n_comp:
+            raise ValueError(
+                f"gradients={gradients!r} needs ssd_gradients equal to the fit's "
+                f"k={n_comp}; got ssd_gradients={ssd_gradients}"
+            )
 
         m = plskit.pls1_fit(
             Xs, ys, k=n_comp, pre_standardized=True, seed=random_state,
@@ -1223,26 +1229,13 @@ class SSD:
 
         scale = np.where(X_scale > 1e-12, X_scale, 1.0)
         beta = coef / scale
-        beta = self._orient_beta(beta, ys, x_fit)
 
         dims = None
-        if ssd_gradients > 1:
-            # NIPALS weights don't depend on how many components are fitted,
-            # so W's leading columns are reused when the main fit has enough.
-            W_g = (W[:, :ssd_gradients] if ssd_gradients <= W.shape[1] else
-                   plskit.pls1_fit(Xs, ys, k=ssd_gradients, pre_standardized=True,
-                                   seed=random_state).W)
-            if W_g.shape[1] < ssd_gradients:
-                raise ValueError(
-                    f"plskit.pls1_fit returned {W_g.shape[1]} weight vectors but "
-                    f"ssd_gradients={ssd_gradients} was requested (NIPALS deflation "
-                    f"collapsed). Reduce ssd_gradients."
-                )
-            L = (word_target(self.embeddings.vectors, W_g, X_mean, X_scale)
-                 if rotate == "words" else None)
-            dims = pls1_rotate(W_g, Xs, ys, rotate=rotate, L=L)
-            dims["beta"] = dims["W_rot"] / X_scale[:, None]
-            dims["rotate"] = rotate
+        if ssd_gradients > 1 and gradients in ("profiles", "factors"):
+            dims = gradient_dims(split_beta(m, Xs, ssd_gradients, gradients), Xs, ys, scale)
+        elif ssd_gradients > 1:
+            L = word_target(self.embeddings.vectors, W, X_mean, X_scale) if gradients == "components" else None
+            dims = gradient_dims(split_components(W, coef, L), Xs, ys, scale, rotate="words")
 
         kwargs = self._base_result_kwargs(rows)
         kwargs["_y_mean"] = _y_mean
@@ -1284,7 +1277,7 @@ class SSD:
                 "random_state": random_state,
                 "formula": formula,
                 "ssd_gradients": ssd_gradients,
-                "rotate": rotate if ssd_gradients > 1 else None,
+                "rotate": dims["rotate"] if dims is not None else None,
                 "outcome": rows.y_name,
             },
             raw_diagnostics=raw_diagnostics,
@@ -1553,6 +1546,7 @@ class SSD:
         k_max: int = 120,
         k_step: int = 2,
         ssd_gradients: int = 1,
+        gradients: Literal["profiles", "factors"] = "profiles",
         verbose: bool = False,
         pca_sweep_args: dict | None = None,
     ):
@@ -1596,23 +1590,35 @@ class SSD:
             Range for PCA-K sweep when fixed_k is None.
         ssd_gradients : int, default 1
             Number of gradients returned, in ``[1, K]``. At 1 the result is
-            the standard fit alone. At N > 1 the result also holds N rotated
-            gradients, ``result["dim-1"]`` … ``result["dim-N"]``, built from
-            this fit's own model: the K components are split into N
-            consecutive blocks (``np.array_split``: K=10, N=3 gives 4/3/3;
-            block 1 holds the highest-variance components), block j's
-            gradient is the model's beta restricted to its components, and
-            the N unit gradients are rotated by words as in
-            ``fit_pls(ssd_gradients=N)``, ``rotate="words"``, which is the
-            only rotation here. Each leaf has ``stats`` (``score_corr``,
+            the standard fit alone. At N > 1 the result also holds N
+            parts of this fit's beta, ``result["dim-1"]`` …
+            ``result["dim-N"]``: the K components are cut into N consecutive
+            blocks with about equal shares of the squared coefficients, and,
+            with ``gradients="profiles"``, the N parts are rotated by varimax
+            on the document scores, as in ``fit_pls(ssd_gradients=N)``. The
+            leaves sum to ``beta``, in its units, so on the link scale for a
+            non-Gaussian family; profiles are ordered by size in standardized
+            space, largest first.
+            ``leaf.beta_norm`` is a leaf's raw norm, so it need not descend.
+            Each leaf has ``stats`` (``score_corr``,
             ``cov_share``), ``words``, ``clusters`` and ``snippets``, and no
-            p-value. ``score_corr`` and ``cov_share`` use the standardized x
-            and y with the covariates not removed, so with covariates, a
-            non-Gaussian family or random effects they are descriptive. The
+            p-value. A leaf keeps the sign the model gives it, so
+            ``score_corr`` can be negative. ``score_corr`` and ``cov_share``
+            use the standardized x and y with the covariates not removed, so
+            with covariates, a non-Gaussian family or random effects they
+            are descriptive. The
             standard fit (``beta``, ``pvalue``, ``r2``, ``model``,
             ``covariates``, ``docs``, ``predict()``) is the same for every N.
             N > 1 needs the text as one plain ``ssd()`` term: an interaction
             with the text (``group*ssd()``, ``age:ssd()``) raises.
+        gradients : {"profiles", "factors"}, default "profiles"
+            How the N parts are made, at ``ssd_gradients > 1``.
+            ``"profiles"`` (``plskit.profiles``) rotates them by varimax on
+            the document scores and orders them by size, largest first.
+            ``"factors"`` (``plskit.factors``) keeps the plain split: N
+            consecutive blocks along the K components, unrotated, in block
+            order, with ``fit_info.rotate`` and ``pls_info.rotate`` ``None``.
+            Both sum to ``beta``.
         verbose : bool
             Print progress.
         pca_sweep_args : dict, optional
@@ -1654,11 +1660,16 @@ class SSD:
             formula has ``ssd(...)`` terms for more than one text, or if a
             column the formula uses has missing values in kept documents.
             Also when ``ssd_gradients`` is not an int, is < 1 or > K, is > 1
-            with a formula whose text is not one plain ``ssd()`` term, or
-            gives a gradient that is zero or not finite (the error names it).
+            with a formula whose text is not one plain ``ssd()`` term, has a
+            coefficient glmm could not estimate (the error names the
+            component), or gives a gradient that is zero; and on an invalid
+            ``gradients``.
+        plskit.PlsKitError
+            When ``ssd_gradients > 1`` and a block of components has no weight,
+            or K is above the rank of the document vectors, or a component's
+            singular value is too close to zero for ``plskit.factors`` to find
+            the K components.
         """
-        if not isinstance(ssd_gradients, int) or ssd_gradients < 1:
-            raise ValueError(f"ssd_gradients must be an int >= 1; got {ssd_gradients!r}")
         formula, y, y_name = _regression_outcome(outcome, data, len(self))
         full = (
             with_text_term(formula) if formula is not None else f"{y_name} ~ ssd()"
@@ -1672,12 +1683,13 @@ class SSD:
             )
         fit_args = {"formula": formula, "family": family, "link": link,
                     "fixed_k": fixed_k, "k_min": k_min, "k_max": k_max, "k_step": k_step,
-                    "ssd_gradients": ssd_gradients, "pca_sweep_args": pca_sweep_args}
+                    "ssd_gradients": ssd_gradients, "gradients": gradients,
+                    "pca_sweep_args": pca_sweep_args}
         return _fit_regression(
             y, y_name, full, data, {names[0]: self},
             family=family, link=link, fixed_k=fixed_k, k_min=k_min, k_max=k_max,
             k_step=k_step, verbose=verbose, pca_sweep_args=pca_sweep_args,
-            fit_args=fit_args, ssd_gradients=ssd_gradients,
+            fit_args=fit_args, ssd_gradients=ssd_gradients, gradients=gradients,
         )
 
     # ── Group comparison backend ──────────────────────────────
@@ -2274,6 +2286,8 @@ def fit_regression(
     k_min: int = 2,
     k_max: int = 120,
     k_step: int = 2,
+    ssd_gradients: int = 1,
+    gradients: Literal["profiles", "factors"] = "profiles",
     verbose: bool = False,
     pca_sweep_args: dict | None = None,
     **texts: SSD,
@@ -2291,7 +2305,8 @@ def fit_regression(
     text and *data* have one row per document, in the same order. A row stays
     when it has a valid outcome and a vector in every text. Each text gets its
     own standardization, PCA and K; ``fixed_k``, ``k_min``, ``k_max``,
-    ``k_step`` and ``pca_sweep_args`` apply to every text; with
+    ``k_step`` and ``pca_sweep_args`` apply to every text; ``ssd_gradients > 1``
+    needs one text in one plain ``ssd(name)`` term; with
     ``save_tables``, each text's sweep table file name has the text name in its
     prefix. The other
     parameters are as in :meth:`SSD.fit_regression`.
@@ -2352,10 +2367,11 @@ def fit_regression(
     _, y, y_name = _regression_outcome(formula, data, n)
     fit_args = {"formula": formula, "family": family, "link": link,
                 "fixed_k": fixed_k, "k_min": k_min, "k_max": k_max, "k_step": k_step,
+                "ssd_gradients": ssd_gradients, "gradients": gradients,
                 "pca_sweep_args": pca_sweep_args}
     return _fit_regression(
         y, y_name, formula, data, {n: texts[n] for n in names},
         family=family, link=link, fixed_k=fixed_k, k_min=k_min, k_max=k_max,
         k_step=k_step, verbose=verbose, pca_sweep_args=pca_sweep_args,
-        fit_args=fit_args,
+        fit_args=fit_args, ssd_gradients=ssd_gradients, gradients=gradients,
     )

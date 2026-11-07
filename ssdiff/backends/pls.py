@@ -1,16 +1,20 @@
-"""PLS backend — rotation of PLS1 weights and of a PLS3 saliency pair.
+"""PLS backend — gradient leaves of one beta and rotation of a PLS3 saliency pair.
 
-Owns ``word_target``, ``pls1_rotate`` and ``pls3_rotate``. Fitting,
-significance testing and k-selection live in ``ssdiff.ssd`` and call
+Owns ``split_beta`` (the split of a beta, through ``plskit.profiles`` or
+``plskit.factors``), ``split_components`` (the split along PLS1 weights),
+``gradient_dims``, ``word_target`` and ``pls3_rotate``.
+Fitting, significance testing and k-selection live in ``ssdiff.ssd`` and call
 ``plskit`` directly.
 """
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import numpy as np
 import plskit
 
-__all__ = ("pls1_rotate", "pls3_rotate", "word_target")
+__all__ = ("gradient_dims", "pls3_rotate", "split_beta", "split_components", "word_target")
 
 
 def word_target(vectors, W, X_mean, X_scale):
@@ -46,37 +50,69 @@ def _varimax(W, L):
 _NO_ROTATION_META = {"sweeps": 0, "V_converged": 0.0, "kaiser_normalized": False}
 
 
-def pls1_rotate(W, Xs, ys, *, rotate, L=None):
-    """Rotate orthonormal weights ``W`` (D × N) and score each dimension.
+def split_beta(model_or_coef, X, n, gradients):
+    """The *n* parts of a fit's standardized coefficient, as a ``plskit.FactorsResult``.
 
-    ``rotate="words"`` runs varimax against ``L``, orders the dimensions by
-    ``|corr(Xs @ W_rot[:, i], ys)|``, descending, and flips each so that
-    correlation is positive. ``rotate=None`` (PLS1 weights from NIPALS)
-    keeps the NIPALS order and signs: NIPALS gives ``w_1 ∝ Xs' ys`` and orthonormal W, so dimensions
-    2…N have zero covariance with ``ys``, and ordering or signing them by it
-    would follow rounding noise.
-
-    ``cov_share[i]`` is ``(W_rot[:, i]' Xs' ys)²`` over its sum across i;
-    the sum, ``‖W' Xs' ys‖²``, is the same for every rotation.
+    ``"factors"`` is ``plskit.factors``: *n* consecutive blocks along the PCA
+    basis of ``X`` with about equal shares of the squared coefficients, in
+    block order. ``"profiles"`` is ``plskit.profiles``: the same parts rotated
+    by varimax on the scores ``X W``, largest first. ``X`` is standardized.
     """
-    k = W.shape[1]
-    if rotate is None:
-        R, meta = np.eye(k), dict(_NO_ROTATION_META)
-    else:
-        R, meta = _varimax(W, L)
-    W_rot = W @ R
-    score_corr = np.array([np.corrcoef(Xs @ W_rot[:, i], ys)[0, 1] for i in range(k)])
-    if rotate is None:
-        order, signs = np.arange(k), np.ones(k)
-    else:
-        order = np.argsort(-np.abs(score_corr), kind="stable")
-        signs = np.where(score_corr[order] < 0, -1.0, 1.0)
-    W_rot, R = W_rot[:, order] * signs, R[:, order] * signs
-    c = (W_rot.T @ (Xs.T @ ys)) ** 2
+    if gradients == "profiles":
+        return plskit.profiles(model_or_coef, X, n, pre_standardized=True).factors
+    return plskit.factors(model_or_coef, X, n, pre_standardized=True)
+
+
+def split_components(W, coef, L=None):
+    """``coef`` split along the k PLS1 weight columns ``W`` (D × k), shaped like a ``plskit.FactorsResult``.
+
+    Part i is ``F_i = w_i (w_i' coef)``. PLS1 weights are orthonormal and
+    ``coef`` lies in their span, so the parts sum to ``coef``; a rotation
+    ``W R`` with R orthogonal keeps both. With a varimax target ``L``
+    (``word_target``) the columns are rotated against it and ordered by size,
+    largest first; without one they keep the PLS order. The sign of ``w_i``
+    does not matter: ``F_i' coef = (w_i' coef)² ≥ 0``.
+    """
+    spec = None
+    if L is not None:
+        rot = plskit.rotate(W, method="varimax", L=L)
+        W, spec = rot.W_rot, rot.spec
+    proj = W.T @ coef
+    if spec is not None:
+        order = np.argsort(-np.abs(proj), kind="stable")
+        W, proj = W[:, order], proj[order]
+    return SimpleNamespace(F=W * proj, W=W, coef=coef, size=np.abs(proj), rotation_spec=spec)
+
+
+def gradient_dims(f, Xs, ys, scale, rotate="docs"):
+    """The ``dims`` dict the result classes read, from a ``plskit.FactorsResult``.
+
+    The columns of ``f.F`` sum to ``f.coef`` and all are divided by the same
+    ``scale``, so the leaves' betas sum to ``f.coef / scale``, the fit's beta.
+    A rotated ``f`` has its leaves ordered by ``f.size``, in standardized
+    space, largest first; an unrotated one is in block order. Each leaf keeps
+    the model's sign: ``F_i' coef = size_i² ≥ 0``.
+    ``score_corr`` is reported as it comes and can be negative.
+
+    ``cov_share[i]`` is ``(w_i' Xs' ys)²`` over its sum across i, with
+    ``w_i = f.W[:, i]``. ``rotate`` names the varimax target of a rotated ``f``.
+    """
+    # unit_vector turns a zero beta into zeros, which would otherwise pass silently.
+    if np.any(f.size <= 1e-12 * np.linalg.norm(f.coef)):
+        raise ValueError("ssd_gradients: a gradient is zero. Use a smaller ssd_gradients.")
+    scores = Xs @ f.F
+    c = (f.W.T @ (Xs.T @ ys)) ** 2
+    spec = f.rotation_spec
     return {
-        "W_rot": W_rot, "R": R, "order": order, "signs": signs,
-        "score_corr": score_corr[order] * signs, "cov_share": c / c.sum(),
-        "rotation_meta": meta,
+        "beta": f.F / scale[:, None],
+        "score_corr": np.array([np.corrcoef(s, ys)[0, 1] for s in scores.T]),
+        "cov_share": c / c.sum(),
+        "rotate": None if spec is None else rotate,
+        "rotation_meta": dict(_NO_ROTATION_META) if spec is None else {
+            "sweeps": spec.sweeps,
+            "V_converged": spec.V_converged,
+            "kaiser_normalized": spec.args["kaiser_normalize"],
+        },
     }
 
 

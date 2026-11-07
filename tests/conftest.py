@@ -18,6 +18,7 @@ import pandas as pd
 import pytest
 
 from ssdiff.embeddings import Embeddings
+from ssdiff.utils.math import unit_vector
 from ssdiff.utils.text import PreprocessedDoc
 
 # ---------------------------------------------------------------------------
@@ -46,6 +47,14 @@ VOCAB_50 = VOCAB_20 + [
 # ---------------------------------------------------------------------------
 # Embeddings helpers
 # ---------------------------------------------------------------------------
+
+def assert_leaves_sum_to_beta(res):
+    total = sum(res[k].beta for k in res.keys())
+    assert np.abs(total - res.beta).max() <= 1e-10 * np.linalg.norm(res.beta)
+    np.testing.assert_allclose(unit_vector(total), res.gradient, atol=1e-10)
+    sized = sum(res[k].gradient * res[k].beta_norm for k in res.keys())
+    assert np.abs(sized - res.beta).max() <= 1e-10 * np.linalg.norm(res.beta)
+
 
 def make_kv(words: list[str], dim: int, seed: int = 42) -> Embeddings:
     """Build a tiny Embeddings with unit-normalized random vectors."""

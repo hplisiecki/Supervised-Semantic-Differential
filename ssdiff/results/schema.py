@@ -359,7 +359,7 @@ class FitInfo:
     formula: str | None = None       # fit_regression / fit_pls formula as given
     family: str | None = None        # glmm family of fit_regression
     ssd_gradients: int | None = None  # fit_pls, fit_regression: number of gradients returned
-    rotate: str | None = None        # their rotation (fit_regression: "words"); None for one
+    rotate: str | None = None        # their rotation ("docs", or "words" for gradients="components"); None for one gradient or an unrotated split
     outcome: str | None = None       # the outcome's column name; "y" when given as values
 
     __setstate__ = _setstate_filling_defaults

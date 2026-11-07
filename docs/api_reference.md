@@ -157,6 +157,7 @@ result = ssd.fit_regression(outcome, *, data=None,
     fixed_k=None,
     k_min=2, k_max=120, k_step=2,
     ssd_gradients=1,
+    gradients="profiles",
     verbose=False,
     pca_sweep_args=None,
 )
@@ -170,7 +171,8 @@ result = ssd.fit_regression(outcome, *, data=None,
 | `link` | `str \| None` | `None` | Link function; `None` takes glmm's default for the family. |
 | `fixed_k` | `int \| None` | `None` | Fixed number of PCA components. `None` selects K via the interpretability + stability sweep. |
 | `k_min`, `k_max`, `k_step` | `int` | `2`, `120`, `2` | Sweep range (ignored when `fixed_k` is set). |
-| `ssd_gradients` | `int` | `1` | Number of gradients returned, in `[1, K]`. At 1 the result is the standard fit alone. At N > 1 the K components are split into N consecutive blocks (`np.array_split`: K=10, N=3 gives 4/3/3), each block's part of the model's beta is one gradient, and the N gradients are rotated by words as in `fit_pls`; leaves `result["dim-1"]` … `result["dim-N"]` with `stats` (`score_corr`, `cov_share`), `words`, `clusters`, `snippets` and no p-value. `score_corr` and `cov_share` keep the covariates in, so with covariates, another family or random effects they are descriptive. The standard fit does not depend on it. N > 1 needs one plain `ssd()` term: `group*ssd()` or `age:ssd()` raises `ValueError`, and so do N > K and a zero or aliased block. |
+| `ssd_gradients` | `int` | `1` | Number of gradients returned, in `[1, K]`. At 1 the result is the standard fit alone. At N > 1 the K components are cut into N consecutive blocks with about equal shares of the squared coefficients, and the N parts of beta are rotated on the document scores as in `fit_pls`; leaves `result["dim-1"]` … `result["dim-N"]` with `stats` (`score_corr`, `cov_share`), `words`, `clusters`, `snippets` and no p-value. The leaves sum to `beta`, in `beta`'s units (the link scale for a non-Gaussian family), and are ordered by size in standardized space, largest first. `leaf.beta_norm` is a leaf's raw norm, so it need not descend. A leaf keeps the model's sign, so `score_corr` can be negative. `score_corr` and `cov_share` keep the covariates in, so with covariates, another family or random effects they are descriptive. The standard fit does not depend on it. N > 1 needs one plain `ssd()` term: `group*ssd()` or `age:ssd()` raises `ValueError`, and so do N > K and an aliased coefficient. A block with no weight raises `plskit.PlsKitError`, and so can a K above the rank of the document vectors, or a component whose singular value is close to zero. |
+| `gradients` | `"profiles" \| "factors"` | `"profiles"` | How the N parts are made at `ssd_gradients > 1`. `"profiles"` rotates them by varimax on the document scores and orders them by size. `"factors"` keeps the plain split into consecutive blocks along the principal components, unrotated, in block order. Both sum to `beta`. |
 | `verbose` | `bool` | `False` | Print progress. |
 | `pca_sweep_args` | `dict \| None` | `None` | Extra keyword arguments for the PCA-K sweep (e.g. `cluster_topn`, `auck_radius`, `save_tables`, `out_dir`). Ignored when `fixed_k` is set. A key that `fit_regression` sets itself (`Xs`, `X_scale`, `x`, `ys`, `embeddings`, `pca_k_values`, `verbose`) raises `ValueError`. |
 
@@ -215,8 +217,8 @@ res.summary()
 
 ```python
 res = ssdiff.fit_regression(formula, data, *, family="gaussian", link=None,
-    fixed_k=None, k_min=2, k_max=120, k_step=2, verbose=False, pca_sweep_args=None,
-    **texts)
+    fixed_k=None, k_min=2, k_max=120, k_step=2, ssd_gradients=1, gradients="profiles",
+    verbose=False, pca_sweep_args=None, **texts)
 ```
 
 ```python
@@ -234,7 +236,7 @@ both["diary"].keys()      # ['ssd(diary)', 'sexM:ssd(diary)']
 both.test                 # all texts, then one row per text, then one Wald row per term
 ```
 
-Each `ssd(name)` in the formula is a text: the keyword `name=` when one is passed, else the column `name` of `data`, built as `SSD(data[name])` with every default. All texts built from columns in one call share one `Embeddings.load()`. A text that needs other settings is built with `SSD` and passed by keyword; a keyword wins over a column of the same name. The formula needs an outcome on the left and `data`; a bare `ssd()` is not allowed, a name that is neither a keyword nor a column raises, and the formula must name each text that is passed. The texts and `data` must have the same number of rows, in the same order. A row stays when it has an outcome and a vector in every text. Each text gets its own standardization, PCA and K. `fixed_k`, `k_min`, `k_max`, `k_step` and `pca_sweep_args` apply to every text. The per-text test row compares the full formula with the formula without that text's terms. With one text the result has no text level, as from `SSD.fit_regression`.
+Each `ssd(name)` in the formula is a text: the keyword `name=` when one is passed, else the column `name` of `data`, built as `SSD(data[name])` with every default. All texts built from columns in one call share one `Embeddings.load()`. A text that needs other settings is built with `SSD` and passed by keyword; a keyword wins over a column of the same name. The formula needs an outcome on the left and `data`; a bare `ssd()` is not allowed, a name that is neither a keyword nor a column raises, and the formula must name each text that is passed. The texts and `data` must have the same number of rows, in the same order. A row stays when it has an outcome and a vector in every text. Each text gets its own standardization, PCA and K. `fixed_k`, `k_min`, `k_max`, `k_step` and `pca_sweep_args` apply to every text. `ssd_gradients` and `gradients` are as in `SSD.fit_regression`: N > 1 needs one text in one plain `ssd(name)` term. The per-text test row compares the full formula with the formula without that text's terms. With one text the result has no text level, as from `SSD.fit_regression`.
 
 `fit_ols(...)` is a deprecated alias of `fit_regression`: same arguments, warns with `FutureWarning`.
 
@@ -247,7 +249,7 @@ result = ssd.fit_pls(
     k="auto",
     k_max=5,
     ssd_gradients=1,
-    rotate="words",                  # "words" | None; used when ssd_gradients > 1
+    gradients="profiles",
     n_splits=50,
     random_state=2137, test=True, verbose=False,
 )
@@ -259,8 +261,8 @@ result = ssd.fit_pls(
 | `data` | DataFrame or `dict` of 1-D arrays | `None` | One row per document: the outcome column and the formula's covariates. |
 | `k` | `int \| "auto"` | `"auto"` | Number of PLS components. `int` fits at exactly that k. `"auto"` calls `plskit.pls1_find_k_optimal` (selector `r2_se`). The p-value is plskit's default split-half test (`test_method="auto"`: `split_exact` or `split_nb`, chosen from X alone; `result.test.name` says which ran) at the fitted `k`; with `k="auto"` it is the k=1 test. The diagnostic chain used to pick `k` is `split_nb`. |
 | `k_max` | `int` | `5` | Cap for `k="auto"`, clamped to `min(k_max, n-1, D)`. Ignored when `k` is an int. |
-| `ssd_gradients` | `int` | `1` | Number of gradients returned, in `[1, min(n-1, D)]`. At 1 the result is the standard fit alone and `rotate` is ignored. At N > 1, an N-component PLS1 fit on the same standardized data gives N weight vectors, one leaf `result["dim-i"]` each. The standard fit (k selection, test, `beta`, `r2`, `docs`, `predict()`) does not depend on it. |
-| `rotate` | `"words" \| None` | `"words"` | With `ssd_gradients > 1`: `"words"` varimax-rotates the weight vectors against the projection of the leading vocabulary rows, orders them by the correlation of their scores with the outcome (highest first) and flips each so that correlation is positive; it needs attached `Embeddings`. `None` keeps NIPALS order and signs; gradients 2…N then have zero covariance with the outcome. Any other value raises `ValueError`. |
+| `ssd_gradients` | `int` | `1` | Number of gradients returned, in `[1, min(n-1, D)]`. At 1 the result is the standard fit alone. At N > 1, `plskit.profiles` cuts this fit's beta along the document PCs into N blocks with about equal shares of the squared coefficients and rotates the parts on the document scores, one leaf `result["dim-i"]` each. The leaves sum to `beta` and are ordered by size in standardized space, largest first. `leaf.beta_norm` is a leaf's raw norm, so it need not descend. A leaf keeps the model's sign, so `score_corr` can be negative. N does not depend on `k`, except with the two `components` modes, and an N above the rank of the fitted vectors raises `plskit.PlsKitError`. The standard fit (k selection, test, `beta`, `r2`, `docs`, `predict()`) does not depend on it. |
+| `gradients` | `"profiles" \| "factors" \| "components" \| "components_raw"` | `"profiles"` | How the N parts are made at `ssd_gradients > 1`. `"profiles"` rotates them by varimax on the document scores and orders them by size. `"factors"` keeps the plain split into consecutive blocks along the principal components, unrotated, in block order. `"components"` and `"components_raw"` split `beta` along the fit's k PLS weights instead, so `ssd_gradients` must equal k: part i is `beta` projected on weight i. `"components"` first rotates the weights by varimax against the vocabulary and orders the parts by size. `"components_raw"` keeps the unrotated weights, in PLS order. All four sum to `beta`. |
 | `n_splits` | `int` | `50` | Random splits for the split-half tests. |
 | `random_state` | `int` | `2137` | Seed. |
 | `test` | `bool` | `True` | Run the confirmatory test. `False` skips it: `pvalue` is NaN, and k selection for `k="auto"` still runs. `result.test(n_splits=..., seed=...)` runs it later; with no arguments it uses 50 splits and no seed. |
@@ -268,8 +270,8 @@ result = ssd.fit_pls(
 
 Returns a `PLSResult`. Re-run the significance test via `result.test(...)` — see [`results.md`](results.md). With `ssd_gradients=N > 1` it also has:
 
-- `result["dim-1"]`, …, `result["dim-N"]` (`result.keys()`) — one leaf per gradient, with `.stats` (`score_corr`, `cov_share`), `.words`, `.clusters`, `.snippets`, `.beta`, `.gradient`; no p-value
-- `.pls_info` — `ssd_gradients`, `rotate`, `order`, `signs`, `sweeps`, `V_converged`, `kaiser_normalized`, `random_state`
+- `result["dim-1"]`, …, `result["dim-N"]` (`result.keys()`) — one leaf per gradient, with `.stats` (`score_corr`, `cov_share`), `.words`, `.clusters`, `.snippets`, `.beta`, `.gradient`, `.beta_norm`; no p-value
+- `.pls_info` — `ssd_gradients`, `rotate` (`"docs"`, or `None` with `gradients="factors"`), `sweeps`, `V_converged`, `kaiser_normalized`, `random_state`; `order` and `signs` are `None`
 
 `fit_info.n_components` stays the standard fit's k.
 
